@@ -22,9 +22,9 @@
 *.dylib
 *.dll
 
-# Fortran module files
-*.mod
-*.smod
+# Fortran module files - Commented out fo GoLang
+# *.mod
+# *.smod
 
 # Compiled Static libraries
 *.lai
