@@ -1,3 +1,4 @@
+#include "sdkconfig.h"
 #include "heartbeat.h"
 
 #include <cstdio>
@@ -19,6 +20,7 @@ static uint32_t s_seq = 0;
 static void heartbeat_task(void*) {
     char url[256];
     std::snprintf(url, sizeof(url), "%s/v1/heartbeat", portunus_server_base_url());
+    ESP_LOGI(TAG, "heartbeat POST -> %s", url);
 
     while (true) {
         if (!wifi_manager_wait_connected(pdMS_TO_TICKS(1000))) {
@@ -32,14 +34,19 @@ static void heartbeat_task(void*) {
 
         cJSON* root = cJSON_CreateObject();
         cJSON_AddStringToObject(root, "module_id", portunus_module_id());
-        cJSON_AddNumberToObject(root, "seq", (double)++s_seq);
-        cJSON_AddNumberToObject(root, "uptime_ms", (double)(esp_timer_get_time() / 1000ULL));
-        cJSON_AddStringToObject(root, "fw_version", portunus_fw_version());
-        cJSON_AddNumberToObject(root, "wifi_rssi", (double)st.wifi_rssi);
-        cJSON_AddBoolToObject(root, "strike_unlocked", st.strike_unlocked);
+        cJSON_AddStringToObject(root, "firmware_version", portunus_fw_version());
+        // cJSON_AddNumberToObject(root, "seq", (double)++s_seq);
+        cJSON_AddNumberToObject(root, "uptime_s", (double)(esp_timer_get_time() / 100000ULL));
+        cJSON_AddNumberToObject(root, "rssi_dbm", (double)st.wifi_rssi);
+        // cJSON_AddNumberToObject(root, "ip", (double)st.wifi_rssi);
+
+        char ip_str[16] = {0};
+        if (wifi_manager_get_ip4(ip_str, sizeof(ip_str))) {
+            cJSON_AddStringToObject(root, "ip", ip_str);
+        }
 
 #if CONFIG_PORTUNUS_ENABLE_REED_SWITCH
-        cJSON_AddBoolToObject(root, "door_open", st.door_open);
+        cJSON_AddBoolToObject(root, "door_closed", st.door_open);
 #endif
 
         char* body = cJSON_PrintUnformatted(root);
