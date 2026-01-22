@@ -36,7 +36,7 @@ static void heartbeat_task(void*) {
         cJSON_AddStringToObject(root, "module_id", portunus_module_id());
         cJSON_AddStringToObject(root, "firmware_version", portunus_fw_version());
         // cJSON_AddNumberToObject(root, "seq", (double)++s_seq);
-        cJSON_AddNumberToObject(root, "uptime_s", (double)(esp_timer_get_time() / 100000ULL));
+        cJSON_AddNumberToObject(root, "uptime_s", (double)(esp_timer_get_time() / 1000000ULL));
         cJSON_AddNumberToObject(root, "rssi_dbm", (double)st.wifi_rssi);
         // cJSON_AddNumberToObject(root, "ip", (double)st.wifi_rssi);
 
@@ -46,7 +46,8 @@ static void heartbeat_task(void*) {
         }
 
 #if CONFIG_PORTUNUS_ENABLE_REED_SWITCH
-        cJSON_AddBoolToObject(root, "door_closed", st.door_open);
+        const bool door_closed = !st.door_open;
+        cJSON_AddBoolToObject(root, "door_closed", door_closed);
 #endif
 
         char* body = cJSON_PrintUnformatted(root);
