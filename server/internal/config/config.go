@@ -6,14 +6,27 @@ import (
 )
 
 type Config struct {
-	HTTPAddr        string
-	KnownModules    []string
-	AllowAll        bool
-	AllowedCardIDs  []string
+	HTTPAddr string
+
+	// DB
+	Env    string // "dev" | "prod"
+	DBPath string // e.g. "./data/portunus.db"
+
+	KnownModules   []string
+	AllowAll       bool
+	AllowedCardIDs []string
 }
 
 func FromEnv() Config {
 	addr := getenvDefault("PORTUNUS_HTTP_ADDR", ":8080")
+
+	env := strings.ToLower(getenvDefault("PORTUNUS_ENV", "dev"))
+	if env != "dev" && env != "prod" {
+		// fail-soft: treat unknown as dev
+		env = "dev"
+	}
+
+	dbPath := getenvDefault("PORTUNUS_DB_PATH", "./data/portunus.db")
 
 	knownModules := splitCSV(os.Getenv("PORTUNUS_KNOWN_MODULES"))
 	allowedCards := splitCSV(os.Getenv("PORTUNUS_ALLOWED_CARD_IDS"))
@@ -22,7 +35,10 @@ func FromEnv() Config {
 		os.Getenv("PORTUNUS_ALLOW_ALL") == "1"
 
 	return Config{
-		HTTPAddr:       addr,
+		HTTPAddr: addr,
+		Env:      env,
+		DBPath:   dbPath,
+
 		KnownModules:   knownModules,
 		AllowAll:       allowAll,
 		AllowedCardIDs: allowedCards,
