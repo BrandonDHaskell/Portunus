@@ -43,3 +43,6 @@
 # ESP-IDF
 sdkconfig
 build/
+
+## SQLite DB
+data/

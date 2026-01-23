@@ -1,0 +1,93 @@
+package sqlite
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+	"time"
+
+	dbpkg "github.com/BrandonDHaskell/Portunus/server/internal/db"
+	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store"
+)
+
+type HeartbeatStore struct {
+	db     *sql.DB
+	writer *dbpkg.Worker
+}
+
+func NewHeartbeatStore(db *sql.DB, writer *dbpkg.Worker) *HeartbeatStore {
+	return &HeartbeatStore{db: db, writer: writer}
+}
+
+func (s *HeartbeatStore) UpsertHeartbeat(ctx context.Context, moduleID string, rec store.HeartbeatRecord) error {
+	moduleID = strings.TrimSpace(moduleID)
+	if moduleID == "" {
+		return nil
+	}
+
+	if rec.ReceivedAt.IsZero() {
+		rec.ReceivedAt = time.Now().UTC()
+	}
+	recvMs := rec.ReceivedAt.UTC().UnixMilli()
+
+	// Map request -> DB columns
+	fw := strings.TrimSpace(rec.Request.FirmwareVersion)
+	if fw == "" {
+		fw = "" // keep empty; you can switch to NULL if you prefer
+	}
+
+	var rssi any
+	if rec.Request.RSSIDbm != nil {
+		rssi = *rec.Request.RSSIDbm
+	} else {
+		rssi = nil
+	}
+
+	ip := strings.TrimSpace(rec.Request.IP)
+	if ip == "" {
+		ip = "" // keep empty; you can switch to NULL if you prefer
+	}
+
+	// UptimeSeconds -> uptime_ms
+	uptimeMs := any(nil)
+	if rec.Request.UptimeSeconds != 0 {
+		// safe conversion (realistic uptimes won’t overflow int64)
+		uptimeMs = int64(rec.Request.UptimeSeconds) * 1000
+	}
+
+	return s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		// Ensure module exists for FK constraints
+		if _, err := tx.ExecContext(ctx, `
+INSERT OR IGNORE INTO modules(
+  module_id, enabled, created_at_ms, updated_at_ms
+) VALUES (?, 0, ?, ?);
+`, moduleID, recvMs, recvMs); err != nil {
+			return fmt.Errorf("UpsertHeartbeat insert module: %w", err)
+		}
+
+		// Insert heartbeat event (append-only)
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO module_heartbeats(
+  module_id, received_at_ms, uptime_ms, fw_version, wifi_rssi, ip
+) VALUES (?, ?, ?, ?, ?, ?);
+`, moduleID, recvMs, uptimeMs, fw, rssi, ip); err != nil {
+			return fmt.Errorf("UpsertHeartbeat insert heartbeat: %w", err)
+		}
+
+		// Update module snapshot (fast “current status” queries)
+		if _, err := tx.ExecContext(ctx, `
+UPDATE modules
+SET last_seen_at_ms = ?,
+    last_ip = ?,
+    last_fw_version = ?,
+    last_wifi_rssi = ?,
+    updated_at_ms = ?
+WHERE module_id = ?;
+`, recvMs, ip, fw, rssi, recvMs, moduleID); err != nil {
+			return fmt.Errorf("UpsertHeartbeat update module snapshot: %w", err)
+		}
+
+		return nil
+	})
+}
