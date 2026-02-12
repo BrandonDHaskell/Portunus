@@ -1,0 +1,98 @@
+menu "Portunus Configuration"
+
+    menu "Feature Toggles"
+        config PORTUNUS_ENABLE_MFRC522
+            bool "Enable MFRC522 RFID reader"
+            default y
+
+        config PORTUNUS_ENABLE_HEARTBEAT
+            bool "Enable heartbeat service"
+            default y
+    endmenu
+
+    menu "Task Configuration"
+        config PORTUNUS_MFRC522_TASK_STACK_SIZE
+            int "MFRC522 polling task stack size"
+            default 4096
+            range 2048 8192
+    endmenu
+
+    menu "SPI Pin Assignments (MFRC522)"
+        config PORTUNUS_SPI_MOSI_PIN
+            int "SPI MOSI GPIO pin"
+            default 37
+            help
+                GPIO pin connected to the MFRC522 MOSI line.
+
+        config PORTUNUS_SPI_MISO_PIN
+            int "SPI MISO GPIO pin"
+            default 38
+            help
+                GPIO pin connected to the MFRC522 MISO line.
+
+        config PORTUNUS_SPI_SCLK_PIN
+            int "SPI SCLK GPIO pin"
+            default 36
+            help
+                GPIO pin connected to the MFRC522 SCLK line.
+
+        config PORTUNUS_SPI_CS_PIN
+            int "SPI CS GPIO pin"
+            default 35
+            help
+                GPIO pin connected to the MFRC522 SDA/CS line.
+
+        config PORTUNUS_MFRC522_RST_PIN
+            int "MFRC522 RST GPIO pin"
+            default 4
+            help
+                GPIO pin connected to the MFRC522 RST line.
+                Set to -1 to leave RST unconnected (not recommended).
+    endmenu
+
+    menu "Timing Configuration"
+        config PORTUNUS_HEARTBEAT_INTERVAL_MS
+            int "Heartbeat interval (milliseconds)"
+            default 10000
+            range 1000 60000
+            help
+                Interval between heartbeat events. 10 seconds is a
+                reasonable default for development.
+
+        config PORTUNUS_MFRC522_POLL_INTERVAL_MS
+            int "MFRC522 card poll interval (milliseconds)"
+            default 250
+            range 50 2000
+            help
+                How frequently the MFRC522 driver checks for a card
+                in the reader field. Lower values are more responsive
+                but increase SPI bus traffic.
+
+        config PORTUNUS_EVENT_QUEUE_TIMEOUT_MS
+            int "Event bus queue send/receive timeout (milliseconds)"
+            default 100
+            range 10 5000
+            help
+                Maximum time to block when sending to or receiving from
+                the event bus queue.
+    endmenu
+
+    menu "Event Bus Configuration"
+        config PORTUNUS_EVENT_QUEUE_LENGTH
+            int "Event bus queue depth"
+            default 16
+            range 4 64
+            help
+                Number of events the dispatcher queue can hold. A deeper
+                queue absorbs bursts but consumes more RAM.
+
+        config PORTUNUS_MAX_EVENT_SUBSCRIBERS
+            int "Maximum event subscribers"
+            default 8
+            range 2 32
+            help
+                Maximum number of callback subscribers the event bus
+                supports. Increase if more components need to listen.
+    endmenu
+
+endmenu
