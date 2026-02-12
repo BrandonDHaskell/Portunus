@@ -1,0 +1,18 @@
+# Portunus Access Module — Development overrides
+# Usage: idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.dev" build
+
+# ── Logging ────────────────────────────────────────────────────────────────
+CONFIG_LOG_DEFAULT_LEVEL_DEBUG=y
+CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE=y
+
+# ── Serial console ────────────────────────────────────────────────────────
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+
+# ── Flash encryption — OFF for development ────────────────────────────────
+CONFIG_SECURE_FLASH_ENC_ENABLED=n
+
+# ── Secure boot — OFF for development ─────────────────────────────────────
+CONFIG_SECURE_BOOT=n
+
+# ── Faster heartbeat for dev debugging ────────────────────────────────────
+CONFIG_PORTUNUS_HEARTBEAT_INTERVAL_MS=5000

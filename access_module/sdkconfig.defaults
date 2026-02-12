@@ -1,23 +1,34 @@
-# Target is set via: idf.py set-target esp32s3
+# Portunus Access Module — Shared SDK configuration defaults
+# Applied to all builds. Environment-specific overrides go in
+# sdkconfig.defaults.dev or sdkconfig.defaults.prod.
 
-CONFIG_PORTUNUS_FW_VERSION="0.1.0"
-CONFIG_PORTUNUS_MODULE_ID="door-001"
+# ── Target ─────────────────────────────────────────────────────────────────
+CONFIG_IDF_TARGET="esp32s3"
 
-CONFIG_PORTUNUS_SERVER_BASE_URL="http://192.168.1.50:8080"
-CONFIG_PORTUNUS_HEARTBEAT_INTERVAL_MS=5000
+# ── FreeRTOS ───────────────────────────────────────────────────────────────
+# Use tick rate of 1000 Hz for 1ms tick resolution
+CONFIG_FREERTOS_HZ=1000
 
-# WiFi (MVP: compile-time config; later: provisioning -> NVS)
-CONFIG_PORTUNUS_WIFI_SSID="YOUR_WIFI"
-CONFIG_PORTUNUS_WIFI_PASSWORD="YOUR_PASS"
+# ── Serial flasher ────────────────────────────────────────────────────────
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
 
-# Required hardware defaults
-CONFIG_PORTUNUS_STRIKE_GPIO=6
-CONFIG_PORTUNUS_STRIKE_ACTIVE_HIGH=y
+# ── Partition table ───────────────────────────────────────────────────────
+CONFIG_PARTITION_TABLE_SINGLE_APP=y
 
-# Optional hardware (off by default)
-# CONFIG_PORTUNUS_ENABLE_REED_SWITCH is not set
-# CONFIG_PORTUNUS_ENABLE_STATUS_LED is not set
-CONFIG_PORTUNUS_REED_GPIO=7
-CONFIG_PORTUNUS_REED_ACTIVE_LOW=y
-CONFIG_PORTUNUS_STATUS_LED_GPIO=8
-CONFIG_PORTUNUS_STATUS_LED_ACTIVE_HIGH=y
+# ── Portunus defaults ─────────────────────────────────────────────────────
+CONFIG_PORTUNUS_ENABLE_MFRC522=y
+CONFIG_PORTUNUS_ENABLE_HEARTBEAT=y
+CONFIG_PORTUNUS_HEARTBEAT_INTERVAL_MS=10000
+CONFIG_PORTUNUS_MFRC522_POLL_INTERVAL_MS=250
+CONFIG_PORTUNUS_EVENT_QUEUE_LENGTH=16
+CONFIG_PORTUNUS_MAX_EVENT_SUBSCRIBERS=8
+CONFIG_PORTUNUS_EVENT_QUEUE_TIMEOUT_MS=100
+CONFIG_PORTUNUS_MFRC522_TASK_STACK_SIZE=4096
+
+# ── SPI pin defaults (ESP32-S3 dev breadboard) ───────────────────────────
+CONFIG_PORTUNUS_SPI_MOSI_PIN=11
+CONFIG_PORTUNUS_SPI_MISO_PIN=13
+CONFIG_PORTUNUS_SPI_SCLK_PIN=12
+CONFIG_PORTUNUS_SPI_CS_PIN=10
+CONFIG_PORTUNUS_MFRC522_RST_PIN=9
