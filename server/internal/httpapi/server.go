@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	pb "github.com/BrandonDHaskell/Portunus/server/api/portunus/v1"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/types"
 )
@@ -63,12 +64,22 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	var req types.HeartbeatRequest
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
+	protoReq := isProtobuf(r)
 
-	if err := dec.Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "bad_json", "invalid JSON body")
-		return
+	if protoReq {
+		var pbReq pb.HeartbeatRequest
+		if err := readProto(r, &pbReq); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_proto", "invalid protobuf body")
+			return
+		}
+		req = heartbeatRequestFromProto(&pbReq)
+	} else {
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_json", "invalid JSON body")
+			return
+		}
 	}
 
 	resp, err := s.heartbeatService.Record(r.Context(), req)
@@ -82,17 +93,31 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, resp)
+	if protoReq {
+		writeProto(w, http.StatusOK, heartbeatResponseToProto(resp))
+	} else {
+		writeJSON(w, http.StatusOK, resp)
+	}
 }
 
 func (s *Server) handleAccessRequest(w http.ResponseWriter, r *http.Request) {
 	var req types.AccessRequest
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
+	protoReq := isProtobuf(r)
 
-	if err := dec.Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "bad_json", "invalid JSON body")
-		return
+	if protoReq {
+		var pbReq pb.AccessRequest
+		if err := readProto(r, &pbReq); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_proto", "invalid protobuf body")
+			return
+		}
+		req = accessRequestFromProto(&pbReq)
+	} else {
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_json", "invalid JSON body")
+			return
+		}
 	}
 
 	resp, err := s.accessService.Decide(r.Context(), req)
@@ -106,7 +131,11 @@ func (s *Server) handleAccessRequest(w http.ResponseWriter, r *http.Request) {
 			return
 		case errors.Is(err, service.ErrUnknownModule):
 			// Unknown module is blocked from access flow
-			writeJSON(w, http.StatusForbidden, resp)
+			if protoReq {
+				writeProto(w, http.StatusForbidden, accessResponseToProto(resp))
+			} else {
+				writeJSON(w, http.StatusForbidden, resp)
+			}
 			return
 		default:
 			s.logger.Printf("access_request error: %v", err)
@@ -115,5 +144,9 @@ func (s *Server) handleAccessRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, resp)
+	if protoReq {
+		writeProto(w, http.StatusOK, accessResponseToProto(resp))
+	} else {
+		writeJSON(w, http.StatusOK, resp)
+	}
 }
