@@ -16,3 +16,9 @@ CONFIG_SECURE_BOOT=n
 
 # ── Faster heartbeat for dev debugging ────────────────────────────────────
 CONFIG_PORTUNUS_HEARTBEAT_INTERVAL_MS=5000
+
+# ── WiFi / Network — dev overrides ───────────────────────────────────────
+# Shorter timeout so dev builds don't block long on missing AP
+CONFIG_PORTUNUS_WIFI_CONNECT_TIMEOUT_MS=10000
+# Faster reconnect base for dev iteration
+CONFIG_PORTUNUS_WIFI_RECONNECT_INTERVAL_MS=500

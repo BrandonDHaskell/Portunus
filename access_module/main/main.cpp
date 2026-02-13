@@ -4,11 +4,12 @@
  *
  * Startup sequence:
  *   1. NVS flash initialisation (ESP-IDF standard API — no custom HAL for MVP)
- *   2. Event bus creation and subscriber registration
- *   3. MFRC522 driver initialisation
- *   4. Heartbeat service start
- *   5. Card-polling task start
- *   6. Transition to OPERATIONAL state
+ *   2. WiFi station connection (blocks until IP or timeout)
+ *   3. Event bus creation and subscriber registration
+ *   4. MFRC522 driver initialisation
+ *   5. Heartbeat service start
+ *   6. Card-polling task start
+ *   7. Transition to OPERATIONAL state
  *
  * All inter-component communication flows through the event bus. The
  * card-polling task reads cards via the mfrc522 driver and publishes
@@ -25,6 +26,8 @@
 #include "timing_config.h"
 #include "event_bus.h"
 #include "heartbeat_service.h"
+#include "wifi_mgr.h"
+#include "network_config.h"
 #include "mfrc522.h"
 
 #include "nvs_flash.h"
@@ -156,7 +159,35 @@ extern "C" void app_main(void)
         return;
     }
 
-    /* ── 2. Event bus ────────────────────────────────────────────────────── */
+    /* ── 2. WiFi connection ─────────────────────────────────────────────── */
+#ifdef CONFIG_PORTUNUS_ENABLE_WIFI
+    s_system_state = SYSTEM_STATE_CONNECTING;
+
+    if (wifi_mgr_init() != PORTUNUS_OK) {
+        s_system_state = SYSTEM_STATE_ERROR;
+        ESP_LOGE(TAG, "System halted: WiFi init failure");
+        return;
+    }
+
+    portunus_err_t wifi_err = wifi_mgr_start();
+    if (wifi_err == PORTUNUS_ERR_TIMEOUT) {
+        /* Non-fatal: the module continues booting and the WiFi manager
+           will keep reconnecting in the background.  Network-dependent
+           services (server_comm) check wifi_mgr_is_connected() before
+           making calls. */
+        ESP_LOGW(TAG, "WiFi not connected yet — continuing startup");
+    } else if (wifi_err != PORTUNUS_OK) {
+        s_system_state = SYSTEM_STATE_ERROR;
+        ESP_LOGE(TAG, "System halted: WiFi start failure");
+        return;
+    }
+#else
+    ESP_LOGW(TAG, "WiFi disabled by configuration — running offline");
+#endif
+
+    s_system_state = SYSTEM_STATE_INITIALIZING;
+
+    /* ── 3. Event bus ────────────────────────────────────────────────────── */
     if (event_bus_init() != PORTUNUS_OK) {
         s_system_state = SYSTEM_STATE_ERROR;
         ESP_LOGE(TAG, "System halted: event bus init failure");
@@ -167,7 +198,7 @@ extern "C" void app_main(void)
     event_bus_subscribe(EVENT_CREDENTIAL_READ, on_credential_read, NULL);
     event_bus_subscribe(EVENT_HEARTBEAT, on_heartbeat, NULL);
 
-    /* ── 3. MFRC522 RFID reader ─────────────────────────────────────────── */
+    /* ── 4. MFRC522 RFID reader ─────────────────────────────────────────── */
 #ifdef CONFIG_PORTUNUS_ENABLE_MFRC522
     if (mfrc522_init() != PORTUNUS_OK) {
         ESP_LOGE(TAG, "MFRC522 init failed — card reading disabled");
@@ -190,7 +221,7 @@ extern "C" void app_main(void)
     ESP_LOGW(TAG, "MFRC522 disabled by configuration");
 #endif
 
-    /* ── 4. Heartbeat service ────────────────────────────────────────────── */
+    /* ── 5. Heartbeat service ────────────────────────────────────────────── */
 #ifdef CONFIG_PORTUNUS_ENABLE_HEARTBEAT
     if (heartbeat_service_start() != PORTUNUS_OK) {
         ESP_LOGE(TAG, "Heartbeat service start failed — continuing without heartbeat");
@@ -199,7 +230,7 @@ extern "C" void app_main(void)
     ESP_LOGW(TAG, "Heartbeat service disabled by configuration");
 #endif
 
-    /* ── 5. Startup complete ─────────────────────────────────────────────── */
+    /* ── 6. Startup complete ─────────────────────────────────────────────── */
     s_system_state = SYSTEM_STATE_OPERATIONAL;
 
     /* Publish boot-complete event */

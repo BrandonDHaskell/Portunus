@@ -10,6 +10,7 @@ idf_component_register(
         event_bus
         heartbeat_service
         mfrc522
+        wifi_mgr
         types
         config
 )

@@ -8,6 +8,68 @@ menu "Portunus Configuration"
         config PORTUNUS_ENABLE_HEARTBEAT
             bool "Enable heartbeat service"
             default y
+
+        config PORTUNUS_ENABLE_WIFI
+            bool "Enable WiFi connectivity"
+            default y
+            help
+                Enable the WiFi station manager. When disabled the module
+                runs in offline mode (events are logged locally only).
+    endmenu
+
+    menu "Network Configuration"
+        depends on PORTUNUS_ENABLE_WIFI
+
+        config PORTUNUS_WIFI_SSID
+            string "WiFi SSID"
+            default "portunus-dev"
+            help
+                SSID of the wireless network the module connects to.
+
+        config PORTUNUS_WIFI_PASSWORD
+            string "WiFi password"
+            default ""
+            help
+                WPA2 passphrase. Leave empty for open networks.
+
+        config PORTUNUS_WIFI_CONNECT_TIMEOUT_MS
+            int "WiFi connection timeout (milliseconds)"
+            default 15000
+            range 5000 60000
+            help
+                Maximum time wifi_mgr_start() blocks waiting for an IP
+                address. The manager continues reconnecting in the
+                background after this timeout expires.
+
+        config PORTUNUS_WIFI_RECONNECT_INTERVAL_MS
+            int "WiFi reconnect base interval (milliseconds)"
+            default 1000
+            range 500 10000
+            help
+                Base delay before the first reconnection attempt after a
+                disconnect. The interval doubles on each failure up to a
+                60-second ceiling, and resets on a successful connection.
+
+        config PORTUNUS_SERVER_HOST
+            string "Portunus server host"
+            default "192.168.1.100"
+            help
+                Hostname or IP address of the Portunus server.
+
+        config PORTUNUS_SERVER_PORT
+            int "Portunus server port"
+            default 8080
+            range 1 65535
+            help
+                TCP port the Portunus server listens on.
+
+        config PORTUNUS_SERVER_REQUEST_TIMEOUT_MS
+            int "HTTP request timeout (milliseconds)"
+            default 5000
+            range 1000 30000
+            help
+                Maximum time to wait for a response from the server on
+                heartbeat and access-request HTTP calls.
     endmenu
 
     menu "Task Configuration"

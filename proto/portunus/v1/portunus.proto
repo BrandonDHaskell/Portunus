@@ -1,0 +1,126 @@
+// Portunus — shared message contract
+//
+// This file is the single source of truth for the wire format between the
+// Portunus server and ESP32 access modules.  Both sides generate code from
+// this file:
+//
+//   Server (Go):  protoc  + protoc-gen-go
+//   ESP32  (C):   protoc  + nanopb generator  (see ../nanopb/portunus.options)
+//
+// The access module sends Nanopb-encoded messages over HTTP/1.1 with
+// Content-Type: application/x-protobuf.  No gRPC service block is defined
+// because the ESP32 does not use HTTP/2.
+//
+// ─── Compatibility rules ───────────────────────────────────────────────────
+//   • Only APPEND new fields (never reorder or reuse a field number).
+//   • Mark removed fields as `reserved`.
+//   • Keep optional semantics where the ESP32 may not have the data
+//     (e.g. door_closed before a reed-switch is wired).
+// ───────────────────────────────────────────────────────────────────────────
+
+syntax = "proto3";
+
+package portunus.v1;
+
+option go_package = "github.com/BrandonDHaskell/Portunus/server/api/portunusv1";
+
+// ──────────────────────────────────────────────────────────────────────────
+// Heartbeat
+// ──────────────────────────────────────────────────────────────────────────
+
+// Sent by the access module at a regular interval to report health
+// telemetry and confirm connectivity.
+//
+// Server Go equivalent: types.HeartbeatRequest
+message HeartbeatRequest {
+  // Unique identifier for the access module (required).
+  // Corresponds to PORTUNUS_MAX_NAME_LEN (32 chars) on the device.
+  string module_id = 1;
+
+  // Firmware version string, e.g. "0.1.0-mvp".
+  string firmware_version = 2;
+
+  // Seconds since the module booted (esp_timer / 1e6 on ESP32).
+  // uint64 matches the Go type; the ESP32 populates the lower 32 bits.
+  uint64 uptime_s = 3;
+
+  // Reed-switch state.  Omitted when no reed switch is installed.
+  optional bool door_closed = 4;
+
+  // WiFi RSSI in dBm.  Omitted when unavailable.
+  optional int32 rssi_dbm = 5;
+
+  // IP address of the module (IPv4 dotted-quad or IPv6).
+  string ip = 6;
+
+  // ── ESP32 telemetry (not yet consumed by the server) ──────────────────
+
+  // Free heap in bytes at the time of the heartbeat.
+  uint32 free_heap_bytes = 7;
+
+  // Monotonically increasing heartbeat counter (resets on reboot).
+  uint32 sequence = 8;
+}
+
+// Returned by the server to acknowledge the heartbeat.
+//
+// Server Go equivalent: types.HeartbeatResponse
+message HeartbeatResponse {
+  // Always true on a successful heartbeat.
+  bool ok = 1;
+
+  // Whether the module_id is registered in the device registry.
+  bool known = 2;
+
+  // Echoed module_id.
+  string module_id = 3;
+
+  // Server wall-clock time (RFC 3339 with nanoseconds).
+  string server_time = 4;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Access
+// ──────────────────────────────────────────────────────────────────────────
+
+// Sent by the access module when a card is presented to the reader.
+//
+// Server Go equivalent: types.AccessRequest
+message AccessRequest {
+  // Unique identifier for the access module (required).
+  string module_id = 1;
+
+  // Hex-encoded card UID, e.g. "04:A3:2B:1C" (required).
+  string card_id = 2;
+
+  // Reed-switch state at the moment of the read.
+  optional bool door_closed = 3;
+
+  // Device-local timestamp of the read (ISO 8601 / RFC 3339).
+  // Optional because the module may not have an RTC.
+  string requested_at = 4;
+}
+
+// Returned by the server with the access decision.
+//
+// Server Go equivalent: types.AccessResponse
+message AccessResponse {
+  // True if the request was processed without internal error.
+  bool ok = 1;
+
+  // Whether the module_id is registered in the device registry.
+  bool known = 2;
+
+  // The access decision: true = unlock, false = deny.
+  bool granted = 3;
+
+  // Human-readable reason code: "allow_all", "card_allowed",
+  // "card_not_allowed", "unknown_module", "denied".
+  string reason = 4;
+
+  // Echoed module_id.
+  string module_id = 5;
+
+  // Server wall-clock time (RFC 3339 with nanoseconds).
+  string server_time = 6;
+}
