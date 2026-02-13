@@ -8,8 +8,9 @@
  *   3. Event bus creation and subscriber registration
  *   4. MFRC522 driver initialisation
  *   5. Heartbeat service start
- *   6. Card-polling task start
- *   7. Transition to OPERATIONAL state
+ *   6. Server communication component start
+ *   7. Card-polling task start
+ *   8. Transition to OPERATIONAL state
  *
  * All inter-component communication flows through the event bus. The
  * card-polling task reads cards via the mfrc522 driver and publishes
@@ -28,6 +29,7 @@
 #include "heartbeat_service.h"
 #include "wifi_mgr.h"
 #include "network_config.h"
+#include "server_comm.h"
 #include "mfrc522.h"
 
 #include "nvs_flash.h"
@@ -76,6 +78,22 @@ static void on_heartbeat(const portunus_event_t *event, void *ctx)
 
     ESP_LOGD(TAG, "Heartbeat event received — seq=%" PRIu32 " uptime=%" PRIu32
              "s heap=%" PRIu32, hb->sequence, hb->uptime_sec, hb->free_heap_bytes);
+}
+
+/**
+ * @brief Log access decision events to the serial console.
+ */
+static void on_access_decision(const portunus_event_t *event, void *ctx)
+{
+    (void)ctx;
+    const event_access_decision_t *ad = &event->payload.access_decision;
+
+    if (ad->granted) {
+        ESP_LOGI(TAG, "ACCESS GRANTED — card=%s reason=%s", ad->card_id, ad->reason);
+    } else {
+        ESP_LOGW(TAG, "ACCESS DENIED  — card=%s reason=%s known=%d",
+                 ad->card_id, ad->reason, ad->known);
+    }
 }
 
 /* ── Card-polling task ─────────────────────────────────────────────────────── */
@@ -197,6 +215,8 @@ extern "C" void app_main(void)
     /* Register event subscribers for serial console logging */
     event_bus_subscribe(EVENT_CREDENTIAL_READ, on_credential_read, NULL);
     event_bus_subscribe(EVENT_HEARTBEAT, on_heartbeat, NULL);
+    event_bus_subscribe(EVENT_ACCESS_GRANTED, on_access_decision, NULL);
+    event_bus_subscribe(EVENT_ACCESS_DENIED, on_access_decision, NULL);
 
     /* ── 4. MFRC522 RFID reader ─────────────────────────────────────────── */
 #ifdef CONFIG_PORTUNUS_ENABLE_MFRC522
@@ -230,7 +250,14 @@ extern "C" void app_main(void)
     ESP_LOGW(TAG, "Heartbeat service disabled by configuration");
 #endif
 
-    /* ── 6. Startup complete ─────────────────────────────────────────────── */
+    /* ── 6. Server communication ─────────────────────────────────────────── */
+#ifdef CONFIG_PORTUNUS_ENABLE_WIFI
+    if (server_comm_init() != PORTUNUS_OK) {
+        ESP_LOGE(TAG, "Server comm init failed — running in offline mode");
+    }
+#endif
+
+    /* ── 7. Startup complete ─────────────────────────────────────────────── */
     s_system_state = SYSTEM_STATE_OPERATIONAL;
 
     /* Publish boot-complete event */

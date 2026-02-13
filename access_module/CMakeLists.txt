@@ -11,6 +11,7 @@ set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_LIST_DIR}/components/services/event_bus
     ${CMAKE_CURRENT_LIST_DIR}/components/services/heartbeat_service
     ${CMAKE_CURRENT_LIST_DIR}/components/services/wifi_mgr
+    ${CMAKE_CURRENT_LIST_DIR}/components/services/server_comm
     ${CMAKE_CURRENT_LIST_DIR}/components/proto
 )
 

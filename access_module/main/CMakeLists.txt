@@ -11,6 +11,7 @@ idf_component_register(
         heartbeat_service
         mfrc522
         wifi_mgr
+        server_comm
         types
         config
 )

@@ -19,6 +19,14 @@ menu "Portunus Configuration"
 
     menu "Network Configuration"
         depends on PORTUNUS_ENABLE_WIFI
+        
+        config PORTUNUS_MODULE_ID
+            string "Module identifier"
+            default "door-001"
+            help
+                Unique name for this access module, sent in every heartbeat
+                and access request so the server can identify the device.
+                Maximum 32 characters (PORTUNUS_MAX_NAME_LEN).
 
         config PORTUNUS_WIFI_SSID
             string "WiFi SSID"
