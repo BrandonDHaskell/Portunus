@@ -40,6 +40,15 @@ extern "C" {
 #define PORTUNUS_ERR_INVALID_ARG     (PORTUNUS_ERR_BASE_MODULE + 0x01)  /**< NULL pointer or out-of-range argument */
 #define PORTUNUS_ERR_TIMEOUT         (PORTUNUS_ERR_BASE_MODULE + 0x02)  /**< Operation timed out */
 
+/* ── Network errors (WiFi, HTTP, protobuf) ─────────────────────────────────── */
+#define PORTUNUS_ERR_BASE_NETWORK    0x4000
+#define PORTUNUS_ERR_WIFI_NOT_CONNECTED (PORTUNUS_ERR_BASE_NETWORK + 0x01)  /**< WiFi not connected */
+#define PORTUNUS_ERR_HTTP_CONNECT    (PORTUNUS_ERR_BASE_NETWORK + 0x02)  /**< HTTP connection to server failed */
+#define PORTUNUS_ERR_HTTP_TIMEOUT    (PORTUNUS_ERR_BASE_NETWORK + 0x03)  /**< HTTP request timed out */
+#define PORTUNUS_ERR_HTTP_STATUS     (PORTUNUS_ERR_BASE_NETWORK + 0x04)  /**< Unexpected HTTP status code */
+#define PORTUNUS_ERR_PROTO_ENCODE    (PORTUNUS_ERR_BASE_NETWORK + 0x05)  /**< Nanopb encode failed */
+#define PORTUNUS_ERR_PROTO_DECODE    (PORTUNUS_ERR_BASE_NETWORK + 0x06)  /**< Nanopb decode failed */
+
 #ifdef __cplusplus
 }
 #endif

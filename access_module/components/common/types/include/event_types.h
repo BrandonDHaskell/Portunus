@@ -10,6 +10,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 #include "credential_types.h"
 
 #ifdef __cplusplus
@@ -60,6 +61,20 @@ typedef struct {
     uint32_t free_heap_bytes;          /**< Free heap at time of heartbeat */
 } event_heartbeat_t;
 
+/**
+ * @brief Payload for EVENT_ACCESS_GRANTED / EVENT_ACCESS_DENIED.
+ *
+ * Populated by server_comm after decoding the server's AccessResponse.
+ * Downstream subscribers (door strike, LED, buzzer) use this to act on
+ * the decision without needing to know about protobuf or HTTP.
+ */
+typedef struct {
+    char     card_id[30];              /**< Hex-encoded card UID that was checked */
+    char     reason[33];               /**< Server reason code, e.g. "allow_all" */
+    bool     granted;                  /**< true = access granted */
+    bool     known;                    /**< true = module is registered on server */
+} event_access_decision_t;
+
 /* ── Generic event envelope ────────────────────────────────────────────────── */
 
 /**
@@ -72,8 +87,9 @@ typedef struct {
 typedef struct {
     portunus_event_id_t id;            /**< Which event this is */
     union {
-        event_credential_read_t credential_read;
-        event_heartbeat_t       heartbeat;
+        event_credential_read_t   credential_read;
+        event_heartbeat_t         heartbeat;
+        event_access_decision_t   access_decision;
     } payload;
 } portunus_event_t;
 

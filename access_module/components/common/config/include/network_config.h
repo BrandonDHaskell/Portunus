@@ -15,6 +15,11 @@
 extern "C" {
 #endif
 
+/* ── Module identity ────────────────────────────────────────────────────────── */
+
+/** Unique name for this access module (max 32 chars). */
+#define PORTUNUS_MODULE_ID                  CONFIG_PORTUNUS_MODULE_ID
+
 /* ── WiFi station credentials ──────────────────────────────────────────────── */
 #define PORTUNUS_WIFI_SSID                  CONFIG_PORTUNUS_WIFI_SSID
 #define PORTUNUS_WIFI_PASSWORD              CONFIG_PORTUNUS_WIFI_PASSWORD
