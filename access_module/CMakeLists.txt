@@ -11,6 +11,7 @@ set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_LIST_DIR}/components/services/event_bus
     ${CMAKE_CURRENT_LIST_DIR}/components/services/heartbeat_service
     ${CMAKE_CURRENT_LIST_DIR}/components/services/wifi_mgr
+    ${CMAKE_CURRENT_LIST_DIR}/components/proto
 )
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)

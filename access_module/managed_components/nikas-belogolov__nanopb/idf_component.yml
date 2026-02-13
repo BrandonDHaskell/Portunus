@@ -1,0 +1,21 @@
+dependencies:
+  idf: '>=5.0'
+description: A small code-size Protocol Buffers implementation in C
+files:
+  include:
+  - include/pb.h
+  - include/pb_common.h
+  - include/pb_encode.h
+  - include/pb_decode.h
+  - pb_common.c
+  - pb_encode.c
+  - pb_decode.c
+license: MIT
+repository: https://github.com/nanopb/nanopb
+tags:
+- proto
+- nanopb
+- protocolbuffers
+- protobuf
+url: https://github.com/nanopb/nanopb
+version: 0.4.10

@@ -1,0 +1,7 @@
+## IDF Component Manager manifest for the proto component.
+## Pulls the nanopb runtime from the Espressif component registry.
+## Docs: https://docs.espressif.com/projects/idf-component-manager/
+
+dependencies:
+  nikas-belogolov/nanopb:
+    version: "~0.4.9"
