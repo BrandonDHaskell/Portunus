@@ -14,4 +14,5 @@ type HeartbeatRecord struct {
 
 type HeartbeatStore interface {
 	UpsertHeartbeat(ctx context.Context, moduleID string, rec HeartbeatRecord) error
+	PruneOlderThan(ctx context.Context, cutoff time.Time) (int64, error)
 }

@@ -3,12 +3,16 @@
  * @brief WiFi station manager implementation.
  *
  * Lifecycle:
- *   wifi_mgr_init()  → creates netif + event handlers (one-time)
+ *   wifi_mgr_init()  → creates netif + event handlers + reconnect task
  *   wifi_mgr_start() → esp_wifi_start/connect, blocks until IP or timeout
  *
- * On WIFI_EVENT_STA_DISCONNECTED the handler re-issues esp_wifi_connect()
- * with exponential backoff (base = PORTUNUS_WIFI_RECONNECT_INTERVAL_MS,
- * ceiling = 60 s).  The backoff resets on a successful connection.
+ * On WIFI_EVENT_STA_DISCONNECTED the event handler notifies a dedicated
+ * reconnect task (via FreeRTOS task notification) which applies exponential
+ * backoff and re-issues esp_wifi_connect().  This keeps the default event
+ * loop unblocked so that IP, system, and other ESP-IDF event handlers
+ * continue to be dispatched normally during backoff.
+ *
+ * The backoff resets on a successful connection (IP_EVENT_STA_GOT_IP).
  */
 
 #include "wifi_mgr.h"
@@ -21,6 +25,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/task.h"
 
 #include <string.h>
 #include <algorithm>   /* std::min */
@@ -37,18 +42,78 @@ static esp_netif_t        *s_sta_netif        = NULL;
 static bool                s_initialized      = false;
 static volatile bool       s_connected        = false;
 
-/* Reconnect backoff state */
-static uint32_t s_reconnect_interval_ms = PORTUNUS_WIFI_RECONNECT_INTERVAL_MS;
-static const uint32_t RECONNECT_CEILING_MS = 60000;   /* 60 s hard ceiling */
+/* ── Reconnect task ────────────────────────────────────────────────────────── */
+static TaskHandle_t  s_reconnect_task   = NULL;
+static uint32_t      s_reconnect_interval_ms = PORTUNUS_WIFI_RECONNECT_INTERVAL_MS;
+static const uint32_t RECONNECT_CEILING_MS   = 60000;   /* 60 s hard ceiling */
+
+#define RECONNECT_TASK_STACK_SIZE  2560
+#define RECONNECT_TASK_PRIORITY    3     /* Below event dispatcher (5) */
 
 /* ── Forward declarations ──────────────────────────────────────────────────── */
 static void wifi_event_handler(void *arg, esp_event_base_t base,
                                int32_t event_id, void *event_data);
 static void ip_event_handler(void *arg, esp_event_base_t base,
                              int32_t event_id, void *event_data);
+static void reconnect_task(void *arg);
+
+/* ── Reconnect task ────────────────────────────────────────────────────────── */
+
+/**
+ * @brief Dedicated task for WiFi reconnection with exponential backoff.
+ *
+ * Waits for a task notification from the disconnect event handler, sleeps
+ * for the current backoff interval, then calls esp_wifi_connect().
+ *
+ * This keeps the backoff delay OFF the default event loop task, which
+ * must remain responsive for all ESP-IDF system event dispatching.
+ */
+static void reconnect_task(void *arg)
+{
+    (void)arg;
+
+    ESP_LOGI(TAG, "Reconnect task started");
+
+    for (;;) {
+        /* Block until notified by the disconnect handler.
+           ulTaskNotifyTake clears the notification on exit. */
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        /* Capture the current interval before sleeping.  If a second
+           disconnect fires while we're in the delay, the notification
+           count increments and we'll loop again immediately after
+           this attempt completes. */
+        uint32_t delay_ms = s_reconnect_interval_ms;
+
+        ESP_LOGI(TAG, "Reconnect: waiting %" PRIu32 " ms before retry", delay_ms);
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
+
+        /* Advance the backoff for the NEXT attempt (cap at ceiling). */
+        s_reconnect_interval_ms =
+            std::min(s_reconnect_interval_ms * 2, RECONNECT_CEILING_MS);
+
+        /* If we reconnected during the delay (e.g. short blip), skip. */
+        if (s_connected) {
+            ESP_LOGI(TAG, "Reconnect: already connected, skipping attempt");
+            continue;
+        }
+
+        ESP_LOGI(TAG, "Reconnect: calling esp_wifi_connect()");
+        esp_err_t err = esp_wifi_connect();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "esp_wifi_connect() failed: %s", esp_err_to_name(err));
+        }
+    }
+}
 
 /* ── Event handlers ────────────────────────────────────────────────────────── */
 
+/**
+ * @brief WiFi event handler — runs on the default event loop task.
+ *
+ * CRITICAL: This function must NEVER block.  Any delay or reconnect
+ * logic is delegated to the reconnect task via task notification.
+ */
 static void wifi_event_handler(void *arg, esp_event_base_t base,
                                int32_t event_id, void *event_data)
 {
@@ -67,16 +132,16 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
 
         wifi_event_sta_disconnected_t *info =
             (wifi_event_sta_disconnected_t *)event_data;
-        ESP_LOGW(TAG, "Disconnected (reason=%d) — retrying in %" PRIu32 " ms",
+        ESP_LOGW(TAG, "Disconnected (reason=%d) — notifying reconnect task "
+                 "(next backoff=%" PRIu32 " ms)",
                  info->reason, s_reconnect_interval_ms);
 
-        vTaskDelay(pdMS_TO_TICKS(s_reconnect_interval_ms));
-
-        /* Exponential backoff: double the interval, cap at ceiling */
-        s_reconnect_interval_ms =
-            std::min(s_reconnect_interval_ms * 2, RECONNECT_CEILING_MS);
-
-        esp_wifi_connect();
+        /* Wake the reconnect task.  If it's already handling a previous
+           disconnect, the notification count increments and the task
+           will process it on the next loop iteration. */
+        if (s_reconnect_task != NULL) {
+            xTaskNotifyGive(s_reconnect_task);
+        }
         break;
     }
 
@@ -158,6 +223,21 @@ portunus_err_t wifi_mgr_init(void)
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         IP_EVENT, IP_EVENT_STA_GOT_IP,
         ip_event_handler, NULL, NULL));
+
+    /* Create the reconnect task — it starts blocked on ulTaskNotifyTake,
+       consuming no CPU until a disconnect event fires. */
+    BaseType_t ret = xTaskCreate(
+        reconnect_task,
+        "wifi_reconn",
+        RECONNECT_TASK_STACK_SIZE,
+        NULL,
+        RECONNECT_TASK_PRIORITY,
+        &s_reconnect_task
+    );
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create WiFi reconnect task");
+        return PORTUNUS_ERR_TASK_CREATE;
+    }
 
     s_initialized = true;
     ESP_LOGI(TAG, "WiFi manager initialised");

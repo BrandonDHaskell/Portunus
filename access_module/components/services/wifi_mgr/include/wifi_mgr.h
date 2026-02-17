@@ -5,17 +5,24 @@
  * Manages the ESP32 WiFi station interface with automatic reconnection.
  * The typical startup sequence is:
  *
- *   1. wifi_mgr_init()   — create netif, register event handlers
+ *   1. wifi_mgr_init()   — create netif, register event handlers, start
+ *                           background reconnect task
  *   2. wifi_mgr_start()  — connect to the configured AP, block until
  *                           an IP is obtained or the timeout expires
  *
  * On disconnection the manager automatically attempts to reconnect with
  * exponential backoff (base interval from Kconfig, ceiling at 60 s).
+ * Reconnection runs in a dedicated FreeRTOS task ("wifi_reconn") so that
+ * the backoff delay never blocks the ESP-IDF default event loop.
  *
  * Thread safety:
  *   - wifi_mgr_init() and wifi_mgr_start() must be called from a single
  *     task during startup (typically app_main).
  *   - wifi_mgr_is_connected() is safe to call from any task.
+ *
+ * Internal tasks (created by wifi_mgr_init):
+ *   - "wifi_reconn" — reconnect with exponential backoff (2.5 KB stack,
+ *     priority 3). Sleeps until woken by a disconnect event notification.
  */
 
 #pragma once
@@ -30,13 +37,14 @@ extern "C" {
  * @brief Initialise the WiFi subsystem.
  *
  * Creates the default station netif, initialises the WiFi driver with
- * default config, and registers internal event handlers for
- * WIFI_EVENT and IP_EVENT groups.
+ * default config, registers internal event handlers for WIFI_EVENT and
+ * IP_EVENT groups, and starts a background reconnect task.
  *
  * Requires NVS to be initialised first (for WiFi calibration data).
  *
  * @return PORTUNUS_OK on success.
  *         PORTUNUS_ERR_ALREADY_INIT if called more than once.
+ *         PORTUNUS_ERR_TASK_CREATE if the reconnect task could not start.
  *         PORTUNUS_FAIL on ESP-IDF error.
  */
 portunus_err_t wifi_mgr_init(void);

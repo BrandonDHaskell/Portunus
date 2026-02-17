@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -15,6 +16,10 @@ type Config struct {
 	KnownModules   []string
 	AllowAll       bool
 	AllowedCardIDs []string
+
+	// Heartbeat retention
+	HeartbeatRetentionDays int // 0 = keep forever
+	PruneIntervalHours     int // how often the pruner runs (default 6)
 }
 
 func FromEnv() Config {
@@ -34,6 +39,9 @@ func FromEnv() Config {
 	allowAll := strings.EqualFold(os.Getenv("PORTUNUS_ALLOW_ALL"), "true") ||
 		os.Getenv("PORTUNUS_ALLOW_ALL") == "1"
 
+	retentionDays := getenvInt("PORTUNUS_HEARTBEAT_RETENTION_DAYS", 30)
+	pruneInterval := getenvInt("PORTUNUS_PRUNE_INTERVAL_HOURS", 6)
+
 	return Config{
 		HTTPAddr: addr,
 		Env:      env,
@@ -42,6 +50,9 @@ func FromEnv() Config {
 		KnownModules:   knownModules,
 		AllowAll:       allowAll,
 		AllowedCardIDs: allowedCards,
+
+		HeartbeatRetentionDays: retentionDays,
+		PruneIntervalHours:     pruneInterval,
 	}
 }
 
@@ -51,6 +62,18 @@ func getenvDefault(key, def string) string {
 		return def
 	}
 	return v
+}
+
+func getenvInt(key string, def int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return def
+	}
+	return n
 }
 
 func splitCSV(v string) []string {

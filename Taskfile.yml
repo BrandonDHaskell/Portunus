@@ -1,0 +1,213 @@
+# https://taskfile.dev
+# Install: go install github.com/go-task/task/v3/cmd/task@latest
+#
+# Usage:
+#   task test              — run all tests
+#   task test:server       — run server tests only
+#   task build:server      — build the server binary
+#   task proto:gen         — regenerate protobuf code (Go + Nanopb)
+#   task firmware:build    — build the ESP32 firmware
+#   task clean             — remove build artifacts
+#
+# Cross-platform:
+#   All tasks run on macOS, Linux, and Windows without modification.
+#   Python (required by ESP-IDF) handles file operations that would
+#   otherwise need shell-specific syntax. Go and idf.py commands are
+#   natively cross-platform.
+
+version: "3"
+
+vars:
+  # ── Cross-platform Python resolution ────────────────────────────────────
+  # Windows typically installs Python as 'python'; macOS/Linux use 'python3'.
+  # Override with: task <target> PYTHON=py
+  PYTHON: '{{if eq OS "windows"}}python{{else}}python3{{end}}'
+
+  # ── Cross-platform executable extension ─────────────────────────────────
+  # Go requires explicit .exe on Windows for 'go build -o'.
+  EXE: '{{if eq OS "windows"}}.exe{{end}}'
+
+  # ── Project paths ───────────────────────────────────────────────────────
+  SERVER_DIR: server
+  FIRMWARE_DIR: access_module
+
+tasks:
+  # ─── Aliases ──────────────────────────────────────────────────────────────
+
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  test:
+    desc: Run all tests
+    cmds:
+      - task: test:server
+
+  clean:
+    desc: Clean all build artifacts
+    cmds:
+      - task: clean:server
+
+  # ─── Server ───────────────────────────────────────────────────────────────
+
+  test:server:
+    desc: Run all server tests
+    dir: "{{.SERVER_DIR}}"
+    cmds:
+      - go test -count=1 ./...
+
+  test:server:verbose:
+    desc: Run all server tests with verbose output
+    dir: "{{.SERVER_DIR}}"
+    cmds:
+      - go test -v -count=1 ./...
+
+  test:server:race:
+    desc: Run server tests with race detector
+    dir: "{{.SERVER_DIR}}"
+    cmds:
+      - go test -race -count=1 ./...
+
+  test:server:coverage:
+    desc: Run server tests with coverage report
+    dir: "{{.SERVER_DIR}}"
+    cmds:
+      - go test -coverprofile=coverage.out -count=1 ./...
+      - go tool cover -func=coverage.out
+
+  test:server:service:
+    desc: Run service-layer tests only
+    dir: "{{.SERVER_DIR}}"
+    cmds:
+      - go test -v -count=1 ./internal/portunus/service/
+
+  test:server:http:
+    desc: Run HTTP handler tests only
+    dir: "{{.SERVER_DIR}}"
+    cmds:
+      - go test -v -count=1 ./internal/httpapi/
+
+  test:server:store:
+    desc: Run SQLite store tests only
+    dir: "{{.SERVER_DIR}}"
+    cmds:
+      - go test -v -count=1 ./internal/portunus/store/sqlite/
+
+  build:server:
+    desc: Build the server binary
+    dir: "{{.SERVER_DIR}}"
+    cmds:
+      - go build -o bin/portunus-server{{.EXE}} ./cmd/portunus-server
+
+  clean:server:
+    desc: Clean server build artifacts
+    dir: "{{.SERVER_DIR}}"
+    cmds:
+      - go clean ./...
+      - "{{.PYTHON}} ../scripts/clean.py bin coverage.out"
+
+  lint:server:
+    desc: Run Go linters (requires golangci-lint)
+    dir: "{{.SERVER_DIR}}"
+    cmds:
+      - golangci-lint run ./...
+
+  vet:server:
+    desc: Run go vet (built-in, no extra tools needed)
+    dir: "{{.SERVER_DIR}}"
+    cmds:
+      - go vet ./...
+
+  fmt:server:
+    desc: Check server code formatting (fails if unformatted)
+    dir: "{{.SERVER_DIR}}"
+    cmds:
+      - "{{.PYTHON}} ../scripts/check_fmt.py"
+
+  fmt:server:fix:
+    desc: Auto-format server code with gofmt
+    dir: "{{.SERVER_DIR}}"
+    cmds:
+      - gofmt -w .
+
+  # ─── Protobuf ─────────────────────────────────────────────────────────────
+
+  proto:gen:
+    desc: Regenerate protobuf code for Go and Nanopb
+    cmds:
+      - "{{.PYTHON}} scripts/proto_gen.py"
+
+  proto:gen:go:
+    desc: Regenerate Go protobuf stubs only
+    cmds:
+      - "{{.PYTHON}} scripts/proto_gen.py --go"
+
+  proto:gen:nanopb:
+    desc: Regenerate Nanopb C stubs for ESP32 only
+    cmds:
+      - "{{.PYTHON}} scripts/proto_gen.py --nanopb"
+
+  # ─── Firmware ─────────────────────────────────────────────────────────────
+
+  firmware:build:
+    desc: Build the ESP32 firmware (requires ESP-IDF)
+    dir: "{{.FIRMWARE_DIR}}"
+    cmds:
+      - idf.py build
+
+  firmware:build:dev:
+    desc: Build firmware with dev sdkconfig overlay
+    dir: "{{.FIRMWARE_DIR}}"
+    cmds:
+      - idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.dev" build
+
+  firmware:build:prod:
+    desc: Build firmware with prod sdkconfig overlay
+    dir: "{{.FIRMWARE_DIR}}"
+    cmds:
+      - idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.prod" build
+
+  firmware:flash:
+    desc: Flash firmware to connected ESP32
+    dir: "{{.FIRMWARE_DIR}}"
+    cmds:
+      - idf.py flash
+
+  firmware:monitor:
+    desc: Open serial monitor to connected ESP32
+    dir: "{{.FIRMWARE_DIR}}"
+    cmds:
+      - idf.py monitor
+
+  firmware:flash-monitor:
+    desc: Flash firmware and open serial monitor
+    dir: "{{.FIRMWARE_DIR}}"
+    cmds:
+      - idf.py flash monitor
+
+  firmware:menuconfig:
+    desc: Open ESP-IDF menuconfig
+    dir: "{{.FIRMWARE_DIR}}"
+    cmds:
+      - idf.py menuconfig
+
+  firmware:clean:
+    desc: Clean firmware build directory
+    dir: "{{.FIRMWARE_DIR}}"
+    cmds:
+      - idf.py fullclean
+
+  # ─── CI ───────────────────────────────────────────────────────────────────
+
+  proto:check:
+    desc: Verify generated protobuf code is up to date (for CI)
+    cmds:
+      - "{{.PYTHON}} scripts/proto_gen.py --check"
+
+  ci:server:
+    desc: Full server CI check (vet, format, test with race detector)
+    cmds:
+      - task: vet:server
+      - task: fmt:server
+      - task: test:server:race

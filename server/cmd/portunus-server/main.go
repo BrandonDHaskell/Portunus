@@ -51,6 +51,14 @@ func main() {
 	registry := service.NewDeviceRegistry(deviceStore)
 	heartbeatSvc := service.NewHeartbeatService(heartbeatStore, registry)
 
+	// Heartbeat pruner (background goroutine)
+	pruner := service.NewHeartbeatPruner(heartbeatStore, service.PrunerConfig{
+		RetentionDays: cfg.HeartbeatRetentionDays,
+		IntervalHours: cfg.PruneIntervalHours,
+	}, logger)
+	pruner.Start(ctx)
+	defer pruner.Stop()
+
 	allowed := make(map[string]struct{}, len(cfg.AllowedCardIDs))
 	for _, c := range cfg.AllowedCardIDs {
 		allowed[c] = struct{}{}
