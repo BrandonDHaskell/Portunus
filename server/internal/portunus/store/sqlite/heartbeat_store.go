@@ -91,3 +91,25 @@ WHERE module_id = ?;
 		return nil
 	})
 }
+
+// PruneOlderThan deletes heartbeat rows with received_at_ms before the given
+// cutoff time.  Returns the number of rows deleted.
+//
+// Uses the idx_heartbeats_time index for an efficient range scan.
+func (s *HeartbeatStore) PruneOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
+	cutoffMs := cutoff.UTC().UnixMilli()
+
+	var deleted int64
+	err := s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+DELETE FROM module_heartbeats
+WHERE received_at_ms < ?;
+`, cutoffMs)
+		if err != nil {
+			return fmt.Errorf("PruneOlderThan: %w", err)
+		}
+		deleted, _ = res.RowsAffected()
+		return nil
+	})
+	return deleted, err
+}
