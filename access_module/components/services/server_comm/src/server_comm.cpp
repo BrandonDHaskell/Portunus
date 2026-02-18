@@ -93,21 +93,6 @@ static bool get_rssi(int32_t *out)
     return true;
 }
 
-/**
- * @brief Format a credential UID as a colon-separated hex string.
- *
- *   {0x04, 0xA3, 0x2B}  →  "04:A3:2B"
- */
-static void uid_to_hex_str(const credential_t *cred, char *buf, size_t len)
-{
-    buf[0] = '\0';
-    for (uint8_t i = 0; i < cred->uid_len && (i * 3 + 2) < len; i++) {
-        char seg[4];
-        snprintf(seg, sizeof(seg), "%s%02X", (i > 0) ? ":" : "", cred->uid[i]);
-        strncat(buf, seg, len - strlen(buf) - 1);
-    }
-}
-
 /* ── HTTP helper ───────────────────────────────────────────────────────────── */
 
 /**
@@ -150,12 +135,19 @@ static portunus_err_t http_post_proto(const char *url,
         return PORTUNUS_ERR_HTTP_CONNECT;
     }
 
-    int written = esp_http_client_write(client, (const char *)req_buf, (int)req_len);
-    if (written < 0 || (size_t)written != req_len) {
-        ESP_LOGE(TAG, "HTTP write failed (wrote %d / %zu)", written, req_len);
-        esp_http_client_close(client);
-        esp_http_client_cleanup(client);
-        return PORTUNUS_ERR_HTTP_CONNECT;
+    /* Write request body, handling partial writes */
+    size_t total_written = 0;
+    while (total_written < req_len) {
+        int written = esp_http_client_write(client,
+                                            (const char *)req_buf + total_written,
+                                            (int)(req_len - total_written));
+        if (written < 0) {
+            ESP_LOGE(TAG, "HTTP write failed (wrote %zu / %zu)", total_written, req_len);
+            esp_http_client_close(client);
+            esp_http_client_cleanup(client);
+            return PORTUNUS_ERR_HTTP_CONNECT;
+        }
+        total_written += (size_t)written;
     }
 
     int content_length = esp_http_client_fetch_headers(client);
@@ -265,7 +257,7 @@ static void handle_credential(const event_credential_read_t *cred)
     portunus_v1_AccessRequest req = portunus_v1_AccessRequest_init_zero;
 
     strncpy(req.module_id, PORTUNUS_MODULE_ID, sizeof(req.module_id) - 1);
-    uid_to_hex_str(&cred->credential, req.card_id, sizeof(req.card_id));
+    credential_uid_to_hex(&cred->credential, req.card_id, sizeof(req.card_id));
 
     /* Encode */
     uint8_t req_buf[portunus_v1_AccessRequest_size];
@@ -383,8 +375,17 @@ portunus_err_t server_comm_init(void)
     }
 
     /* Subscribe to events */
-    event_bus_subscribe(EVENT_HEARTBEAT, on_heartbeat_event, NULL);
-    event_bus_subscribe(EVENT_CREDENTIAL_READ, on_credential_event, NULL);
+    portunus_err_t sub_err;
+
+    sub_err = event_bus_subscribe(EVENT_HEARTBEAT, on_heartbeat_event, NULL);
+    if (sub_err != PORTUNUS_OK) {
+        ESP_LOGE(TAG, "Failed to subscribe to heartbeat events: 0x%04x", (unsigned)sub_err);
+    }
+
+    sub_err = event_bus_subscribe(EVENT_CREDENTIAL_READ, on_credential_event, NULL);
+    if (sub_err != PORTUNUS_OK) {
+        ESP_LOGE(TAG, "Failed to subscribe to credential events: 0x%04x", (unsigned)sub_err);
+    }
 
     /* Start task */
     BaseType_t ret = xTaskCreate(
@@ -403,4 +404,30 @@ portunus_err_t server_comm_init(void)
     s_initialized = true;
     ESP_LOGI(TAG, "Server comm initialised");
     return PORTUNUS_OK;
+}
+
+void server_comm_deinit(void)
+{
+    if (!s_initialized) {
+        return;
+    }
+
+    /* Delete the network task first so it stops pulling from the queue. */
+    if (s_comm_task != NULL) {
+        vTaskDelete(s_comm_task);
+        s_comm_task = NULL;
+    }
+
+    /* Drain and delete the internal queue. */
+    if (s_comm_queue != NULL) {
+        portunus_event_t discarded;
+        while (xQueueReceive(s_comm_queue, &discarded, 0) == pdTRUE) {
+            /* discard */
+        }
+        vQueueDelete(s_comm_queue);
+        s_comm_queue = NULL;
+    }
+
+    s_initialized = false;
+    ESP_LOGI(TAG, "Server comm deinitialised");
 }

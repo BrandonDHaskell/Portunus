@@ -4,6 +4,8 @@
 # types, ensuring it can be included by any layer without introducing cycles.
 
 idf_component_register(
+    SRCS
+        "src/credential_types.c"
     INCLUDE_DIRS
         "include"
 )

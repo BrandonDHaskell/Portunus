@@ -43,6 +43,17 @@ extern "C" {
  */
 portunus_err_t server_comm_init(void);
 
+/**
+ * @brief Stop the server communication component and release resources.
+ *
+ * Deletes the network task and drains/deletes the internal queue.
+ * After this call no further events will be forwarded to the server
+ * until server_comm_init() is called again.
+ *
+ * Safe to call if the component is not initialised (no-op).
+ */
+void server_comm_deinit(void);
+
 #ifdef __cplusplus
 }
 #endif

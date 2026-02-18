@@ -20,13 +20,13 @@ extern "C" {
 /* ── MFRC522 card polling ──────────────────────────────────────────────────── */
 #define MFRC522_POLL_INTERVAL_MS    CONFIG_PORTUNUS_MFRC522_POLL_INTERVAL_MS
 
+/* ── Card re-read debounce ─────────────────────────────────────────────────── */
+#define CARD_REREAD_DELAY_MS        CONFIG_PORTUNUS_CARD_REREAD_DELAY_MS
+
 /* ── Event bus ─────────────────────────────────────────────────────────────── */
 #define EVENT_QUEUE_TIMEOUT_MS      CONFIG_PORTUNUS_EVENT_QUEUE_TIMEOUT_MS
 #define EVENT_QUEUE_LENGTH          CONFIG_PORTUNUS_EVENT_QUEUE_LENGTH
 #define MAX_EVENT_SUBSCRIBERS       CONFIG_PORTUNUS_MAX_EVENT_SUBSCRIBERS
-
-/* ── FreeRTOS tick conversions ─────────────────────────────────────────────── */
-#define MS_TO_TICKS(ms)  ((ms) / portTICK_PERIOD_MS)
 
 #ifdef __cplusplus
 }

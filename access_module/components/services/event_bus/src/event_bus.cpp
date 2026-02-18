@@ -13,11 +13,13 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "esp_log.h"
 
 #include <string.h>
 
 static const char *TAG = "event_bus";
+static SemaphoreHandle_t s_subscriber_mutex = NULL;
 
 /* ── Subscriber table ──────────────────────────────────────────────────────── */
 
@@ -50,11 +52,20 @@ static void event_bus_dispatch_task(void *arg)
 
     for (;;) {
         if (xQueueReceive(s_event_queue, &event, portMAX_DELAY) == pdTRUE) {
-            /* Walk the subscriber table and invoke matching handlers. */
-            for (size_t i = 0; i < s_subscriber_count; i++) {
-                if (s_subscribers[i].active &&
-                    s_subscribers[i].event_id == event.id) {
-                    s_subscribers[i].handler(&event, s_subscribers[i].ctx);
+            /* Snapshot the subscriber table under the lock, then dispatch
+               without it.  This prevents deadlock if a callback calls
+               event_bus_subscribe() (e.g. a component that registers
+               new subscriptions in response to EVENT_SYSTEM_BOOT_COMPLETE). */
+            xSemaphoreTake(s_subscriber_mutex, portMAX_DELAY);
+            size_t count = s_subscriber_count;
+            subscriber_entry_t snapshot[MAX_EVENT_SUBSCRIBERS];
+            memcpy(snapshot, s_subscribers, count * sizeof(subscriber_entry_t));
+            xSemaphoreGive(s_subscriber_mutex);
+
+            for (size_t i = 0; i < count; i++) {
+                if (snapshot[i].active &&
+                    snapshot[i].event_id == event.id) {
+                    snapshot[i].handler(&event, snapshot[i].ctx);
                 }
             }
         }
@@ -73,6 +84,13 @@ portunus_err_t event_bus_init(void)
     /* Clear subscriber table. */
     memset(s_subscribers, 0, sizeof(s_subscribers));
     s_subscriber_count = 0;
+
+    /* Create subscriber table mutex. */
+    s_subscriber_mutex = xSemaphoreCreateMutex();
+    if (s_subscriber_mutex == NULL) {
+        ESP_LOGE(TAG, "Failed to create subscriber mutex");
+        return PORTUNUS_FAIL;
+    }
 
     /* Create the dispatcher queue. */
     s_event_queue = xQueueCreate(EVENT_QUEUE_LENGTH, sizeof(portunus_event_t));
@@ -112,7 +130,7 @@ portunus_err_t event_bus_publish(const portunus_event_t *event)
         return PORTUNUS_ERR_NOT_INIT;
     }
 
-    TickType_t timeout = MS_TO_TICKS(EVENT_QUEUE_TIMEOUT_MS);
+    TickType_t timeout = pdMS_TO_TICKS(EVENT_QUEUE_TIMEOUT_MS);
     if (xQueueSendToBack(s_event_queue, event, timeout) != pdTRUE) {
         ESP_LOGW(TAG, "Event queue full, dropping event id=0x%04x", event->id);
         return PORTUNUS_ERR_QUEUE_FULL;
@@ -124,8 +142,11 @@ portunus_err_t event_bus_publish(const portunus_event_t *event)
 portunus_err_t event_bus_publish_from_isr(const portunus_event_t *event,
                                           BaseType_t *higher_priority_woken)
 {
-    if (event == NULL || s_event_queue == NULL) {
+    if (event == NULL) {
         return PORTUNUS_ERR_INVALID_ARG;
+    }
+    if (s_event_queue == NULL) {
+        return PORTUNUS_ERR_NOT_INIT;
     }
 
     if (xQueueSendToBackFromISR(s_event_queue, event, higher_priority_woken) != pdTRUE) {
@@ -143,9 +164,12 @@ portunus_err_t event_bus_subscribe(portunus_event_id_t event_id,
         return PORTUNUS_ERR_INVALID_ARG;
     }
 
+    xSemaphoreTake(s_subscriber_mutex, portMAX_DELAY);
+
     if (s_subscriber_count >= MAX_EVENT_SUBSCRIBERS) {
         ESP_LOGE(TAG, "Subscriber table full (%d/%d)",
                  (int)s_subscriber_count, MAX_EVENT_SUBSCRIBERS);
+        xSemaphoreGive(s_subscriber_mutex);
         return PORTUNUS_ERR_MAX_SUBSCRIBERS;
     }
 
@@ -158,5 +182,7 @@ portunus_err_t event_bus_subscribe(portunus_event_id_t event_id,
 
     ESP_LOGI(TAG, "Subscriber registered for event 0x%04x (total: %d)",
              event_id, (int)s_subscriber_count);
+
+    xSemaphoreGive(s_subscriber_mutex);
     return PORTUNUS_OK;
 }

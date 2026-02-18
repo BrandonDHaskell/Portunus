@@ -55,15 +55,8 @@ static void on_credential_read(const portunus_event_t *event, void *ctx)
     (void)ctx;
     const event_credential_read_t *cred = &event->payload.credential_read;
 
-    /* Format UID as hex string for logging */
-    char uid_str[CREDENTIAL_UID_MAX_LEN * 3 + 1];
-    uid_str[0] = '\0';
-    for (uint8_t i = 0; i < cred->credential.uid_len; i++) {
-        char byte_str[4];
-        snprintf(byte_str, sizeof(byte_str), "%s%02X",
-                 (i > 0) ? ":" : "", cred->credential.uid[i]);
-        strncat(uid_str, byte_str, sizeof(uid_str) - strlen(uid_str) - 1);
-    }
+    char uid_str[CREDENTIAL_UID_HEX_STR_LEN];
+    credential_uid_to_hex(&cred->credential, uid_str, sizeof(uid_str));
 
     ESP_LOGI(TAG, "Card read — UID: %s (len=%d)", uid_str, cred->credential.uid_len);
 }
@@ -125,8 +118,10 @@ static void card_poll_task(void *arg)
             mfrc522_halt_card();
 
             /* Brief extra delay after a successful read to avoid rapid re-reads
-               if the user holds the card against the reader */
-            vTaskDelay(pdMS_TO_TICKS(1000));
+               if the user holds the card against the reader.  Skip the normal
+               poll interval so the total pause is just CARD_REREAD_DELAY_MS. */
+            vTaskDelay(pdMS_TO_TICKS(CARD_REREAD_DELAY_MS));
+            continue;
         }
         /* PORTUNUS_ERR_NO_CARD is expected (no card present) — silently continue */
 

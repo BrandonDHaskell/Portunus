@@ -27,6 +27,20 @@ typedef struct {
     uint8_t uid_len;                       /**< Actual UID length (4, 7, or 10) */
 } credential_t;
 
+/** Buffer size sufficient for any UID formatted as "XX:XX:...:XX\0". */
+#define CREDENTIAL_UID_HEX_STR_LEN  (CREDENTIAL_UID_MAX_LEN * 3 + 1)
+
+/**
+ * @brief Format a credential UID as a colon-separated hex string.
+ *
+ *   {0x04, 0xA3, 0x2B}  →  "04:A3:2B"
+ *
+ * @param cred    Source credential.
+ * @param buf     Destination buffer (recommend CREDENTIAL_UID_HEX_STR_LEN).
+ * @param buf_len Size of buf in bytes.
+ */
+void credential_uid_to_hex(const credential_t *cred, char *buf, size_t buf_len);
+
 #ifdef __cplusplus
 }
 #endif

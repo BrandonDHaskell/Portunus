@@ -29,6 +29,7 @@
 
 #include <string.h>
 #include <algorithm>   /* std::min */
+#include <atomic>
 
 static const char *TAG = "wifi_mgr";
 
@@ -40,7 +41,7 @@ static const char *TAG = "wifi_mgr";
 static EventGroupHandle_t  s_wifi_event_group = NULL;
 static esp_netif_t        *s_sta_netif        = NULL;
 static bool                s_initialized      = false;
-static volatile bool       s_connected        = false;
+static std::atomic<bool>   s_connected{false};
 
 /* ── Reconnect task ────────────────────────────────────────────────────────── */
 static TaskHandle_t  s_reconnect_task   = NULL;
@@ -310,7 +311,7 @@ void wifi_mgr_stop(void)
     }
     esp_wifi_disconnect();
     esp_wifi_stop();
-    s_connected = false;
+    s_connected.store(false);
     ESP_LOGI(TAG, "WiFi manager stopped");
 }
 

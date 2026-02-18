@@ -223,6 +223,41 @@ static portunus_err_t transceive(const uint8_t *send_buf, uint8_t send_len,
 }
 
 /**
+ * @brief Calculate CRC_A using the MFRC522 coprocessor.
+ *
+ * @param data     Input bytes to CRC.
+ * @param len      Number of input bytes.
+ * @param crc_low  [out] CRC low byte (CRC_RESULT_L).
+ * @param crc_high [out] CRC high byte (CRC_RESULT_H).
+ * @return PORTUNUS_OK on success, PORTUNUS_ERR_TIMEOUT if the CRC unit stalls.
+ */
+static portunus_err_t calculate_crc_a(const uint8_t *data, uint8_t len,
+                                       uint8_t *crc_low, uint8_t *crc_high)
+{
+    reg_write(REG_COMMAND, CMD_IDLE);
+    reg_write(REG_DIV_IRQ, 0x04);        /* Clear CRCIRq */
+    reg_write(REG_FIFO_LEVEL, 0x80);     /* Flush FIFO */
+
+    for (uint8_t i = 0; i < len; i++) {
+        reg_write(REG_FIFO_DATA, data[i]);
+    }
+
+    reg_write(REG_COMMAND, CMD_CALC_CRC);
+
+    uint16_t timeout = 5000;
+    while (!(reg_read(REG_DIV_IRQ) & 0x04)) {
+        if (--timeout == 0) {
+            return PORTUNUS_ERR_TIMEOUT;
+        }
+    }
+
+    *crc_low  = reg_read(REG_CRC_RESULT_L);
+    *crc_high = reg_read(REG_CRC_RESULT_H);
+
+    return PORTUNUS_OK;
+}
+
+/**
  * @brief Send REQA (Request command Type A) to detect cards in the field.
  *
  * @param[out] atqa   2-byte ATQA response from the card.
@@ -285,22 +320,10 @@ static portunus_err_t picc_anticoll_select(uint8_t sel_cmd, uint8_t *uid_part)
     memcpy(&buf[2], uid_part, 5);  /* 4 UID bytes + BCC */
 
     /* Calculate CRC_A and append */
-    reg_write(REG_COMMAND, CMD_IDLE);
-    reg_write(REG_DIV_IRQ, 0x04);     /* Clear CRCIRq */
-    reg_write(REG_FIFO_LEVEL, 0x80);  /* Flush FIFO */
-    for (int i = 0; i < 7; i++) {
-        reg_write(REG_FIFO_DATA, buf[i]);
+    portunus_err_t crc_err = calculate_crc_a(buf, 7, &buf[7], &buf[8]);
+    if (crc_err != PORTUNUS_OK) {
+        return crc_err;
     }
-    reg_write(REG_COMMAND, CMD_CALC_CRC);
-
-    uint16_t crc_timeout = 5000;
-    while (!(reg_read(REG_DIV_IRQ) & 0x04)) {
-        if (--crc_timeout == 0) {
-            return PORTUNUS_ERR_TIMEOUT;
-        }
-    }
-    buf[7] = reg_read(REG_CRC_RESULT_L);
-    buf[8] = reg_read(REG_CRC_RESULT_H);
 
     /* Send select with CRC */
     uint8_t sak[3];  /* SAK + CRC_A (3 bytes) */
@@ -465,19 +488,10 @@ void mfrc522_halt_card(void)
     buf[1] = 0x00;
 
     /* Calculate CRC_A */
-    reg_write(REG_COMMAND, CMD_IDLE);
-    reg_write(REG_DIV_IRQ, 0x04);
-    reg_write(REG_FIFO_LEVEL, 0x80);
-    reg_write(REG_FIFO_DATA, buf[0]);
-    reg_write(REG_FIFO_DATA, buf[1]);
-    reg_write(REG_COMMAND, CMD_CALC_CRC);
-
-    uint16_t timeout = 5000;
-    while (!(reg_read(REG_DIV_IRQ) & 0x04)) {
-        if (--timeout == 0) break;
+    portunus_err_t crc_err = calculate_crc_a(buf, 2, &buf[2], &buf[3]);
+    if (crc_err != PORTUNUS_OK) {
+        return;
     }
-    buf[2] = reg_read(REG_CRC_RESULT_L);
-    buf[3] = reg_read(REG_CRC_RESULT_H);
 
     /* Transmit HALT — we don't expect a response */
     uint8_t recv_len = 0;
