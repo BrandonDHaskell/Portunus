@@ -44,20 +44,31 @@ static void heartbeat_task(void *arg)
         portunus_event_t event;
         memset(&event, 0, sizeof(event));
         event.id = EVENT_HEARTBEAT;
-        event.payload.heartbeat.sequence        = s_sequence++;
+        event.payload.heartbeat.sequence        = s_sequence;
         event.payload.heartbeat.uptime_sec      = (uint32_t)(now_us / 1000000);
         event.payload.heartbeat.free_heap_bytes = esp_get_free_heap_size();
 
         portunus_err_t err = event_bus_publish(&event);
         if (err != PORTUNUS_OK) {
             ESP_LOGW(TAG, "Failed to publish heartbeat #%" PRIu32 ": err=%d",
-                     event.payload.heartbeat.sequence, (int)err);
+                     s_sequence, (int)err);
+            /* Sequence not incremented — the same number will be retried
+               on the next interval so the server sees no gaps. */
+        } else {
+            s_sequence++;
         }
 
-        ESP_LOGI(TAG, "Heartbeat #%" PRIu32 " | uptime=%"  PRIu32 "s | heap=%"  PRIu32,
+        if (event.payload.heartbeat.sequence % 100 == 0) {
+            ESP_LOGI(TAG, "Heartbeat #%" PRIu32 " | uptime=%" PRIu32 "s | heap=%" PRIu32,
+                     event.payload.heartbeat.sequence,
+                     event.payload.heartbeat.uptime_sec,
+                     event.payload.heartbeat.free_heap_bytes);
+        } else {
+            ESP_LOGD(TAG, "Heartbeat #%" PRIu32 " | uptime=%" PRIu32 "s | heap=%" PRIu32,
                  event.payload.heartbeat.sequence,
                  event.payload.heartbeat.uptime_sec,
                  event.payload.heartbeat.free_heap_bytes);
+        }
     }
 }
 

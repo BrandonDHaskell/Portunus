@@ -12,8 +12,8 @@
  * Thread safety:
  *   - event_bus_publish() is safe to call from any task or ISR (uses
  *     xQueueSendToBack / xQueueSendToBackFromISR).
- *   - event_bus_subscribe() must be called before the dispatcher is
- *     started (i.e. during initialisation) or externally serialised.
+ *   - event_bus_subscribe() is safe to call from any task at any time
+ *     after event_bus_init(). The subscriber table is mutex-protected.
  */
 
 #pragma once

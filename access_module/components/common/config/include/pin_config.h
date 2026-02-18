@@ -10,13 +10,17 @@
  *
  *   MFRC522 Pin  │ ESP32-S3 GPIO
  *   ─────────────┼──────────────
- *   SDA (CS)     │ GPIO 10
- *   SCK          │ GPIO 12
- *   MOSI         │ GPIO 11
- *   MISO         │ GPIO 13
- *   RST          │ GPIO  9
+ *   MOSI         │ GPIO 37
+ *   MISO         │ GPIO 38
+ *   SCK          │ GPIO 36
+ *   SDA (CS)     │ GPIO 35
+ *   RST          │ GPIO  4
  *   3.3V         │ 3V3
  *   GND          │ GND
+ *
+ * These defaults match the Kconfig values in main/Kconfig.projbuild.
+ * Override via `idf.py menuconfig` → Portunus Configuration → SPI Pin
+ * Assignments.
  */
 
 #pragma once

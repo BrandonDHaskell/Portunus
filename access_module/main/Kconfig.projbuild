@@ -138,6 +138,16 @@ menu "Portunus Configuration"
                 in the reader field. Lower values are more responsive
                 but increase SPI bus traffic.
 
+        config PORTUNUS_CARD_REREAD_DELAY_MS
+            int "Card re-read delay after successful read (milliseconds)"
+            default 1000
+            range 200 5000
+            help
+                Extra delay after a successful card read to prevent 
+                the same card from being re-read while the user holds 
+                it against the reader. Applied on top of the normal 
+                poll interval.
+
         config PORTUNUS_EVENT_QUEUE_TIMEOUT_MS
             int "Event bus queue send/receive timeout (milliseconds)"
             default 100
