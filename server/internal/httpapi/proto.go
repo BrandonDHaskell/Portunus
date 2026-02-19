@@ -7,10 +7,10 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// maxProtoBody caps the request body size for protobuf payloads.
-// The largest ESP32 message (HeartbeatRequest) encodes to ~142 bytes,
-// so 4 KiB is generous.
-const maxProtoBody = 4096
+// maxRequestBody caps the request body size for both protobuf and JSON
+// payloads.  The largest ESP32 message (HeartbeatRequest) encodes to ~142
+// bytes in protobuf and ~250 bytes in JSON, so 4 KiB is generous.
+const maxRequestBody = 4096
 
 // isProtobuf returns true if the request's Content-Type indicates a
 // protobuf payload. The ESP32 sends "application/x-protobuf".
@@ -23,7 +23,7 @@ func isProtobuf(r *http.Request) bool {
 
 // readProto reads the request body and unmarshals it into msg.
 func readProto(r *http.Request, msg proto.Message) error {
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxProtoBody))
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBody))
 	if err != nil {
 		return err
 	}

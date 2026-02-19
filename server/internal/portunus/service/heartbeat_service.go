@@ -33,6 +33,7 @@ func (s *HeartbeatService) Record(ctx context.Context, req types.HeartbeatReques
 	if err != nil {
 		return types.HeartbeatResponse{}, err
 	}
+	_ = s.registry.NoteSeen(ctx, moduleID, known)
 
 	rec := store.HeartbeatRecord{
 		ReceivedAt: time.Now().UTC(),

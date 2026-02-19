@@ -1,0 +1,1 @@
+ALTER TABLE module_heartbeats ADD COLUMN free_heap_bytes INTEGER;

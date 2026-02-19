@@ -42,10 +42,12 @@ func main() {
 
 	deviceStore := sqlitestore.NewDeviceStore(dbConn, writer)
 	heartbeatStore := sqlitestore.NewHeartbeatStore(dbConn, writer)
+	accessEventStore := sqlitestore.NewAccessEventStore(dbConn, writer)
 
 	// Stores (Memory for dev testing with no DB)
 	// deviceStore := memory.NewDeviceStore(cfg.KnownModules)
 	// heartbeatStore := memory.New()
+	// accessEventStore := memory.NewAccessEventStore()
 
 	// Services
 	registry := service.NewDeviceRegistry(deviceStore)
@@ -66,7 +68,7 @@ func main() {
 	accessSvc := service.NewAccessService(registry, service.AccessPolicy{
 		AllowAll:       cfg.AllowAll,
 		AllowedCardIDs: allowed,
-	})
+	}, accessEventStore)
 
 	// HTTP
 	srv := httpapi.NewServer(httpapi.Dependencies{

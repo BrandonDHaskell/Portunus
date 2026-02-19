@@ -13,6 +13,8 @@ func heartbeatRequestFromProto(p *pb.HeartbeatRequest) types.HeartbeatRequest {
 		FirmwareVersion: p.GetFirmwareVersion(),
 		UptimeSeconds:   p.GetUptimeS(),
 		IP:              p.GetIp(),
+		FreeHeapBytes:   p.GetFreeHeapBytes(),
+		Sequence:        p.GetSequence(),
 	}
 
 	if p.DoorClosed != nil {
