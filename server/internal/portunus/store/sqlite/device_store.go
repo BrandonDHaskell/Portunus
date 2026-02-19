@@ -60,14 +60,8 @@ func (s *DeviceStore) MarkSeen(ctx context.Context, moduleID string, _ bool, t t
 	ms := t.UTC().UnixMilli()
 
 	return s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		// Ensure the module exists so FKs from heartbeats can work.
-		// Unknown modules start disabled/uncommissioned.
-		if _, err := tx.ExecContext(ctx, `
-INSERT OR IGNORE INTO modules(
-  module_id, enabled, created_at_ms, updated_at_ms
-) VALUES (?, 0, ?, ?);
-`, moduleID, ms, ms); err != nil {
-			return fmt.Errorf("MarkSeen insert module: %w", err)
+		if err := ensureModule(ctx, tx, moduleID, ms); err != nil {
+			return err
 		}
 
 		if _, err := tx.ExecContext(ctx, `

@@ -2,7 +2,7 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 5.5.1
+    version: 5.4.1
   nikas-belogolov/nanopb:
     component_hash: 6ab5c72064ab6a748ad72528f007f87c7a090a893eb22fa9af5b6f112259b8c9
     dependencies:

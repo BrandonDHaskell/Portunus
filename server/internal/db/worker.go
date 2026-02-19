@@ -36,8 +36,24 @@ func (w *Worker) Close() {
 
 func (w *Worker) Do(ctx context.Context, fn TxFn) error {
 	ch := make(chan error, 1)
-	w.jobs <- job{ctx: ctx, fn: fn, ch: ch}
-	return <-ch
+	j := job{ctx: ctx, fn: fn, ch: ch}
+
+	// Enqueue — bail out if the caller's context expires while the buffer is full.
+	select {
+	case w.jobs <- j:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	// Wait for result — bail out if the caller's context expires while the
+	// job is queued or executing.  The worker loop will still complete the
+	// transaction; the result lands in the buffered ch and is discarded.
+	select {
+	case err := <-ch:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (w *Worker) loop() {
