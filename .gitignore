@@ -48,6 +48,7 @@ build/
 # Go
 server/bin/
 server/coverage.out
+server/data/
 
 # SQLite DB
 data/access_module.tar.gz
