@@ -74,6 +74,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		}
 		req = heartbeatRequestFromProto(&pbReq)
 	} else {
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 		dec := json.NewDecoder(r.Body)
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&req); err != nil {
@@ -112,6 +113,7 @@ func (s *Server) handleAccessRequest(w http.ResponseWriter, r *http.Request) {
 		}
 		req = accessRequestFromProto(&pbReq)
 	} else {
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 		dec := json.NewDecoder(r.Body)
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&req); err != nil {
@@ -129,14 +131,6 @@ func (s *Server) handleAccessRequest(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, service.ErrInvalidCardID):
 			writeError(w, http.StatusBadRequest, "invalid_card_id", err.Error())
 			return
-		case errors.Is(err, service.ErrUnknownModule):
-			// Unknown module is blocked from access flow
-			if protoReq {
-				writeProto(w, http.StatusForbidden, accessResponseToProto(resp))
-			} else {
-				writeJSON(w, http.StatusForbidden, resp)
-			}
-			return
 		default:
 			s.logger.Printf("access_request error: %v", err)
 			writeError(w, http.StatusInternalServerError, "internal_error", "unexpected server error")
@@ -144,9 +138,14 @@ func (s *Server) handleAccessRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	status := http.StatusOK
+	if !resp.Known {
+		status = http.StatusForbidden
+	}
+
 	if protoReq {
-		writeProto(w, http.StatusOK, accessResponseToProto(resp))
+		writeProto(w, status, accessResponseToProto(resp))
 	} else {
-		writeJSON(w, http.StatusOK, resp)
+		writeJSON(w, status, resp)
 	}
 }

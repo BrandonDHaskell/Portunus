@@ -7,6 +7,8 @@ type HeartbeatRequest struct {
 	DoorClosed      *bool  `json:"door_closed,omitempty"`
 	RSSIDbm         *int   `json:"rssi_dbm,omitempty"`
 	IP              string `json:"ip,omitempty"`
+	FreeHeapBytes   uint32 `json:"free_heap_bytes,omitempty"`
+	Sequence        uint32 `json:"sequence,omitempty"`
 }
 
 type HeartbeatResponse struct {
