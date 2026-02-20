@@ -51,4 +51,4 @@ server/coverage.out
 server/data/
 
 # SQLite DB
-data/access_module.tar.gz
+access_module.tar.gz
