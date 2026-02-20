@@ -56,22 +56,27 @@ func (s *HeartbeatStore) UpsertHeartbeat(ctx context.Context, moduleID string, r
 		uptimeMs = int64(rec.Request.UptimeSeconds) * 1000
 	}
 
+	var seq any
+	if rec.Request.Sequence != 0 {
+		seq = rec.Request.Sequence
+	}
+
+	var freeHeap any
+	if rec.Request.FreeHeapBytes != 0 {
+		freeHeap = rec.Request.FreeHeapBytes
+	}
+
 	return s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		// Ensure module exists for FK constraints
-		if _, err := tx.ExecContext(ctx, `
-INSERT OR IGNORE INTO modules(
-  module_id, enabled, created_at_ms, updated_at_ms
-) VALUES (?, 0, ?, ?);
-`, moduleID, recvMs, recvMs); err != nil {
-			return fmt.Errorf("UpsertHeartbeat insert module: %w", err)
+		if err := ensureModule(ctx, tx, moduleID, recvMs); err != nil {
+			return err
 		}
 
 		// Insert heartbeat event (append-only)
 		if _, err := tx.ExecContext(ctx, `
 INSERT INTO module_heartbeats(
-  module_id, received_at_ms, uptime_ms, fw_version, wifi_rssi, ip
-) VALUES (?, ?, ?, ?, ?, ?);
-`, moduleID, recvMs, uptimeMs, fw, rssi, ip); err != nil {
+  module_id, received_at_ms, seq, uptime_ms, fw_version, wifi_rssi, ip, free_heap_bytes
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+`, moduleID, recvMs, seq, uptimeMs, fw, rssi, ip, freeHeap); err != nil {
 			return fmt.Errorf("UpsertHeartbeat insert heartbeat: %w", err)
 		}
 

@@ -50,4 +50,4 @@ server/bin/
 server/coverage.out
 
 # SQLite DB
-data/
+access_module.tar.gz
