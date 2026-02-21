@@ -50,5 +50,5 @@ server/bin/
 server/coverage.out
 server/data/
 
-# SQLite DB
+# Generic
 access_module.tar.gz
