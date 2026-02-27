@@ -1,135 +1,61 @@
 /**
- * @file main.cpp
- * @brief Portunus access module — application entry point.
+ *  main.cpp
+ *  Portunus access module — application entry point.
  *
- * Startup sequence:
- *   1. NVS flash initialisation (ESP-IDF standard API — no custom HAL for MVP)
- *   2. WiFi station connection (blocks until IP or timeout)
- *   3. Event bus creation and subscriber registration
- *   4. MFRC522 driver initialisation
- *   5. Heartbeat service start
- *   6. Server communication component start
- *   7. Card-polling task start
- *   8. Transition to OPERATIONAL state
+ * main.cpp is now a thin composition root.  It:
+ *   1. Initialises platform services (NVS, WiFi, event bus).
+ *   2. Constructs concrete module instances.
+ *   3. Injects modules into the System FSM.
+ *   4. Starts independent services (heartbeat, server comm).
+ *   5. Starts the FSM (which owns card polling, event processing,
+ *      unlock timing, door state monitoring, and feedback).
  *
- * All inter-component communication flows through the event bus. The
- * card-polling task reads cards via the mfrc522 driver and publishes
- * credential events; the heartbeat service publishes periodic health
- * events. Subscriber callbacks log both to the serial console.
+ * All inter-component communication flows through the event bus.
+ * The FSM is the top-level decision maker — main.cpp does not
+ * subscribe to events or manage system state directly.
  */
 
 #include "sdkconfig.h"
+
 #include "portunus_types.h"
 #include "error_codes.h"
 #include "event_types.h"
 #include "system_states.h"
-#include "credential_types.h"
 #include "timing_config.h"
 #include "event_bus.h"
+#include "system_fsm.h"
+
+/* Optional services (feature-gated) */
+#ifdef CONFIG_PORTUNUS_ENABLE_HEARTBEAT
 #include "heartbeat_service.h"
+#endif
+
+#ifdef CONFIG_PORTUNUS_ENABLE_WIFI
 #include "wifi_mgr.h"
 #include "network_config.h"
 #include "server_comm.h"
-#include "mfrc522.h"
+#endif
+
+/* Concrete module implementations */
+#ifdef CONFIG_PORTUNUS_ENABLE_MFRC522
+#include "reader_mfrc522.h"
+#endif
+#ifdef CONFIG_PORTUNUS_ENABLE_DOOR_STRIKE
+#include "access_point_gpio.h"
+#endif
+#ifdef CONFIG_PORTUNUS_ENABLE_LED
+#include "feedback_led.h"
+#endif
 
 #include "nvs_flash.h"
 #include "esp_log.h"
-#include "esp_timer.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#include <string.h>
 #include <inttypes.h>
 
 static const char *TAG = "portunus";
-
-static system_state_t s_system_state = SYSTEM_STATE_BOOT;
-
-/* ── Event bus subscriber callbacks ────────────────────────────────────────── */
-
-/**
- * @brief Log credential read events to the serial console.
- */
-static void on_credential_read(const portunus_event_t *event, void *ctx)
-{
-    (void)ctx;
-    const event_credential_read_t *cred = &event->payload.credential_read;
-
-    char uid_str[CREDENTIAL_UID_HEX_STR_LEN];
-    credential_uid_to_hex(&cred->credential, uid_str, sizeof(uid_str));
-
-    ESP_LOGI(TAG, "Card read — UID: %s (len=%d)", uid_str, cred->credential.uid_len);
-}
-
-/**
- * @brief Log heartbeat events to the serial console.
- */
-static void on_heartbeat(const portunus_event_t *event, void *ctx)
-{
-    (void)ctx;
-    const event_heartbeat_t *hb = &event->payload.heartbeat;
-
-    ESP_LOGD(TAG, "Heartbeat event received — seq=%" PRIu32 " uptime=%" PRIu32
-             "s heap=%" PRIu32, hb->sequence, hb->uptime_sec, hb->free_heap_bytes);
-}
-
-/**
- * @brief Log access decision events to the serial console.
- */
-static void on_access_decision(const portunus_event_t *event, void *ctx)
-{
-    (void)ctx;
-    const event_access_decision_t *ad = &event->payload.access_decision;
-
-    if (ad->granted) {
-        ESP_LOGI(TAG, "ACCESS GRANTED — card=%s reason=%s", ad->card_id, ad->reason);
-    } else {
-        ESP_LOGW(TAG, "ACCESS DENIED  — card=%s reason=%s known=%d",
-                 ad->card_id, ad->reason, ad->known);
-    }
-}
-
-/* ── Card-polling task ─────────────────────────────────────────────────────── */
-
-#ifdef CONFIG_PORTUNUS_ENABLE_MFRC522
-
-static void card_poll_task(void *arg)
-{
-    (void)arg;
-    TickType_t poll_interval = pdMS_TO_TICKS(MFRC522_POLL_INTERVAL_MS);
-
-    ESP_LOGI(TAG, "Card polling task started (interval=%d ms)", MFRC522_POLL_INTERVAL_MS);
-
-    for (;;) {
-        credential_t cred;
-        portunus_err_t err = mfrc522_read_card(&cred);
-
-        if (err == PORTUNUS_OK) {
-            /* Build and publish credential event */
-            portunus_event_t event;
-            memset(&event, 0, sizeof(event));
-            event.id = EVENT_CREDENTIAL_READ;
-            event.payload.credential_read.credential  = cred;
-            event.payload.credential_read.timestamp_ms = esp_timer_get_time() / 1000;
-
-            event_bus_publish(&event);
-
-            /* Halt the card so it isn't re-read on the next poll cycle */
-            mfrc522_halt_card();
-
-            /* Brief extra delay after a successful read to avoid rapid re-reads
-               if the user holds the card against the reader.  Skip the normal
-               poll interval so the total pause is just CARD_REREAD_DELAY_MS. */
-            vTaskDelay(pdMS_TO_TICKS(CARD_REREAD_DELAY_MS));
-            continue;
-        }
-        /* PORTUNUS_ERR_NO_CARD is expected (no card present) — silently continue */
-
-        vTaskDelay(poll_interval);
-    }
-}
-
-#endif /* CONFIG_PORTUNUS_ENABLE_MFRC522 */
 
 /* ── Initialisation helpers ────────────────────────────────────────────────── */
 
@@ -155,7 +81,7 @@ static portunus_err_t init_nvs(void)
     return PORTUNUS_OK;
 }
 
-/* ── Application entry point ───────────────────────────────────────────────── */
+/* ── Application entry point ──────────────────────────────────────────────── */
 
 extern "C" void app_main(void)
 {
@@ -163,34 +89,23 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "  Portunus Access Module v%s", PORTUNUS_FW_VERSION);
     ESP_LOGI(TAG, "========================================");
 
-    s_system_state = SYSTEM_STATE_INITIALIZING;
-
     /* ── 1. NVS flash ────────────────────────────────────────────────────── */
     if (init_nvs() != PORTUNUS_OK) {
-        s_system_state = SYSTEM_STATE_ERROR;
         ESP_LOGE(TAG, "System halted: NVS init failure");
         return;
     }
 
-    /* ── 2. WiFi connection ─────────────────────────────────────────────── */
+    /* ── 2. WiFi connection ──────────────────────────────────────────────── */
 #ifdef CONFIG_PORTUNUS_ENABLE_WIFI
-    s_system_state = SYSTEM_STATE_CONNECTING;
-
     if (wifi_mgr_init() != PORTUNUS_OK) {
-        s_system_state = SYSTEM_STATE_ERROR;
         ESP_LOGE(TAG, "System halted: WiFi init failure");
         return;
     }
 
     portunus_err_t wifi_err = wifi_mgr_start();
     if (wifi_err == PORTUNUS_ERR_TIMEOUT) {
-        /* Non-fatal: the module continues booting and the WiFi manager
-           will keep reconnecting in the background.  Network-dependent
-           services (server_comm) check wifi_mgr_is_connected() before
-           making calls. */
         ESP_LOGW(TAG, "WiFi not connected yet — continuing startup");
     } else if (wifi_err != PORTUNUS_OK) {
-        s_system_state = SYSTEM_STATE_ERROR;
         ESP_LOGE(TAG, "System halted: WiFi start failure");
         return;
     }
@@ -198,45 +113,58 @@ extern "C" void app_main(void)
     ESP_LOGW(TAG, "WiFi disabled by configuration — running offline");
 #endif
 
-    s_system_state = SYSTEM_STATE_INITIALIZING;
-
     /* ── 3. Event bus ────────────────────────────────────────────────────── */
     if (event_bus_init() != PORTUNUS_OK) {
-        s_system_state = SYSTEM_STATE_ERROR;
         ESP_LOGE(TAG, "System halted: event bus init failure");
         return;
     }
 
-    /* Register event subscribers for serial console logging */
-    event_bus_subscribe(EVENT_CREDENTIAL_READ, on_credential_read, NULL);
-    event_bus_subscribe(EVENT_HEARTBEAT, on_heartbeat, NULL);
-    event_bus_subscribe(EVENT_ACCESS_GRANTED, on_access_decision, NULL);
-    event_bus_subscribe(EVENT_ACCESS_DENIED, on_access_decision, NULL);
+    /* ── 4. Construct module instances ───────────────────────────────────── */
 
-    /* ── 4. MFRC522 RFID reader ─────────────────────────────────────────── */
+    /*
+     * Each module has static storage duration so it outlives
+     * app_main's stack frame.  The FSM and its FreeRTOS tasks hold
+     * pointers to these objects, so they must remain valid for the
+     * lifetime of the program — static guarantees that.
+     *
+     * Modules whose hardware is disabled by Kconfig are not
+     * constructed; a nullptr is passed to the FSM instead.
+     */
+
 #ifdef CONFIG_PORTUNUS_ENABLE_MFRC522
-    if (mfrc522_init() != PORTUNUS_OK) {
-        ESP_LOGE(TAG, "MFRC522 init failed — card reading disabled");
-        /* Non-fatal for MVP: continue without the reader so other subsystems
-           can still be tested. */
-    } else {
-        BaseType_t ret = xTaskCreate(
-            card_poll_task,
-            "card_poll",
-            CONFIG_PORTUNUS_MFRC522_TASK_STACK_SIZE,
-            NULL,
-            4,  /* Priority between heartbeat (3) and event dispatcher (5) */
-            NULL
-        );
-        if (ret != pdPASS) {
-            ESP_LOGE(TAG, "Failed to create card polling task");
-        }
-    }
+    static ReaderMfrc522 reader;
+    ICredentialReader *reader_ptr = &reader;
 #else
     ESP_LOGW(TAG, "MFRC522 disabled by configuration");
+    ICredentialReader *reader_ptr = nullptr;
 #endif
 
-    /* ── 5. Heartbeat service ────────────────────────────────────────────── */
+#ifdef CONFIG_PORTUNUS_ENABLE_DOOR_STRIKE
+    static AccessPointGpio access_point;
+    IAccessPoint *access_ptr = &access_point;
+#else
+    ESP_LOGW(TAG, "Door strike disabled by configuration");
+    IAccessPoint *access_ptr = nullptr;
+#endif
+
+#ifdef CONFIG_PORTUNUS_ENABLE_LED
+    static FeedbackLed feedback;
+    IFeedback *feedback_ptr = &feedback;
+#else
+    ESP_LOGW(TAG, "LED disabled by configuration");
+    IFeedback *feedback_ptr = nullptr;
+#endif
+
+    /* ── 5. Construct and initialise FSM ─────────────────────────────────── */
+    static SystemFSM fsm(reader_ptr, access_ptr, feedback_ptr);
+
+    if (fsm.init() != PORTUNUS_OK) {
+        ESP_LOGE(TAG, "System halted: FSM init failure");
+        return;
+    }
+
+    /* ── 6. Start independent services ───────────────────────────────────── */
+
 #ifdef CONFIG_PORTUNUS_ENABLE_HEARTBEAT
     if (heartbeat_service_start() != PORTUNUS_OK) {
         ESP_LOGE(TAG, "Heartbeat service start failed — continuing without heartbeat");
@@ -245,24 +173,20 @@ extern "C" void app_main(void)
     ESP_LOGW(TAG, "Heartbeat service disabled by configuration");
 #endif
 
-    /* ── 6. Server communication ─────────────────────────────────────────── */
 #ifdef CONFIG_PORTUNUS_ENABLE_WIFI
     if (server_comm_init() != PORTUNUS_OK) {
         ESP_LOGE(TAG, "Server comm init failed — running in offline mode");
     }
 #endif
 
-    /* ── 7. Startup complete ─────────────────────────────────────────────── */
-    s_system_state = SYSTEM_STATE_OPERATIONAL;
+    /* ── 7. Start FSM ────────────────────────────────────────────────────── */
+    if (fsm.start() != PORTUNUS_OK) {
+        ESP_LOGE(TAG, "System halted: FSM start failure");
+        return;
+    }
 
-    /* Publish boot-complete event */
-    portunus_event_t boot_event;
-    memset(&boot_event, 0, sizeof(boot_event));
-    boot_event.id = EVENT_SYSTEM_BOOT_COMPLETE;
-    event_bus_publish(&boot_event);
-
-    ESP_LOGI(TAG, "System operational — entering idle loop");
+    ESP_LOGI(TAG, "System operational — FSM running");
     ESP_LOGI(TAG, "Free heap: %" PRIu32 " bytes", esp_get_free_heap_size());
 
-    /* app_main returns; FreeRTOS scheduler continues running the tasks. */
+    /* app_main returns; FreeRTOS scheduler continues running tasks. */
 }
