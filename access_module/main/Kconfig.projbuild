@@ -15,6 +15,28 @@ menu "Portunus Configuration"
             help
                 Enable the WiFi station manager. When disabled the module
                 runs in offline mode (events are logged locally only).
+
+        config PORTUNUS_ENABLE_DOOR_STRIKE
+            bool "Enable door strike output"
+            default y
+            help
+                Enable the door strike GPIO driver. Disable for bench
+                testing without strike hardware connected.
+
+        config PORTUNUS_ENABLE_REED_SWITCH
+            bool "Enable reed switch input"
+            default y
+            help
+                Enable the reed switch GPIO driver for door state
+                monitoring. Disable for bench testing without a reed
+                switch connected.
+
+        config PORTUNUS_ENABLE_LED
+            bool "Enable status LED"
+            default y
+            help
+                Enable the status LED for visual feedback. Disable for
+                headless or bench-test configurations.
     endmenu
 
     menu "Network Configuration"
@@ -118,6 +140,81 @@ menu "Portunus Configuration"
             help
                 GPIO pin connected to the MFRC522 RST line.
                 Set to -1 to leave RST unconnected (not recommended).
+    endmenu
+
+    menu "Door Hardware Pin Assignments"
+        config PORTUNUS_DOOR_STRIKE_PIN
+            int "Door strike GPIO pin"
+            default 5
+            depends on PORTUNUS_ENABLE_DOOR_STRIKE
+            help
+                GPIO pin connected to the door strike relay or MOSFET gate.
+
+        config PORTUNUS_DOOR_STRIKE_ACTIVE_LOW
+            bool "Door strike active-low logic"
+            default n
+            depends on PORTUNUS_ENABLE_DOOR_STRIKE
+            help
+                Enable if the strike relay/MOSFET is active-low (i.e.,
+                pulling the GPIO LOW energizes the strike). Default is
+                active-high (GPIO HIGH = strike energized = door unlocked).
+
+        config PORTUNUS_REED_SWITCH_PIN
+            int "Reed switch GPIO pin"
+            default 6
+            depends on PORTUNUS_ENABLE_REED_SWITCH
+            help
+                GPIO pin connected to the reed switch. An internal pull-up
+                is enabled; the switch should short the pin to GND when
+                the door is closed (normally-open configuration).
+
+        config PORTUNUS_REED_SWITCH_NC
+            bool "Reed switch is normally-closed"
+            default n
+            depends on PORTUNUS_ENABLE_REED_SWITCH
+            help
+                Enable if the reed switch is normally-closed (circuit
+                closed when door is closed). Default is normally-open
+                (circuit open when door is open, closed when magnet
+                aligns with sensor = door shut).
+
+        config PORTUNUS_LED_PIN
+            int "Status LED GPIO pin"
+            default 7
+            depends on PORTUNUS_ENABLE_LED
+            help
+                GPIO pin connected to the status LED (active-high).
+    endmenu
+
+    menu "Door Configuration"
+        config PORTUNUS_UNLOCK_HOLD_MS
+            int "Default unlock hold duration (milliseconds)"
+            default 5000
+            range 1000 30000
+            help
+                How long the door strike stays energized after an
+                access-granted decision. The FSM re-locks when this
+                timer expires OR when the door opens and closes,
+                whichever comes first.
+
+        config PORTUNUS_REED_SWITCH_DEBOUNCE_MS
+            int "Reed switch debounce time (milliseconds)"
+            default 50
+            range 20 200
+            depends on PORTUNUS_ENABLE_REED_SWITCH
+            help
+                Minimum time the reed switch signal must be stable
+                before a state change is accepted. Prevents spurious
+                transitions from vibration or magnetic interference.
+
+        config PORTUNUS_FSM_POLL_INTERVAL_MS
+            int "FSM reed switch poll interval (milliseconds)"
+            default 100
+            range 50 500
+            help
+                How frequently the FSM polls the reed switch and
+                checks for unlock timer expiry. Also serves as the
+                event wait timeout in the FSM main loop.
     endmenu
 
     menu "Timing Configuration"
