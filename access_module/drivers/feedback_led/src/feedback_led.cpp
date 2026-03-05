@@ -14,6 +14,7 @@
 #include "led_hal.h"       /* internal HAL */
 #include "error_codes.h"
 
+#include <inttypes.h>
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -54,7 +55,7 @@ portunus_err_t FeedbackLed::init()
 
     portunus_err_t err = led_init();
     if (err != PORTUNUS_OK) {
-        ESP_LOGE(TAG, "LED HAL init failed: 0x%04x", err);
+        ESP_LOGE(TAG, "LED HAL init failed: 0x%04x" PRIx32, err);
         return err;
     }
 

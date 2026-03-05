@@ -17,12 +17,15 @@ extern "C" {
 #endif
 
 /**
- * @brief Standard result type used across all Portunus components.
+ * @brief Platform-independent error type for Portunus components.
  *
- * Mirrors ESP-IDF's esp_err_t convention but scoped to Portunus-specific
- * error codes defined in error_codes.h.
+ * Uses plain int — the natural type for an error code that is only ever
+ * compared, returned, and logged.  Fixed-width types (int32_t, etc.) are
+ * intentionally avoided because error codes carry no wire-format or
+ * register-layout contract, and plain int interoperates cleanly with
+ * printf-family format specifiers on every target.
  */
-typedef int32_t portunus_err_t;
+typedef int portunus_err_t;
 
 /** @brief Success — no error. */
 #define PORTUNUS_OK          ((portunus_err_t)0)
