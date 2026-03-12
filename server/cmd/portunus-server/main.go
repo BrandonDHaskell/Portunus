@@ -76,13 +76,22 @@ func main() {
 		Addr:             cfg.HTTPAddr,
 		HeartbeatService: heartbeatSvc,
 		AccessService:    accessSvc,
+		HMACSecret:       cfg.HMACSecret,
 	})
 
 	go func() {
-		logger.Printf("listening on %s", cfg.HTTPAddr)
-		if err := srv.Start(); err != nil {
-			logger.Printf("server error: %v", err)
-			stop()
+		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+			logger.Printf("listening (TLS) on %s", cfg.HTTPAddr)
+			if err := srv.StartTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil {
+				logger.Printf("server error: %v", err)
+				stop()
+			}
+		} else {
+			logger.Printf("listening (plain HTTP — not recommended for production) on %s", cfg.HTTPAddr)
+			if err := srv.Start(); err != nil {
+				logger.Printf("server error: %v", err)
+				stop()
+			}
 		}
 	}()
 

@@ -39,6 +39,61 @@ menu "Portunus Configuration"
                 headless or bench-test configurations.
     endmenu
 
+    menu "Security Configuration"
+        depends on PORTUNUS_ENABLE_WIFI
+
+        config PORTUNUS_USE_TLS
+            bool "Enable TLS (HTTPS) for server communication"
+            default y
+            help
+                Encrypt all communication with the Portunus server using TLS.
+                When enabled, URLs use https:// and the ESP-IDF mbedTLS stack
+                validates the server certificate against the Mozilla CA bundle
+                embedded in the firmware.  Disable only for isolated lab
+                networks where a CA-signed cert is not available.
+
+        config PORTUNUS_TLS_SERVER_PORT
+            int "HTTPS server port"
+            default 8443
+            range 1 65535
+            depends on PORTUNUS_USE_TLS
+            help
+                TCP port the Portunus server listens on for TLS connections.
+                The plain HTTP port (PORTUNUS_SERVER_PORT) is used when TLS
+                is disabled.
+
+        config PORTUNUS_TLS_SKIP_VERIFY
+            bool "Skip TLS certificate verification (INSECURE – dev only)"
+            default n
+            depends on PORTUNUS_USE_TLS
+            help
+                Bypass server certificate validation.  Allows self-signed or
+                expired certificates but removes all transport security
+                guarantees.  NEVER enable in production.
+
+        config PORTUNUS_HMAC_ENABLED
+            bool "Enable HMAC-SHA256 request signing"
+            default y
+            depends on PORTUNUS_ENABLE_WIFI
+            help
+                Sign every outgoing request body with a pre-shared HMAC-SHA256
+                key.  The server verifies the X-Portunus-Sig header before
+                processing any message, ensuring only enrolled modules can
+                submit requests.
+
+        config PORTUNUS_HMAC_SECRET
+            string "HMAC shared secret (pre-shared key)"
+            default ""
+            depends on PORTUNUS_HMAC_ENABLED
+            help
+                The shared secret used to compute HMAC-SHA256 signatures.
+                Must match the PORTUNUS_HMAC_SECRET environment variable on
+                the server.  Generate with: openssl rand -hex 32
+
+                WARNING: stored in flash.  Protect your build artifacts.
+
+    endmenu
+
     menu "Network Configuration"
         depends on PORTUNUS_ENABLE_WIFI
         

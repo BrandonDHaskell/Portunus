@@ -17,6 +17,7 @@
 #include "event_types.h"
 #include "error_codes.h"
 #include "network_config.h"
+#include "security_config.h"
 #include "wifi_mgr.h"
 #include "portunus_types.h"
 #include "credential_types.h"
@@ -25,6 +26,14 @@
 #include "portunus/v1/portunus.pb.h"
 #include <pb_encode.h>
 #include <pb_decode.h>
+
+/* TLS / HMAC */
+#if PORTUNUS_USE_TLS
+  #include "esp_crt_bundle.h"
+#endif
+#if PORTUNUS_HMAC_ENABLED
+  #include "mbedtls/md.h"
+#endif
 
 /* ESP-IDF */
 #include "esp_http_client.h"
@@ -57,6 +66,46 @@ static bool           s_initialized  = false;
 /* Reusable URL buffers built once at init */
 static char s_heartbeat_url[URL_MAX_LEN];
 static char s_access_url[URL_MAX_LEN];
+
+/* ── HMAC helper ───────────────────────────────────────────────────────────── */
+
+#if PORTUNUS_HMAC_ENABLED
+/**
+ * @brief Compute HMAC-SHA256(PORTUNUS_HMAC_SECRET, data) and write the
+ *        hex-encoded result (64 chars + NUL) into @p out_hex.
+ *
+ * @return true on success, false on mbedTLS error.
+ */
+static bool compute_hmac_hex(const uint8_t *data, size_t data_len,
+                              char out_hex[PORTUNUS_HMAC_HEX_LEN])
+{
+    static const char *secret     = PORTUNUS_HMAC_SECRET;
+    static const size_t secret_len = sizeof(PORTUNUS_HMAC_SECRET) - 1; /* strip NUL */
+
+    uint8_t raw[32]; /* SHA-256 output is 32 bytes */
+
+    const mbedtls_md_info_t *info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+    if (!info) { return false; }
+
+    int rc = mbedtls_md_hmac(info,
+                              (const unsigned char *)secret, secret_len,
+                              data, data_len,
+                              raw);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "mbedtls_md_hmac failed: -0x%04x", (unsigned)(-rc));
+        return false;
+    }
+
+    /* Hex-encode into out_hex */
+    static const char hex_chars[] = "0123456789abcdef";
+    for (int i = 0; i < 32; ++i) {
+        out_hex[i * 2]     = hex_chars[(raw[i] >> 4) & 0x0F];
+        out_hex[i * 2 + 1] = hex_chars[ raw[i]       & 0x0F];
+    }
+    out_hex[64] = '\0';
+    return true;
+}
+#endif /* PORTUNUS_HMAC_ENABLED */
 
 /* ── Forward declarations ──────────────────────────────────────────────────── */
 static void comm_task(void *arg);
@@ -99,7 +148,13 @@ static bool get_rssi(int32_t *out)
  * @brief POST a protobuf-encoded buffer to url, read the response into
  *        resp_buf.
  *
- * @param url        Full URL (e.g. "http://192.168.1.100:8080/v1/heartbeat")
+ * Security hardening applied here:
+ *   • Uses https:// when PORTUNUS_USE_TLS is set (Kconfig).
+ *   • Validates the server certificate via the ESP-IDF Mozilla CA bundle
+ *     unless PORTUNUS_TLS_SKIP_VERIFY is set (dev only).
+ *   • Adds X-Portunus-Sig HMAC-SHA256 header when PORTUNUS_HMAC_ENABLED.
+ *
+ * @param url        Full URL (e.g. "https://192.168.1.100:8443/v1/heartbeat")
  * @param req_buf    Encoded protobuf request body
  * @param req_len    Length of req_buf
  * @param resp_buf   Buffer to receive the response body
@@ -115,9 +170,24 @@ static portunus_err_t http_post_proto(const char *url,
                                       int *resp_len, int *http_status)
 {
     esp_http_client_config_t cfg = {};
-    cfg.url = url;
-    cfg.timeout_ms = PORTUNUS_SERVER_REQUEST_TIMEOUT_MS;
+    cfg.url         = url;
+    cfg.timeout_ms  = PORTUNUS_SERVER_REQUEST_TIMEOUT_MS;
     cfg.disable_auto_redirect = true;
+
+#if PORTUNUS_USE_TLS
+    /* Attach the ESP-IDF Mozilla CA bundle so standard server certificates
+       (Let's Encrypt, DigiCert, etc.) are validated without embedding a
+       per-server cert in the firmware. */
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
+
+  #if PORTUNUS_TLS_SKIP_VERIFY
+    /* Dev override: accept any certificate (INSECURE). */
+    cfg.skip_cert_common_name_check = true;
+    cfg.crt_bundle_attach           = NULL;
+    cfg.transport_type              = HTTP_TRANSPORT_OVER_SSL;
+    ESP_LOGW(TAG, "TLS cert verification DISABLED (dev mode)");
+  #endif
+#endif /* PORTUNUS_USE_TLS */
 
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (client == NULL) {
@@ -127,6 +197,19 @@ static portunus_err_t http_post_proto(const char *url,
 
     esp_http_client_set_method(client, HTTP_METHOD_POST);
     esp_http_client_set_header(client, "Content-Type", "application/x-protobuf");
+
+#if PORTUNUS_HMAC_ENABLED
+    /* Compute HMAC-SHA256 over the request body and attach it as a header.
+       The server verifies this before processing the message. */
+    char sig_hex[PORTUNUS_HMAC_HEX_LEN];
+    if (compute_hmac_hex(req_buf, req_len, sig_hex)) {
+        esp_http_client_set_header(client, PORTUNUS_HMAC_HEADER_NAME, sig_hex);
+    } else {
+        ESP_LOGE(TAG, "HMAC computation failed — aborting request");
+        esp_http_client_cleanup(client);
+        return PORTUNUS_ERR_HTTP_CONNECT;
+    }
+#endif /* PORTUNUS_HMAC_ENABLED */
 
     esp_err_t err = esp_http_client_open(client, (int)req_len);
     if (err != ESP_OK) {
@@ -397,13 +480,22 @@ portunus_err_t server_comm_init(void)
         return PORTUNUS_ERR_ALREADY_INIT;
     }
 
-    /* Build URLs once */
+    /* Build URLs once — scheme and port are driven by TLS Kconfig. */
+#if PORTUNUS_USE_TLS
+    snprintf(s_heartbeat_url, sizeof(s_heartbeat_url),
+             "https://%s:%d/v1/heartbeat",
+             PORTUNUS_SERVER_HOST, PORTUNUS_TLS_SERVER_PORT);
+    snprintf(s_access_url, sizeof(s_access_url),
+             "https://%s:%d/v1/access_request",
+             PORTUNUS_SERVER_HOST, PORTUNUS_TLS_SERVER_PORT);
+#else
     snprintf(s_heartbeat_url, sizeof(s_heartbeat_url),
              "http://%s:%d/v1/heartbeat",
              PORTUNUS_SERVER_HOST, PORTUNUS_SERVER_PORT);
     snprintf(s_access_url, sizeof(s_access_url),
              "http://%s:%d/v1/access_request",
              PORTUNUS_SERVER_HOST, PORTUNUS_SERVER_PORT);
+#endif
 
     ESP_LOGI(TAG, "Heartbeat URL: %s", s_heartbeat_url);
     ESP_LOGI(TAG, "Access URL:    %s", s_access_url);
