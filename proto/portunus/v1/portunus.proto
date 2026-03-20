@@ -7,9 +7,15 @@
 //   Server (Go):  protoc  + protoc-gen-go
 //   ESP32  (C):   protoc  + nanopb generator  (see ../nanopb/portunus.options)
 //
-// The access module sends Nanopb-encoded messages over HTTP/1.1 with
-// Content-Type: application/x-protobuf.  No gRPC service block is defined
-// because the ESP32 does not use HTTP/2.
+// The access module sends Nanopb-encoded messages over HTTPS/1.1 with
+// Content-Type: application/x-protobuf and an HMAC-SHA256 request signature.
+// The ESP32 does not support HTTP/2, so it cannot speak native gRPC.
+//
+// The PortunusService block below is the canonical RPC contract and is
+// intended for use by Go-based tooling, admin clients, or future
+// gateway components that *can* speak gRPC over HTTP/2.  The wire
+// encoding (request/response message types) is identical whether the
+// transport is gRPC or the ESP32 HTTPS path, keeping both in sync.
 //
 // ─── Compatibility rules ───────────────────────────────────────────────────
 //   • Only APPEND new fields (never reorder or reuse a field number).
@@ -123,4 +129,26 @@ message AccessResponse {
 
   // Server wall-clock time (RFC 3339 with nanoseconds).
   string server_time = 6;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Service definition (gRPC — Go tooling / admin clients only)
+// ──────────────────────────────────────────────────────────────────────────
+
+// PortunusService is the canonical RPC interface.
+//
+// ESP32 access modules cannot use this directly (no HTTP/2 support).
+// They send the same request/response messages over HTTPS/1.1 with
+// an HMAC-SHA256 signature header instead.
+//
+// Intended consumers:
+//   - Server-side admin CLIs
+//   - Test harnesses
+//   - Future gateway / proxy components
+service PortunusService {
+  // SendHeartbeat records a module health telemetry tick.
+  rpc SendHeartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // RequestAccess evaluates a card-read event and returns an access decision.
+  rpc RequestAccess(AccessRequest) returns (AccessResponse);
 }

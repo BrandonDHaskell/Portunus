@@ -20,6 +20,20 @@ type Config struct {
 	// Heartbeat retention
 	HeartbeatRetentionDays int // 0 = keep forever
 	PruneIntervalHours     int // how often the pruner runs (default 6)
+
+	// TLS
+	// When TLSCertFile and TLSKeyFile are both set, the server starts in
+	// HTTPS mode using ListenAndServeTLS.  Leave both empty to use plain
+	// HTTP (development only).
+	TLSCertFile string
+	TLSKeyFile  string
+
+	// HMAC request authentication
+	// When non-empty, every inbound POST must include an X-Portunus-Sig
+	// header containing HMAC-SHA256(HMACSecret, request_body).  Requests
+	// with missing or invalid signatures are rejected with 401.
+	// Set to the same value as CONFIG_PORTUNUS_HMAC_SECRET in the firmware.
+	HMACSecret string
 }
 
 func FromEnv() Config {
@@ -42,6 +56,10 @@ func FromEnv() Config {
 	retentionDays := getenvInt("PORTUNUS_HEARTBEAT_RETENTION_DAYS", 30)
 	pruneInterval := getenvInt("PORTUNUS_PRUNE_INTERVAL_HOURS", 6)
 
+	tlsCert := strings.TrimSpace(os.Getenv("PORTUNUS_TLS_CERT_FILE"))
+	tlsKey := strings.TrimSpace(os.Getenv("PORTUNUS_TLS_KEY_FILE"))
+	hmacSecret := os.Getenv("PORTUNUS_HMAC_SECRET")
+
 	return Config{
 		HTTPAddr: addr,
 		Env:      env,
@@ -53,6 +71,10 @@ func FromEnv() Config {
 
 		HeartbeatRetentionDays: retentionDays,
 		PruneIntervalHours:     pruneInterval,
+
+		TLSCertFile: tlsCert,
+		TLSKeyFile:  tlsKey,
+		HMACSecret:  hmacSecret,
 	}
 }
 

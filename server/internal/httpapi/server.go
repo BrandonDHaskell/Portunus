@@ -18,6 +18,9 @@ type Dependencies struct {
 	Addr             string
 	HeartbeatService *service.HeartbeatService
 	AccessService    *service.AccessService
+	// HMACSecret is the pre-shared key for X-Portunus-Sig verification.
+	// Leave empty to disable HMAC enforcement (not recommended for production).
+	HMACSecret string
 }
 
 type Server struct {
@@ -41,7 +44,15 @@ func NewServer(d Dependencies) *Server {
 	mux.HandleFunc("POST /v1/heartbeat", s.handleHeartbeat)
 	mux.HandleFunc("POST /v1/access_request", s.handleAccessRequest)
 
-	handler := loggingMiddleware(d.Logger, mux)
+	// Build middleware chain: logging → HMAC auth → mux
+	var handler http.Handler = mux
+	if d.HMACSecret != "" {
+		handler = hmacAuthMiddleware(d.Logger, d.HMACSecret, handler)
+		d.Logger.Printf("HMAC request signing enforcement: ENABLED")
+	} else {
+		d.Logger.Printf("HMAC request signing enforcement: DISABLED (set PORTUNUS_HMAC_SECRET to enable)")
+	}
+	handler = loggingMiddleware(d.Logger, handler)
 
 	s.httpServer = &http.Server{
 		Addr:              d.Addr,
@@ -54,8 +65,15 @@ func NewServer(d Dependencies) *Server {
 
 func (s *Server) Handler() http.Handler { return s.httpServer.Handler }
 
+// Start starts the server in plain HTTP mode.
 func (s *Server) Start() error {
 	return s.httpServer.ListenAndServe()
+}
+
+// StartTLS starts the server with TLS using the provided certificate and key files.
+// certFile and keyFile must be PEM-encoded.
+func (s *Server) StartTLS(certFile, keyFile string) error {
+	return s.httpServer.ListenAndServeTLS(certFile, keyFile)
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
