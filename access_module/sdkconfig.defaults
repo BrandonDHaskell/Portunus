@@ -44,6 +44,30 @@ CONFIG_PORTUNUS_SERVER_HOST="192.168.1.100"
 CONFIG_PORTUNUS_SERVER_PORT=8080
 CONFIG_PORTUNUS_SERVER_REQUEST_TIMEOUT_MS=5000
 
+# ── mbedTLS / TLS ─────────────────────────────────────────────────────────
+
+# Enable the mbedTLS stack (required for HTTPS and HMAC-SHA256).
+CONFIG_MBEDTLS_TLS_CLIENT=y
+
+# Enable the Mozilla CA certificate bundle so esp_crt_bundle_attach() is
+# compiled in and server certificates can be validated without embedding a
+# per-server cert in the firmware.
+#
+# esp_crt_bundle.h is provided by the "mbedtls" IDF component
+# (components/mbedtls/esp_crt_bundle/include/esp_crt_bundle.h).
+# Removing this line causes a linker error: undefined reference to
+# `esp_crt_bundle_attach`.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+
+# Enable SHA-256 (required for HMAC-SHA256 signing via mbedtls/md.h).
+CONFIG_MBEDTLS_SHA256_C=y
+
+# ── esp_http_client / esp_tls ─────────────────────────────────────────────
+
+# Keep HTTPS support compiled into esp_http_client.
+CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=y
+
 # These values are applied on top of ESP-IDF defaults whenever a fresh
 # sdkconfig is generated (idf.py reconfigure / first build).  They ensure
 # the security-critical Kconfig symbols are always present and correctly
