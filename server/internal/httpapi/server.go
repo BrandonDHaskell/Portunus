@@ -18,9 +18,13 @@ type Dependencies struct {
 	Addr             string
 	HeartbeatService *service.HeartbeatService
 	AccessService    *service.AccessService
+	AdminService     *service.AdminService
 	// HMACSecret is the pre-shared key for X-Portunus-Sig verification.
 	// Leave empty to disable HMAC enforcement (not recommended for production).
 	HMACSecret string
+	// AdminAPIKey protects /admin/v1/* routes with Bearer token auth.
+	// Leave empty to disable admin auth (not recommended for production).
+	AdminAPIKey string
 }
 
 type Server struct {
@@ -29,6 +33,7 @@ type Server struct {
 	mux              *http.ServeMux
 	heartbeatService *service.HeartbeatService
 	accessService    *service.AccessService
+	adminService     *service.AdminService
 }
 
 func NewServer(d Dependencies) *Server {
@@ -39,13 +44,46 @@ func NewServer(d Dependencies) *Server {
 		mux:              mux,
 		heartbeatService: d.HeartbeatService,
 		accessService:    d.AccessService,
+		adminService:     d.AdminService,
 	}
 
+	// ── Device endpoints (ESP32 modules) ────────────────────────────────
 	mux.HandleFunc("POST /v1/heartbeat", s.handleHeartbeat)
 	mux.HandleFunc("POST /v1/access_request", s.handleAccessRequest)
 
-	// Build middleware chain: logging → HMAC auth → mux
+	// ── Admin endpoints ─────────────────────────────────────────────────
+	if d.AdminService != nil {
+		// Modules
+		mux.HandleFunc("GET /admin/v1/modules", s.handleAdminListModules)
+		mux.HandleFunc("GET /admin/v1/modules/{module_id}", s.handleAdminGetModule)
+		mux.HandleFunc("POST /admin/v1/modules", s.handleAdminRegisterModule)
+		mux.HandleFunc("POST /admin/v1/modules/{module_id}/revoke", s.handleAdminRevokeModule)
+		mux.HandleFunc("DELETE /admin/v1/modules/{module_id}", s.handleAdminDeleteModule)
+
+		// Cards
+		mux.HandleFunc("GET /admin/v1/cards", s.handleAdminListCards)
+		mux.HandleFunc("POST /admin/v1/cards", s.handleAdminRegisterCard)
+		mux.HandleFunc("PATCH /admin/v1/cards/{card_hash}", s.handleAdminUpdateCardStatus)
+		mux.HandleFunc("DELETE /admin/v1/cards/{card_hash}", s.handleAdminDeleteCard)
+
+		// Doors
+		mux.HandleFunc("GET /admin/v1/doors", s.handleAdminListDoors)
+		mux.HandleFunc("POST /admin/v1/doors", s.handleAdminRegisterDoor)
+		mux.HandleFunc("DELETE /admin/v1/doors/{door_id}", s.handleAdminDeleteDoor)
+
+		d.Logger.Printf("admin API: ENABLED (%d endpoints registered)", 12)
+	}
+
+	// Build middleware chain: logging → admin auth → HMAC auth → mux
 	var handler http.Handler = mux
+
+	if d.AdminAPIKey != "" {
+		handler = adminAuthMiddleware(d.AdminAPIKey, handler)
+		d.Logger.Printf("admin API key auth: ENABLED")
+	} else if d.AdminService != nil {
+		d.Logger.Printf("admin API key auth: DISABLED (set PORTUNUS_ADMIN_API_KEY to enable — NOT RECOMMENDED)")
+	}
+
 	if d.HMACSecret != "" {
 		handler = hmacAuthMiddleware(d.Logger, d.HMACSecret, handler)
 		d.Logger.Printf("HMAC request signing enforcement: ENABLED")

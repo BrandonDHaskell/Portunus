@@ -34,6 +34,12 @@ type Config struct {
 	// with missing or invalid signatures are rejected with 401.
 	// Set to the same value as CONFIG_PORTUNUS_HMAC_SECRET in the firmware.
 	HMACSecret string
+
+	// Admin API authentication
+	// When non-empty, all /admin/v1/* requests must include an
+	// Authorization: Bearer <key> header matching this value.
+	// Generate with: openssl rand -hex 32
+	AdminAPIKey string
 }
 
 func FromEnv() Config {
@@ -59,6 +65,7 @@ func FromEnv() Config {
 	tlsCert := strings.TrimSpace(os.Getenv("PORTUNUS_TLS_CERT_FILE"))
 	tlsKey := strings.TrimSpace(os.Getenv("PORTUNUS_TLS_KEY_FILE"))
 	hmacSecret := os.Getenv("PORTUNUS_HMAC_SECRET")
+	adminAPIKey := strings.TrimSpace(os.Getenv("PORTUNUS_ADMIN_API_KEY"))
 
 	return Config{
 		HTTPAddr: addr,
@@ -75,6 +82,7 @@ func FromEnv() Config {
 		TLSCertFile: tlsCert,
 		TLSKeyFile:  tlsKey,
 		HMACSecret:  hmacSecret,
+		AdminAPIKey: adminAPIKey,
 	}
 }
 

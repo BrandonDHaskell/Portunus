@@ -1,0 +1,69 @@
+package types
+
+// ── Module admin types ──────────────────────────────────────────────────────
+
+type RegisterModuleRequest struct {
+	ModuleID    string `json:"module_id"`
+	DoorID      string `json:"door_id,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
+}
+
+type ModuleInfo struct {
+	ModuleID       string `json:"module_id"`
+	DoorID         string `json:"door_id,omitempty"`
+	DisplayName    string `json:"display_name,omitempty"`
+	Enabled        bool   `json:"enabled"`
+	Commissioned   bool   `json:"commissioned"`
+	CommissionedAt string `json:"commissioned_at,omitempty"`
+	RevokedAt      string `json:"revoked_at,omitempty"`
+	LastSeenAt     string `json:"last_seen_at,omitempty"`
+	LastIP         string `json:"last_ip,omitempty"`
+	LastFWVersion  string `json:"last_fw_version,omitempty"`
+	LastWiFiRSSI   *int   `json:"last_wifi_rssi,omitempty"`
+	CreatedAt      string `json:"created_at"`
+}
+
+type ListModulesResponse struct {
+	OK      bool         `json:"ok"`
+	Modules []ModuleInfo `json:"modules"`
+}
+
+// ── Card admin types ────────────────────────────────────────────────────────
+
+type RegisterCardRequest struct {
+	CardID string `json:"card_id"`       // raw hex UID (e.g. "04:A3:2B:1C")
+	Tag    string `json:"tag,omitempty"` // human-readable label
+}
+
+type CardInfo struct {
+	CardIDHash string `json:"card_id_hash"` // hex-encoded SHA-256
+	Tag        string `json:"tag,omitempty"`
+	Status     string `json:"status"` // "active", "disabled", "lost"
+	CreatedAt  string `json:"created_at"`
+	LastSeenAt string `json:"last_seen_at,omitempty"`
+}
+
+type ListCardsResponse struct {
+	OK    bool       `json:"ok"`
+	Cards []CardInfo `json:"cards"`
+}
+
+// ── Door admin types ────────────────────────────────────────────────────────
+
+type RegisterDoorRequest struct {
+	DoorID   string `json:"door_id"`
+	Name     string `json:"name"`
+	Location string `json:"location,omitempty"`
+}
+
+type DoorInfo struct {
+	DoorID    string `json:"door_id"`
+	Name      string `json:"name"`
+	Location  string `json:"location,omitempty"`
+	CreatedAt string `json:"created_at"`
+}
+
+type ListDoorsResponse struct {
+	OK    bool       `json:"ok"`
+	Doors []DoorInfo `json:"doors"`
+}

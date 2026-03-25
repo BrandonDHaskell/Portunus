@@ -42,6 +42,9 @@
 
 # ESP-IDF
 sdkconfig
+sdkconfig.defaults
+sdkconfig.defaults.dev
+sdkconfig.defaults.prod
 sdkconfig.old
 build/
 
@@ -52,3 +55,4 @@ server/data/
 
 # Generic
 access_module.tar.gz
+*.env

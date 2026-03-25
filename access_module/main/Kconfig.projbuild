@@ -71,6 +71,25 @@ menu "Portunus Configuration"
                 expired certificates but removes all transport security
                 guarantees.  NEVER enable in production.
 
+        config PORTUNUS_TLS_USE_CUSTOM_CA
+            bool "Pin to a custom CA certificate (LAN deployments)"
+            default y
+            depends on PORTUNUS_USE_TLS && !PORTUNUS_TLS_SKIP_VERIFY
+            help
+                Validate the server certificate against a custom CA cert
+                embedded in the firmware instead of the Mozilla CA bundle.
+                This is the recommended mode for LAN deployments where the
+                server uses a certificate signed by a private CA.
+
+                The CA cert PEM must be placed at:
+                  access_module/certs/ca_cert.pem
+
+                Generate it with:  ./scripts/generate_certs.sh --ip <SERVER_IP>
+
+                When disabled, the firmware falls back to the Mozilla CA
+                bundle (suitable for servers with Let's Encrypt or other
+                publicly-trusted certificates).
+
         config PORTUNUS_HMAC_ENABLED
             bool "Enable HMAC-SHA256 request signing"
             default y
