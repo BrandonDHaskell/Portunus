@@ -43,6 +43,8 @@ func main() {
 	deviceStore := sqlitestore.NewDeviceStore(dbConn, writer)
 	heartbeatStore := sqlitestore.NewHeartbeatStore(dbConn, writer)
 	accessEventStore := sqlitestore.NewAccessEventStore(dbConn, writer)
+	cardStore := sqlitestore.NewCardStore(dbConn, writer)
+	moduleAdminStore := sqlitestore.NewModuleAdminStore(dbConn, writer)
 
 	// Stores (Memory for dev testing with no DB)
 	// deviceStore := memory.NewDeviceStore(cfg.KnownModules)
@@ -70,13 +72,25 @@ func main() {
 		AllowedCardIDs: allowed,
 	}, accessEventStore)
 
+	// Enable DB-backed card lookups (replaces the legacy AllowedCardIDs
+	// env-var map).  When cards exist in the DB, the access service
+	// hashes the incoming card ID and checks the cards table.  The
+	// AllowedCardIDs map still works as a fallback when the DB is empty
+	// or cardStore is nil.
+	accessSvc.SetCardStore(cardStore)
+
+	// Admin service for module/card/door management via REST API.
+	adminSvc := service.NewAdminService(moduleAdminStore, cardStore)
+
 	// HTTP
 	srv := httpapi.NewServer(httpapi.Dependencies{
 		Logger:           logger,
 		Addr:             cfg.HTTPAddr,
 		HeartbeatService: heartbeatSvc,
 		AccessService:    accessSvc,
+		AdminService:     adminSvc,
 		HMACSecret:       cfg.HMACSecret,
+		AdminAPIKey:      cfg.AdminAPIKey,
 	})
 
 	go func() {

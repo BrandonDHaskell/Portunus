@@ -148,6 +148,18 @@ tasks:
     cmds:
       - "{{.PYTHON}} scripts/proto_gen.py --nanopb"
 
+  # ─── TLS Certificates ─────────────────────────────────────────────────────
+
+  certs:generate:
+    desc: Generate private CA + server TLS certs for LAN deployment
+    cmds:
+      - bash scripts/generate_certs.sh {{.CLI_ARGS}}
+
+  certs:verify:
+    desc: Verify the cert chain (ca.pem → server.pem)
+    cmds:
+      - openssl verify -CAfile certs/ca.pem certs/server.pem
+
   # ─── Firmware ─────────────────────────────────────────────────────────────
 
   firmware:build:

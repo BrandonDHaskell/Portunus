@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"strings"
 	"time"
@@ -15,7 +16,10 @@ var (
 )
 
 type AccessPolicy struct {
-	AllowAll       bool
+	// AllowAll grants access to any card (dev/testing only).
+	AllowAll bool
+	// AllowedCardIDs is the legacy env-var allowlist (deprecated).
+	// When CardStore is set, this is ignored.
 	AllowedCardIDs map[string]struct{}
 }
 
@@ -23,10 +27,17 @@ type AccessService struct {
 	registry   *DeviceRegistry
 	policy     AccessPolicy
 	eventStore store.AccessEventStore
+	cardStore  store.CardStore // nil = use legacy AllowedCardIDs map
 }
 
 func NewAccessService(reg *DeviceRegistry, policy AccessPolicy, es store.AccessEventStore) *AccessService {
 	return &AccessService{registry: reg, policy: policy, eventStore: es}
+}
+
+// SetCardStore enables DB-backed card lookups, replacing the legacy
+// AllowedCardIDs map.  Call after NewAccessService, before serving traffic.
+func (s *AccessService) SetCardStore(cs store.CardStore) {
+	s.cardStore = cs
 }
 
 func (s *AccessService) Decide(ctx context.Context, req types.AccessRequest) (types.AccessResponse, error) {
@@ -63,14 +74,29 @@ func (s *AccessService) Decide(ctx context.Context, req types.AccessRequest) (ty
 		return resp, nil
 	}
 
-	// Decision logic (v1 testing-friendly)
+	// Decision logic
 	granted := false
 	reason := "denied"
 
 	if s.policy.AllowAll {
 		granted = true
 		reason = "allow_all"
+	} else if s.cardStore != nil {
+		// DB-backed card lookup (production path).
+		hash := sha256.Sum256([]byte(cardID))
+		allowed, err := s.cardStore.IsCardAllowed(ctx, hash[:])
+		if err != nil {
+			s.recordEvent(ctx, req, false, "card_lookup_error", now)
+			return types.AccessResponse{}, err
+		}
+		if allowed {
+			granted = true
+			reason = "card_allowed"
+		} else {
+			reason = "card_not_allowed"
+		}
 	} else {
+		// Legacy env-var allowlist fallback.
 		if _, ok := s.policy.AllowedCardIDs[cardID]; ok {
 			granted = true
 			reason = "card_allowed"

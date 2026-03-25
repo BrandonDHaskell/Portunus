@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -28,11 +29,19 @@ func loggingMiddleware(logger *log.Logger, next http.Handler) http.Handler {
 //  3. Does a constant-time comparison to prevent timing attacks.
 //  4. Rejects requests with missing or invalid signatures with HTTP 401.
 //
-// Only POST requests are checked; other methods pass through unchanged.
+// Only POST requests to device endpoints are checked; other methods and
+// admin paths pass through unchanged.
 func hmacAuthMiddleware(logger *log.Logger, secret string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Only enforce on POST (the only method ESP32 modules use).
 		if r.Method != http.MethodPost {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Admin endpoints are protected by Bearer token auth, not HMAC.
+		// They originate from curl/browser, not from ESP32 firmware.
+		if strings.HasPrefix(r.URL.Path, "/admin/") {
 			next.ServeHTTP(w, r)
 			return
 		}

@@ -44,3 +44,23 @@ idf_component_register(
         portunus_types
         portunus_config
 )
+
+# ── Embed custom CA certificate for LAN TLS pinning ─────────────────────────
+# When CONFIG_PORTUNUS_TLS_USE_CUSTOM_CA is enabled, the CA cert PEM at
+# access_module/certs/ca_cert.pem is compiled into the firmware as a
+# null-terminated string.  server_comm.cpp references it via:
+#   extern const char ca_cert_pem_start[] asm("_binary_ca_cert_pem_start");
+#   extern const char ca_cert_pem_end[]   asm("_binary_ca_cert_pem_end");
+#
+# Generate the cert with:  ./scripts/generate_certs.sh --ip <SERVER_IP>
+set(CA_CERT_PATH "${CMAKE_SOURCE_DIR}/certs/ca_cert.pem")
+if(CONFIG_PORTUNUS_TLS_USE_CUSTOM_CA)
+    if(NOT EXISTS "${CA_CERT_PATH}")
+        message(FATAL_ERROR
+            "Custom CA cert not found at ${CA_CERT_PATH}\n"
+            "Run ./scripts/generate_certs.sh --ip <SERVER_IP> to generate it,\n"
+            "or disable CONFIG_PORTUNUS_TLS_USE_CUSTOM_CA in menuconfig."
+        )
+    endif()
+    target_add_binary_data(${COMPONENT_LIB} "${CA_CERT_PATH}" TEXT)
+endif()

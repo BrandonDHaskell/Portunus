@@ -56,6 +56,22 @@ extern "C" {
   #define PORTUNUS_TLS_SKIP_VERIFY  0
 #endif
 
+/**
+ * @brief Pin to a custom CA certificate embedded in the firmware.
+ *
+ * When enabled, the ESP32 validates the server cert against the PEM at
+ * access_module/certs/ca_cert.pem (embedded via EMBED_TXTFILES in
+ * server_comm/CMakeLists.txt) instead of the Mozilla CA bundle.
+ *
+ * This is the recommended mode for LAN deployments with a private CA.
+ * Generate the cert with:  ./scripts/generate_certs.sh --ip <SERVER_IP>
+ */
+#ifdef CONFIG_PORTUNUS_TLS_USE_CUSTOM_CA
+  #define PORTUNUS_TLS_USE_CUSTOM_CA  1
+#else
+  #define PORTUNUS_TLS_USE_CUSTOM_CA  0
+#endif
+
 /* ── HMAC-SHA256 request signing ─────────────────────────────────────────── */
 
 /** 1 when HMAC signing is enabled; 0 otherwise. */
