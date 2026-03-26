@@ -7,9 +7,20 @@
 //   Server (Go):  protoc  + protoc-gen-go
 //   ESP32  (C):   protoc  + nanopb generator  (see ../nanopb/portunus.options)
 //
-// The access module sends Nanopb-encoded messages over HTTP/1.1 with
-// Content-Type: application/x-protobuf.  No gRPC service block is defined
-// because the ESP32 does not use HTTP/2.
+// The access module sends Nanopb-encoded messages to the server using one
+// of two transport modes (selected at build time via Kconfig):
+//
+//   1. gRPC over HTTP/2+TLS (CONFIG_PORTUNUS_USE_GRPC=y, recommended):
+//      Uses nghttp2 + esp-tls on the ESP32 to speak the gRPC wire protocol.
+//      Connects to the PortunusService defined below.
+//
+//   2. HTTP/1.1+TLS with protobuf (legacy / fallback):
+//      POSTs Nanopb-encoded messages with Content-Type: application/x-protobuf
+//      and an HMAC-SHA256 signature header (X-Portunus-Sig).
+//
+// The PortunusService block below is the canonical RPC contract.  The wire
+// encoding (request/response message types) is identical whether the
+// transport is gRPC or the HTTP/1.1 path, keeping both in sync.
 //
 // ─── Compatibility rules ───────────────────────────────────────────────────
 //   • Only APPEND new fields (never reorder or reuse a field number).
@@ -27,12 +38,11 @@
 package portunusv1
 
 import (
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
-
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -438,7 +448,10 @@ const file_portunus_v1_portunus_proto_rawDesc = "" +
 	"\x06reason\x18\x04 \x01(\tR\x06reason\x12\x1b\n" +
 	"\tmodule_id\x18\x05 \x01(\tR\bmoduleId\x12\x1f\n" +
 	"\vserver_time\x18\x06 \x01(\tR\n" +
-	"serverTimeB;Z9github.com/BrandonDHaskell/Portunus/server/api/portunusv1b\x06proto3"
+	"serverTime2\xab\x01\n" +
+	"\x0fPortunusService\x12N\n" +
+	"\rSendHeartbeat\x12\x1d.portunus.v1.HeartbeatRequest\x1a\x1e.portunus.v1.HeartbeatResponse\x12H\n" +
+	"\rRequestAccess\x12\x1a.portunus.v1.AccessRequest\x1a\x1b.portunus.v1.AccessResponseB;Z9github.com/BrandonDHaskell/Portunus/server/api/portunusv1b\x06proto3"
 
 var (
 	file_portunus_v1_portunus_proto_rawDescOnce sync.Once
@@ -460,8 +473,12 @@ var file_portunus_v1_portunus_proto_goTypes = []any{
 	(*AccessResponse)(nil),    // 3: portunus.v1.AccessResponse
 }
 var file_portunus_v1_portunus_proto_depIdxs = []int32{
-	0, // [0:0] is the sub-list for method output_type
-	0, // [0:0] is the sub-list for method input_type
+	0, // 0: portunus.v1.PortunusService.SendHeartbeat:input_type -> portunus.v1.HeartbeatRequest
+	2, // 1: portunus.v1.PortunusService.RequestAccess:input_type -> portunus.v1.AccessRequest
+	1, // 2: portunus.v1.PortunusService.SendHeartbeat:output_type -> portunus.v1.HeartbeatResponse
+	3, // 3: portunus.v1.PortunusService.RequestAccess:output_type -> portunus.v1.AccessResponse
+	2, // [2:4] is the sub-list for method output_type
+	0, // [0:2] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -482,7 +499,7 @@ func file_portunus_v1_portunus_proto_init() {
 			NumEnums:      0,
 			NumMessages:   4,
 			NumExtensions: 0,
-			NumServices:   0,
+			NumServices:   1,
 		},
 		GoTypes:           file_portunus_v1_portunus_proto_goTypes,
 		DependencyIndexes: file_portunus_v1_portunus_proto_depIdxs,
