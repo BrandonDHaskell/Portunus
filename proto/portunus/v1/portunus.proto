@@ -7,15 +7,20 @@
 //   Server (Go):  protoc  + protoc-gen-go
 //   ESP32  (C):   protoc  + nanopb generator  (see ../nanopb/portunus.options)
 //
-// The access module sends Nanopb-encoded messages over HTTPS/1.1 with
-// Content-Type: application/x-protobuf and an HMAC-SHA256 request signature.
-// The ESP32 does not support HTTP/2, so it cannot speak native gRPC.
+// The access module sends Nanopb-encoded messages to the server using one
+// of two transport modes (selected at build time via Kconfig):
 //
-// The PortunusService block below is the canonical RPC contract and is
-// intended for use by Go-based tooling, admin clients, or future
-// gateway components that *can* speak gRPC over HTTP/2.  The wire
+//   1. gRPC over HTTP/2+TLS (CONFIG_PORTUNUS_USE_GRPC=y, recommended):
+//      Uses nghttp2 + esp-tls on the ESP32 to speak the gRPC wire protocol.
+//      Connects to the PortunusService defined below.
+//
+//   2. HTTP/1.1+TLS with protobuf (legacy / fallback):
+//      POSTs Nanopb-encoded messages with Content-Type: application/x-protobuf
+//      and an HMAC-SHA256 signature header (X-Portunus-Sig).
+//
+// The PortunusService block below is the canonical RPC contract.  The wire
 // encoding (request/response message types) is identical whether the
-// transport is gRPC or the ESP32 HTTPS path, keeping both in sync.
+// transport is gRPC or the HTTP/1.1 path, keeping both in sync.
 //
 // ─── Compatibility rules ───────────────────────────────────────────────────
 //   • Only APPEND new fields (never reorder or reuse a field number).
@@ -132,18 +137,21 @@ message AccessResponse {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// Service definition (gRPC — Go tooling / admin clients only)
+// Service definition (gRPC)
 // ──────────────────────────────────────────────────────────────────────────
 
 // PortunusService is the canonical RPC interface.
 //
-// ESP32 access modules cannot use this directly (no HTTP/2 support).
-// They send the same request/response messages over HTTPS/1.1 with
-// an HMAC-SHA256 signature header instead.
+// ESP32 access modules can use this via HTTP/2+TLS when the firmware is
+// built with CONFIG_PORTUNUS_USE_GRPC=y.  The module's grpc_client
+// component implements the gRPC wire protocol using nghttp2 + esp-tls.
 //
-// Intended consumers:
+// When CONFIG_PORTUNUS_USE_GRPC is disabled, modules fall back to
+// HTTP/1.1 with the same protobuf messages and an HMAC signature header.
+//
+// Other intended consumers:
 //   - Server-side admin CLIs
-//   - Test harnesses
+//   - Test harnesses (grpcurl, Go test clients)
 //   - Future gateway / proxy components
 service PortunusService {
   // SendHeartbeat records a module health telemetry tick.

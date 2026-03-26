@@ -49,6 +49,7 @@ extern "C" {
 #define PORTUNUS_ERR_HTTP_STATUS     (PORTUNUS_ERR_BASE_NETWORK + 0x04)  /**< Unexpected HTTP status code */
 #define PORTUNUS_ERR_PROTO_ENCODE    (PORTUNUS_ERR_BASE_NETWORK + 0x05)  /**< Nanopb encode failed */
 #define PORTUNUS_ERR_PROTO_DECODE    (PORTUNUS_ERR_BASE_NETWORK + 0x06)  /**< Nanopb decode failed */
+#define PORTUNUS_ERR_NO_MEMORY       (PORTUNUS_ERR_BASE_NETWORK + 0x07)  /**< Heap allocation failed */
 
 #ifdef __cplusplus
 }

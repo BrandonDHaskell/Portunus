@@ -56,3 +56,4 @@ server/data/
 # Generic
 access_module.tar.gz
 *.env
+certs/

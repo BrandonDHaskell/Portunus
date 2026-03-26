@@ -7,9 +7,20 @@
 //   Server (Go):  protoc  + protoc-gen-go
 //   ESP32  (C):   protoc  + nanopb generator  (see ../nanopb/portunus.options)
 //
-// The access module sends Nanopb-encoded messages over HTTP/1.1 with
-// Content-Type: application/x-protobuf.  No gRPC service block is defined
-// because the ESP32 does not use HTTP/2.
+// The access module sends Nanopb-encoded messages to the server using one
+// of two transport modes (selected at build time via Kconfig):
+//
+//   1. gRPC over HTTP/2+TLS (CONFIG_PORTUNUS_USE_GRPC=y, recommended):
+//      Uses nghttp2 + esp-tls on the ESP32 to speak the gRPC wire protocol.
+//      Connects to the PortunusService defined below.
+//
+//   2. HTTP/1.1+TLS with protobuf (legacy / fallback):
+//      POSTs Nanopb-encoded messages with Content-Type: application/x-protobuf
+//      and an HMAC-SHA256 signature header (X-Portunus-Sig).
+//
+// The PortunusService block below is the canonical RPC contract.  The wire
+// encoding (request/response message types) is identical whether the
+// transport is gRPC or the HTTP/1.1 path, keeping both in sync.
 //
 // ─── Compatibility rules ───────────────────────────────────────────────────
 //   • Only APPEND new fields (never reorder or reuse a field number).
@@ -22,17 +33,16 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v3.21.12
-// source: portunus/v1/portunus.proto
+// source: proto/portunus/v1/portunus.proto
 
 package portunusv1
 
 import (
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
-
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -72,7 +82,7 @@ type HeartbeatRequest struct {
 
 func (x *HeartbeatRequest) Reset() {
 	*x = HeartbeatRequest{}
-	mi := &file_portunus_v1_portunus_proto_msgTypes[0]
+	mi := &file_proto_portunus_v1_portunus_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -84,7 +94,7 @@ func (x *HeartbeatRequest) String() string {
 func (*HeartbeatRequest) ProtoMessage() {}
 
 func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_portunus_v1_portunus_proto_msgTypes[0]
+	mi := &file_proto_portunus_v1_portunus_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -97,7 +107,7 @@ func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatRequest.ProtoReflect.Descriptor instead.
 func (*HeartbeatRequest) Descriptor() ([]byte, []int) {
-	return file_portunus_v1_portunus_proto_rawDescGZIP(), []int{0}
+	return file_proto_portunus_v1_portunus_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *HeartbeatRequest) GetModuleId() string {
@@ -175,7 +185,7 @@ type HeartbeatResponse struct {
 
 func (x *HeartbeatResponse) Reset() {
 	*x = HeartbeatResponse{}
-	mi := &file_portunus_v1_portunus_proto_msgTypes[1]
+	mi := &file_proto_portunus_v1_portunus_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -187,7 +197,7 @@ func (x *HeartbeatResponse) String() string {
 func (*HeartbeatResponse) ProtoMessage() {}
 
 func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_portunus_v1_portunus_proto_msgTypes[1]
+	mi := &file_proto_portunus_v1_portunus_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -200,7 +210,7 @@ func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatResponse.ProtoReflect.Descriptor instead.
 func (*HeartbeatResponse) Descriptor() ([]byte, []int) {
-	return file_portunus_v1_portunus_proto_rawDescGZIP(), []int{1}
+	return file_proto_portunus_v1_portunus_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *HeartbeatResponse) GetOk() bool {
@@ -251,7 +261,7 @@ type AccessRequest struct {
 
 func (x *AccessRequest) Reset() {
 	*x = AccessRequest{}
-	mi := &file_portunus_v1_portunus_proto_msgTypes[2]
+	mi := &file_proto_portunus_v1_portunus_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -263,7 +273,7 @@ func (x *AccessRequest) String() string {
 func (*AccessRequest) ProtoMessage() {}
 
 func (x *AccessRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_portunus_v1_portunus_proto_msgTypes[2]
+	mi := &file_proto_portunus_v1_portunus_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -276,7 +286,7 @@ func (x *AccessRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AccessRequest.ProtoReflect.Descriptor instead.
 func (*AccessRequest) Descriptor() ([]byte, []int) {
-	return file_portunus_v1_portunus_proto_rawDescGZIP(), []int{2}
+	return file_proto_portunus_v1_portunus_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *AccessRequest) GetModuleId() string {
@@ -331,7 +341,7 @@ type AccessResponse struct {
 
 func (x *AccessResponse) Reset() {
 	*x = AccessResponse{}
-	mi := &file_portunus_v1_portunus_proto_msgTypes[3]
+	mi := &file_proto_portunus_v1_portunus_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -343,7 +353,7 @@ func (x *AccessResponse) String() string {
 func (*AccessResponse) ProtoMessage() {}
 
 func (x *AccessResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_portunus_v1_portunus_proto_msgTypes[3]
+	mi := &file_proto_portunus_v1_portunus_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -356,7 +366,7 @@ func (x *AccessResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AccessResponse.ProtoReflect.Descriptor instead.
 func (*AccessResponse) Descriptor() ([]byte, []int) {
-	return file_portunus_v1_portunus_proto_rawDescGZIP(), []int{3}
+	return file_proto_portunus_v1_portunus_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *AccessResponse) GetOk() bool {
@@ -401,11 +411,11 @@ func (x *AccessResponse) GetServerTime() string {
 	return ""
 }
 
-var File_portunus_v1_portunus_proto protoreflect.FileDescriptor
+var File_proto_portunus_v1_portunus_proto protoreflect.FileDescriptor
 
-const file_portunus_v1_portunus_proto_rawDesc = "" +
+const file_proto_portunus_v1_portunus_proto_rawDesc = "" +
 	"\n" +
-	"\x1aportunus/v1/portunus.proto\x12\vportunus.v1\"\xac\x02\n" +
+	" proto/portunus/v1/portunus.proto\x12\vportunus.v1\"\xac\x02\n" +
 	"\x10HeartbeatRequest\x12\x1b\n" +
 	"\tmodule_id\x18\x01 \x01(\tR\bmoduleId\x12)\n" +
 	"\x10firmware_version\x18\x02 \x01(\tR\x0ffirmwareVersion\x12\x19\n" +
@@ -438,57 +448,64 @@ const file_portunus_v1_portunus_proto_rawDesc = "" +
 	"\x06reason\x18\x04 \x01(\tR\x06reason\x12\x1b\n" +
 	"\tmodule_id\x18\x05 \x01(\tR\bmoduleId\x12\x1f\n" +
 	"\vserver_time\x18\x06 \x01(\tR\n" +
-	"serverTimeB;Z9github.com/BrandonDHaskell/Portunus/server/api/portunusv1b\x06proto3"
+	"serverTime2\xab\x01\n" +
+	"\x0fPortunusService\x12N\n" +
+	"\rSendHeartbeat\x12\x1d.portunus.v1.HeartbeatRequest\x1a\x1e.portunus.v1.HeartbeatResponse\x12H\n" +
+	"\rRequestAccess\x12\x1a.portunus.v1.AccessRequest\x1a\x1b.portunus.v1.AccessResponseB;Z9github.com/BrandonDHaskell/Portunus/server/api/portunusv1b\x06proto3"
 
 var (
-	file_portunus_v1_portunus_proto_rawDescOnce sync.Once
-	file_portunus_v1_portunus_proto_rawDescData []byte
+	file_proto_portunus_v1_portunus_proto_rawDescOnce sync.Once
+	file_proto_portunus_v1_portunus_proto_rawDescData []byte
 )
 
-func file_portunus_v1_portunus_proto_rawDescGZIP() []byte {
-	file_portunus_v1_portunus_proto_rawDescOnce.Do(func() {
-		file_portunus_v1_portunus_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_portunus_v1_portunus_proto_rawDesc), len(file_portunus_v1_portunus_proto_rawDesc)))
+func file_proto_portunus_v1_portunus_proto_rawDescGZIP() []byte {
+	file_proto_portunus_v1_portunus_proto_rawDescOnce.Do(func() {
+		file_proto_portunus_v1_portunus_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proto_portunus_v1_portunus_proto_rawDesc), len(file_proto_portunus_v1_portunus_proto_rawDesc)))
 	})
-	return file_portunus_v1_portunus_proto_rawDescData
+	return file_proto_portunus_v1_portunus_proto_rawDescData
 }
 
-var file_portunus_v1_portunus_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
-var file_portunus_v1_portunus_proto_goTypes = []any{
+var file_proto_portunus_v1_portunus_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_proto_portunus_v1_portunus_proto_goTypes = []any{
 	(*HeartbeatRequest)(nil),  // 0: portunus.v1.HeartbeatRequest
 	(*HeartbeatResponse)(nil), // 1: portunus.v1.HeartbeatResponse
 	(*AccessRequest)(nil),     // 2: portunus.v1.AccessRequest
 	(*AccessResponse)(nil),    // 3: portunus.v1.AccessResponse
 }
-var file_portunus_v1_portunus_proto_depIdxs = []int32{
-	0, // [0:0] is the sub-list for method output_type
-	0, // [0:0] is the sub-list for method input_type
+var file_proto_portunus_v1_portunus_proto_depIdxs = []int32{
+	0, // 0: portunus.v1.PortunusService.SendHeartbeat:input_type -> portunus.v1.HeartbeatRequest
+	2, // 1: portunus.v1.PortunusService.RequestAccess:input_type -> portunus.v1.AccessRequest
+	1, // 2: portunus.v1.PortunusService.SendHeartbeat:output_type -> portunus.v1.HeartbeatResponse
+	3, // 3: portunus.v1.PortunusService.RequestAccess:output_type -> portunus.v1.AccessResponse
+	2, // [2:4] is the sub-list for method output_type
+	0, // [0:2] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
 }
 
-func init() { file_portunus_v1_portunus_proto_init() }
-func file_portunus_v1_portunus_proto_init() {
-	if File_portunus_v1_portunus_proto != nil {
+func init() { file_proto_portunus_v1_portunus_proto_init() }
+func file_proto_portunus_v1_portunus_proto_init() {
+	if File_proto_portunus_v1_portunus_proto != nil {
 		return
 	}
-	file_portunus_v1_portunus_proto_msgTypes[0].OneofWrappers = []any{}
-	file_portunus_v1_portunus_proto_msgTypes[2].OneofWrappers = []any{}
+	file_proto_portunus_v1_portunus_proto_msgTypes[0].OneofWrappers = []any{}
+	file_proto_portunus_v1_portunus_proto_msgTypes[2].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_portunus_v1_portunus_proto_rawDesc), len(file_portunus_v1_portunus_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_portunus_v1_portunus_proto_rawDesc), len(file_proto_portunus_v1_portunus_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   4,
 			NumExtensions: 0,
-			NumServices:   0,
+			NumServices:   1,
 		},
-		GoTypes:           file_portunus_v1_portunus_proto_goTypes,
-		DependencyIndexes: file_portunus_v1_portunus_proto_depIdxs,
-		MessageInfos:      file_portunus_v1_portunus_proto_msgTypes,
+		GoTypes:           file_proto_portunus_v1_portunus_proto_goTypes,
+		DependencyIndexes: file_proto_portunus_v1_portunus_proto_depIdxs,
+		MessageInfos:      file_proto_portunus_v1_portunus_proto_msgTypes,
 	}.Build()
-	File_portunus_v1_portunus_proto = out.File
-	file_portunus_v1_portunus_proto_goTypes = nil
-	file_portunus_v1_portunus_proto_depIdxs = nil
+	File_proto_portunus_v1_portunus_proto = out.File
+	file_proto_portunus_v1_portunus_proto_goTypes = nil
+	file_proto_portunus_v1_portunus_proto_depIdxs = nil
 }

@@ -44,7 +44,11 @@
 #endif
 
 /* ESP-IDF */
-#include "esp_http_client.h"
+#if !PORTUNUS_USE_GRPC
+  #include "esp_http_client.h"
+#else
+  #include "grpc_client.h"
+#endif
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_log.h"
@@ -61,7 +65,11 @@
 static const char *TAG = "server_comm";
 
 /* ── Configuration ─────────────────────────────────────────────────────────── */
-#define COMM_TASK_STACK_SIZE    6144
+#if PORTUNUS_USE_GRPC
+  #define COMM_TASK_STACK_SIZE    10240     /* Larger stack for nghttp2 session */
+#else
+  #define COMM_TASK_STACK_SIZE    6144
+#endif
 #define COMM_TASK_PRIORITY      2       /* Below heartbeat(3) and card_poll(4) */
 #define COMM_QUEUE_LENGTH       8       /* Pending events waiting for HTTP I/O */
 #define URL_MAX_LEN            128
@@ -71,9 +79,14 @@ static QueueHandle_t  s_comm_queue   = NULL;
 static TaskHandle_t   s_comm_task    = NULL;
 static bool           s_initialized  = false;
 
+#if PORTUNUS_USE_GRPC
+/* gRPC client handle — persistent HTTP/2+TLS connection to the server. */
+static grpc_client_handle_t s_grpc_handle = NULL;
+#else
 /* Reusable URL buffers built once at init */
 static char s_heartbeat_url[URL_MAX_LEN];
 static char s_access_url[URL_MAX_LEN];
+#endif /* !PORTUNUS_USE_GRPC */
 
 /* ── HMAC helper ───────────────────────────────────────────────────────────── */
 
@@ -150,7 +163,51 @@ static bool get_rssi(int32_t *out)
     return true;
 }
 
-/* ── HTTP helper ───────────────────────────────────────────────────────────── */
+/* ── Transport helpers ─────────────────────────────────────────────────────── */
+
+#if PORTUNUS_USE_GRPC
+
+/**
+ * @brief Perform a gRPC unary call with HMAC signing.
+ *
+ * Wraps grpc_client_unary_call() with HMAC metadata attachment.
+ * The HMAC is computed over the raw protobuf body (same as the HTTP path)
+ * and sent as a custom gRPC metadata header (x-portunus-sig).
+ *
+ * @param method     gRPC method path (e.g. "/portunus.v1.PortunusService/SendHeartbeat")
+ * @param req_buf    Nanopb-encoded protobuf request body
+ * @param req_len    Length of req_buf
+ * @param resp_buf   Buffer to receive the protobuf response
+ * @param resp_cap   Capacity of resp_buf
+ * @param resp_len   [out] Actual protobuf bytes written to resp_buf
+ * @param grpc_status [out] gRPC status code (0 = OK)
+ *
+ * @return PORTUNUS_OK on successful round-trip.
+ */
+static portunus_err_t grpc_post_proto(const char *method,
+                                       const uint8_t *req_buf, size_t req_len,
+                                       uint8_t *resp_buf, size_t resp_cap,
+                                       int *resp_len, int *grpc_status)
+{
+#if PORTUNUS_HMAC_ENABLED
+    /* Compute HMAC-SHA256 over the protobuf body and set as gRPC metadata.
+     * The server interceptor validates this before processing the RPC. */
+    char sig_hex[PORTUNUS_HMAC_HEX_LEN];
+    if (compute_hmac_hex(req_buf, req_len, sig_hex)) {
+        grpc_client_set_metadata(s_grpc_handle, PORTUNUS_HMAC_HEADER_NAME, sig_hex);
+    } else {
+        ESP_LOGE(TAG, "HMAC computation failed — aborting RPC");
+        return PORTUNUS_ERR_HTTP_CONNECT;
+    }
+#endif /* PORTUNUS_HMAC_ENABLED */
+
+    return grpc_client_unary_call(s_grpc_handle, method,
+                                  req_buf, req_len,
+                                  resp_buf, resp_cap,
+                                  resp_len, grpc_status);
+}
+
+#else /* !PORTUNUS_USE_GRPC — HTTP/1.1 path */
 
 /**
  * @brief POST a protobuf-encoded buffer to url, read the response into
@@ -266,6 +323,8 @@ static portunus_err_t http_post_proto(const char *url,
     return PORTUNUS_OK;
 }
 
+#endif /* PORTUNUS_USE_GRPC */
+
 /* ── Event bus subscriber callbacks ────────────────────────────────────────── */
 /* These run on the event bus dispatcher task and must be non-blocking.
    They simply copy the event into the server_comm queue. */
@@ -346,8 +405,25 @@ static void handle_heartbeat(const event_heartbeat_t *hb)
 
     /* POST */
     uint8_t resp_buf[portunus_v1_HeartbeatResponse_size + 16];  /* small margin */
-    int resp_len = 0, status = 0;
+    int resp_len = 0;
 
+#if PORTUNUS_USE_GRPC
+    int grpc_status = 0;
+    portunus_err_t err = grpc_post_proto(
+        "/portunus.v1.PortunusService/SendHeartbeat",
+        req_buf, ostream.bytes_written,
+        resp_buf, sizeof(resp_buf),
+        &resp_len, &grpc_status);
+    if (err != PORTUNUS_OK) {
+        ESP_LOGW(TAG, "Heartbeat gRPC failed: err=0x%04x", (unsigned)err);
+        return;
+    }
+    if (grpc_status != GRPC_STATUS_OK) {
+        ESP_LOGW(TAG, "Heartbeat gRPC status: %d", grpc_status);
+        return;
+    }
+#else
+    int status = 0;
     portunus_err_t err = http_post_proto(s_heartbeat_url,
                                          req_buf, ostream.bytes_written,
                                          resp_buf, sizeof(resp_buf),
@@ -361,6 +437,7 @@ static void handle_heartbeat(const event_heartbeat_t *hb)
         ESP_LOGW(TAG, "Heartbeat server returned HTTP %d", status);
         return;
     }
+#endif /* PORTUNUS_USE_GRPC */
 
     /* Decode response */
     portunus_v1_HeartbeatResponse resp = portunus_v1_HeartbeatResponse_init_zero;
@@ -393,8 +470,30 @@ static void handle_credential(const event_credential_read_t *cred)
 
     /* POST */
     uint8_t resp_buf[portunus_v1_AccessResponse_size + 16];
-    int resp_len = 0, status = 0;
+    int resp_len = 0;
 
+#if PORTUNUS_USE_GRPC
+    int grpc_status = 0;
+    portunus_err_t err = grpc_post_proto(
+        "/portunus.v1.PortunusService/RequestAccess",
+        req_buf, ostream.bytes_written,
+        resp_buf, sizeof(resp_buf),
+        &resp_len, &grpc_status);
+    if (err != PORTUNUS_OK) {
+        ESP_LOGW(TAG, "Access gRPC failed: err=0x%04x", (unsigned)err);
+        publish_access_denied(req.card_id, "grpc_error");
+        return;
+    }
+    /* gRPC uses status codes for transport-level errors.
+     * PERMISSION_DENIED maps to the old HTTP 403 (unknown module). */
+    if (grpc_status != GRPC_STATUS_OK &&
+        grpc_status != GRPC_STATUS_PERMISSION_DENIED) {
+        ESP_LOGW(TAG, "Access gRPC status: %d", grpc_status);
+        publish_access_denied(req.card_id, "grpc_status_error");
+        return;
+    }
+#else
+    int status = 0;
     portunus_err_t err = http_post_proto(s_access_url,
                                          req_buf, ostream.bytes_written,
                                          resp_buf, sizeof(resp_buf),
@@ -411,6 +510,7 @@ static void handle_credential(const event_credential_read_t *cred)
         publish_access_denied(req.card_id, "http_status_error");
         return;
     }
+#endif /* PORTUNUS_USE_GRPC */
 
     /* Decode response */
     portunus_v1_AccessResponse resp = portunus_v1_AccessResponse_init_zero;
@@ -492,25 +592,52 @@ portunus_err_t server_comm_init(void)
         return PORTUNUS_ERR_ALREADY_INIT;
     }
 
+    /* Configure transport — gRPC (HTTP/2) or HTTP/1.1 depending on Kconfig. */
+#if PORTUNUS_USE_GRPC
+    {
+        grpc_client_config_t grpc_cfg = {};
+        grpc_cfg.host               = PORTUNUS_SERVER_HOST;
+        grpc_cfg.port               = PORTUNUS_GRPC_SERVER_PORT;
+        grpc_cfg.connect_timeout_ms = PORTUNUS_SERVER_REQUEST_TIMEOUT_MS;
+        grpc_cfg.rpc_timeout_ms     = PORTUNUS_SERVER_REQUEST_TIMEOUT_MS;
+        grpc_cfg.skip_cert_verify   = PORTUNUS_TLS_SKIP_VERIFY;
+
+      #if PORTUNUS_TLS_USE_CUSTOM_CA
+        grpc_cfg.ca_cert_pem = ca_cert_pem_start;
+      #else
+        grpc_cfg.ca_cert_pem = NULL; /* Use ESP-IDF cert bundle */
+      #endif
+
+        portunus_err_t grpc_err = grpc_client_init(&grpc_cfg, &s_grpc_handle);
+        if (grpc_err != PORTUNUS_OK) {
+            ESP_LOGE(TAG, "gRPC client init failed: 0x%04x", (unsigned)grpc_err);
+            return grpc_err;
+        }
+        ESP_LOGI(TAG, "Transport: gRPC (HTTP/2+TLS) → %s:%d",
+                 PORTUNUS_SERVER_HOST, PORTUNUS_GRPC_SERVER_PORT);
+    }
+#else
     /* Build URLs once — scheme and port are driven by TLS Kconfig. */
-#if PORTUNUS_USE_TLS
+  #if PORTUNUS_USE_TLS
     snprintf(s_heartbeat_url, sizeof(s_heartbeat_url),
              "https://%s:%d/v1/heartbeat",
              PORTUNUS_SERVER_HOST, PORTUNUS_TLS_SERVER_PORT);
     snprintf(s_access_url, sizeof(s_access_url),
              "https://%s:%d/v1/access_request",
              PORTUNUS_SERVER_HOST, PORTUNUS_TLS_SERVER_PORT);
-#else
+  #else
     snprintf(s_heartbeat_url, sizeof(s_heartbeat_url),
              "http://%s:%d/v1/heartbeat",
              PORTUNUS_SERVER_HOST, PORTUNUS_SERVER_PORT);
     snprintf(s_access_url, sizeof(s_access_url),
              "http://%s:%d/v1/access_request",
              PORTUNUS_SERVER_HOST, PORTUNUS_SERVER_PORT);
-#endif
+  #endif
 
+    ESP_LOGI(TAG, "Transport: HTTP/1.1");
     ESP_LOGI(TAG, "Heartbeat URL: %s", s_heartbeat_url);
     ESP_LOGI(TAG, "Access URL:    %s", s_access_url);
+#endif /* PORTUNUS_USE_GRPC */
 
     /* Create internal queue */
     s_comm_queue = xQueueCreate(COMM_QUEUE_LENGTH, sizeof(portunus_event_t));
@@ -572,6 +699,14 @@ void server_comm_deinit(void)
         vQueueDelete(s_comm_queue);
         s_comm_queue = NULL;
     }
+
+#if PORTUNUS_USE_GRPC
+    /* Destroy the gRPC client (closes TLS + HTTP/2 session). */
+    if (s_grpc_handle != NULL) {
+        grpc_client_destroy(s_grpc_handle);
+        s_grpc_handle = NULL;
+    }
+#endif
 
     s_initialized = false;
     ESP_LOGI(TAG, "Server comm deinitialised");
