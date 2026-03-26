@@ -113,6 +113,40 @@ menu "Portunus Configuration"
 
     endmenu
 
+    menu "Transport Configuration"
+        depends on PORTUNUS_ENABLE_WIFI
+
+        config PORTUNUS_USE_GRPC
+            bool "Use gRPC (HTTP/2) transport for server communication"
+            default n
+            depends on PORTUNUS_USE_TLS
+            help
+                When enabled, the access module communicates with the Portunus
+                server using gRPC over HTTP/2+TLS instead of HTTP/1.1+protobuf.
+                gRPC requires TLS with ALPN negotiation ("h2"), so TLS must
+                also be enabled.
+
+                The gRPC wire protocol sends the same Nanopb-encoded protobuf
+                messages inside HTTP/2 DATA frames with a 5-byte length prefix.
+                The server must expose a gRPC listener (PortunusService) in
+                addition to or instead of the HTTP/1.1 endpoints.
+
+                When disabled, the firmware uses the HTTP/1.1 + esp_http_client
+                transport (the original path).
+
+        config PORTUNUS_GRPC_SERVER_PORT
+            int "gRPC server port"
+            default 50051
+            range 1 65535
+            depends on PORTUNUS_USE_GRPC
+            help
+                TCP port the Portunus server listens on for gRPC connections.
+                This is typically a different port from the HTTP/1.1 or HTTPS
+                port used by the admin API and legacy module communication.
+                Standard gRPC convention uses 50051.
+
+    endmenu
+
     menu "Network Configuration"
         depends on PORTUNUS_ENABLE_WIFI
         

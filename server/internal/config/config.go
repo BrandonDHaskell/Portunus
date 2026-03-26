@@ -8,6 +8,7 @@ import (
 
 type Config struct {
 	HTTPAddr string
+	GRPCAddr string // e.g. ":50051" — empty means gRPC listener disabled
 
 	// DB
 	Env    string // "dev" | "prod"
@@ -66,9 +67,11 @@ func FromEnv() Config {
 	tlsKey := strings.TrimSpace(os.Getenv("PORTUNUS_TLS_KEY_FILE"))
 	hmacSecret := os.Getenv("PORTUNUS_HMAC_SECRET")
 	adminAPIKey := strings.TrimSpace(os.Getenv("PORTUNUS_ADMIN_API_KEY"))
+	grpcAddr := strings.TrimSpace(os.Getenv("PORTUNUS_GRPC_ADDR"))
 
 	return Config{
 		HTTPAddr: addr,
+		GRPCAddr: grpcAddr,
 		Env:      env,
 		DBPath:   dbPath,
 

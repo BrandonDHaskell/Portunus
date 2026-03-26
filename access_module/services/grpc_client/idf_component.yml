@@ -1,0 +1,12 @@
+## IDF Component Manager manifest for grpc_client
+##
+## The espressif/nghttp component provides the nghttp2 HTTP/2 C library
+## (libnghttp2), which is used for HTTP/2 framing in gRPC calls.
+##
+## This dependency is fetched automatically by `idf.py build` via the
+## IDF Component Manager.  No manual clone/download is needed.
+##
+## Registry page: https://components.espressif.com/components/espressif/nghttp
+
+dependencies:
+  espressif/nghttp: ">=1.50.0"
