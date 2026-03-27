@@ -5,37 +5,25 @@
 #   - esp-tls for the TLS transport with ALPN "h2"
 #   - Manual gRPC wire format (5-byte length-prefixed protobuf)
 #
-# This component is only built when CONFIG_PORTUNUS_USE_GRPC is enabled.
-# When disabled, server_comm falls back to the HTTP/1.1 + esp_http_client path.
-#
-# ── nghttp2 dependency ──────────────────────────────────────────────────────
-# The espressif/nghttp component is pulled in via idf_component.yml
-# (IDF component manager).  It provides the <nghttp2/nghttp2.h> header
-# and the libnghttp2 library.  No manual download is needed.
+# When CONFIG_PORTUNUS_USE_GRPC is disabled, the component registers
+# with no sources (header-only).  server_comm's C preprocessor guards
+# ensure grpc_client.h is never actually included in that case.
 
 if(CONFIG_PORTUNUS_USE_GRPC)
-
-    idf_component_register(
-        SRCS
-            "src/grpc_client.cpp"
-        INCLUDE_DIRS
-            "include"
-        REQUIRES
-            freertos
-            esp-tls
-            mbedtls
-            esp_timer
-            portunus_types
-    )
-
+    set(_grpc_srcs "src/grpc_client.cpp")
 else()
-
-    # Register as an empty component so CMake doesn't break when
-    # grpc_client appears in another component's REQUIRES list behind
-    # an #if guard.  No sources are compiled.
-    idf_component_register(
-        INCLUDE_DIRS
-            "include"
-    )
-
+    set(_grpc_srcs "")
 endif()
+
+idf_component_register(
+    SRCS
+        ${_grpc_srcs}
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        freertos
+        esp-tls
+        mbedtls
+        esp_timer
+        portunus_types
+)
