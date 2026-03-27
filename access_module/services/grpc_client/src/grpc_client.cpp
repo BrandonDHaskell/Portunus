@@ -20,6 +20,7 @@
  */
 
 #include "grpc_client.h"
+#include "error_codes.h"
 
 #include "esp_tls.h"
 #include "esp_crt_bundle.h"

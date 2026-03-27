@@ -30,12 +30,6 @@
 # When gRPC is enabled, we depend on grpc_client (which brings in nghttp2 +
 # esp-tls).  When disabled, we depend on esp_http_client for HTTP/1.1.
 set(_transport_deps "")
-if(CONFIG_PORTUNUS_USE_GRPC)
-    list(APPEND _transport_deps grpc_client)
-else()
-    list(APPEND _transport_deps esp_http_client)
-endif()
-
 idf_component_register(
     SRCS
         "src/server_comm.cpp"
@@ -43,6 +37,7 @@ idf_component_register(
         "include"
     REQUIRES
         freertos
+        esp_http_client
         mbedtls
         esp_wifi
         esp_netif
@@ -52,7 +47,7 @@ idf_component_register(
         portunus_proto
         portunus_types
         portunus_config
-        ${_transport_deps}
+        grpc_client
 )
 
 # ── Embed custom CA certificate for LAN TLS pinning ─────────────────────────
