@@ -1,122 +1,217 @@
 # Portunus
 
-**Local-network door access control system**: ESP32-based door modules (RFID + door strike + reed switch + etc.) communicating with a Go server (Raspberry Pi or any LAN host).
+**LAN-first door access control system** — ESP32 access modules communicate with a Go server to manage RFID-based door access for makerspaces, workshops, and small offices.
 
-> **Project status:** Active development / early prototype
->
-> **Last updated:** 2026-01-22
+Named after the Roman god of keys and doors.
 
 ---
 
-## Table of contents
-- [What is Portunus?](#what-is-portunus)
-- [Project goals](#project-goals)
-- [Architecture](#architecture)
-- [Project status](#project-status)
-- [Capabilities](#capabilities)
-- [Known limitations](#known-limitations)
-- [Repository layout](#repository-layout)
-- [Quickstart](#quickstart)
-  - [Server](#server)
-  - [Door module firmware](#door-module-firmware)
-- [Configuration](#configuration)
-- [HTTP API](#http-api)
-- [Database](#database)
-- [Security model](#security-model)
-- [Logging and observability](#logging-and-observability)
-- [Roadmap](#roadmap)
-- [Contributing](#contributing)
-- [License](#license)
+## How it works
+
+```
+ ┌────────────┐                                    ┌────────────────┐
+ │   Card     │                                    │  Admin (curl)  │
+ │   tap      │                                    │                │
+ └─────┬──────┘                                    └───────┬────────┘
+       │                                                   │
+       ▼                                                   ▼
+ ┌──────────────┐   protobuf + TLS + HMAC    ┌──────────────────────┐
+ │ Access Module│◄──────────────────────────►│   Portunus Server    │
+ │   (ESP32)    │                            │       (Go)           │
+ │              │   heartbeat ──────────►    │                      │
+ │ MFRC522 RFID │   access request ──────►   │  SQLite DB           │
+ │ Door strike  │   ◄────── grant/deny       │  Device registry     │
+ │ Reed switch  │                            │  Card policy engine  │
+ │ Status LED   │                            │  Audit log           │
+ └──────────────┘                            │  Admin REST API      │
+                                             └──────────────────────┘
+```
+
+1. A card is tapped on the RFID reader at the door.
+2. The access module sends the card UID to the server over TLS, signed with HMAC-SHA256.
+3. The server checks the module's registration, hashes the card UID, and evaluates it against the card policy.
+4. The server returns grant or deny. The module actuates the door strike and shows LED feedback.
+5. Every decision is recorded in an append-only audit log.
 
 ---
 
-## What is Portunus?
-Portunus is a **LAN-first** door access system designed for maker spaces, workshops, and shared buildings.
+## Current status
 
-A **door module** (ESP32) handles:
-- RFID scanning (e.g., MFRC522-class reader)
-- Door strike control (lock/unlock)
-- Reed switch monitoring (door open/closed)
-- Periodic status reporting (heartbeat)
+**v1 MVP — functional end-to-end.** The full card-tap-to-door-unlock loop is working on hardware.
 
-A **server** (Go) handles:
-- Receiving door-module heartbeats and access requests
-- Storing audit logs and device state
-- Managing access policies (who can open what, when)
+### What's working
 
----
+- RFID card reading (MFRC522 via SPI) with anti-re-read debounce
+- Door strike control with configurable hold timer and early re-lock on door close
+- Reed switch monitoring with software debounce
+- LED feedback patterns (granted, denied, card read, system ready, error)
+- System FSM with hardware abstraction interfaces and capability-based degradation
+- FreeRTOS event bus (queue-backed pub/sub) for all inter-component messaging
+- WiFi management with exponential-backoff reconnection
+- Server communication over HTTP/1.1 + protobuf with TLS and HMAC signing
+- gRPC transport (HTTP/2 + TLS via nghttp2, build-time selectable)
+- Go server with heartbeat ingestion, access decision engine, and admin REST API
+- SQLite persistence with auto-migration, serialized writes, and heartbeat pruning
+- Card registration with SHA-256 hashing (raw UIDs never stored)
+- Module commissioning, revocation, and door management via admin API
+- Full Kconfig-driven configuration (all pins, timing, security, network settings)
+- Private CA certificate generation and firmware embedding for LAN TLS pinning
+- Cross-platform Taskfile with build, test, lint, format, proto gen, and cert management
 
-## Project goals
-- **Reliable door control** even in noisy real-world environments (power glitches, WiFi drops, reboot recovery).
-- **Clear audit trail**: “who/what/when” for access decisions and door state.
-- **Secure-by-design** communication over the local network (incremental hardening as the project matures).
-- **Maintainable codebase**: modern C++ practices on firmware and clean Go server architecture.
-- **Open and extensible**: approachable for other maker spaces to fork and adapt.
+### Known limitations
 
----
-
-## Architecture
-
-### High-level flow
-1. Door module connects to WiFi.
-2. Door module sends **heartbeat** to the server at a fixed interval.
-3. When a card is scanned, the module sends an **access request** to the server.
-4. Server responds allow/deny (and optionally duration / reason).
-5. Door module actuates the strike and reports state.
-
-### Components
-- **Door module firmware (ESP-IDF / C++23)**  
-  RFID, strike output, reed input, heartbeat task, HTTP client, device state machine.
-- **Server (Go)**  
-  HTTP API, state tracking, persistence (SQLite planned / in-progress), admin management planned.
-
-*TODO: add system diagram here*
+- Flash encryption and secure boot are not yet enabled (ESP32-S3 supports both natively — planned)
+- MFRC522 authenticates by UID only (cloneable); acceptable for makerspace threat model
+- No offline/cached access policy when the server is unreachable (planned)
+- No OTA firmware updates (reflash via USB required)
+- No admin web UI (admin API is curl/CLI only)
 
 ---
 
-## Project status
-**Server ↔ door module heartbeat is working** on a local network.
+## Quick start
 
-### Status log
-- **2026-01-22**
-  - Door module: sends heartbeat to server
-  - Server: accepts heartbeat endpoint and responds
-  - Firmware: WiFi manager + HTTP client integrated
-  - Work in progress: persistence (SQLite schema), shared data definitions (JSON/proto)
+### Server
 
-*TODO: create separate status.md and embed here*
+Requires Go 1.24+ and [Task](https://taskfile.dev).
 
----
+```bash
+git clone https://github.com/BrandonDHaskell/Portunus.git
+cd Portunus
 
-## Capabilities
-### Working now
-- Door module connects to WiFi and periodically reports **heartbeat**
-- Server receives heartbeats and returns a response
-- Basic device state reporting (uptime, RSSI, etc.)
-- MFRC522 RFID reader reads RFID tags
+# Install Task
+go install github.com/go-task/task/v3/cmd/task@latest
 
-### In progress
-- Access request flow (RFID → server decision → strike control)
-- SQLite storage for device events / audit trail
-- Single source of truth for message formats (shared JSON schema / protobuf)
+# Run tests
+task test:server
 
-### Planned
-- Admin UI and/or CLI tooling for managing users/RFID tags
-- Commissioning / enrollment flow for new modules
-- Stronger transport security (see [Security model](#security-model))
+# Start the server in dev mode (plain HTTP, all cards granted)
+cd server
+PORTUNUS_ENV=dev PORTUNUS_ALLOW_ALL=true go run ./cmd/portunus-server
+```
 
----
+The server starts on `:8080` and seeds a default `door-001` module. Full setup guide: [docs/setup_server.md](docs/setup_server.md).
 
-## Known limitations
-- **Not production-hardened yet** (retries, offline behavior, state recovery are still evolving)
-- **Security hardening is ongoing** (encryption/auth design is a roadmap item)
-- Hardware wiring and pin mappings vary by setup (expects builder to configure)
+### Firmware
+
+Requires [ESP-IDF 5.4+](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/).
+
+```bash
+# Source ESP-IDF environment
+. ~/esp/esp-idf/export.sh
+
+# Configure (WiFi credentials, server host, pin assignments)
+task firmware:menuconfig
+
+# Build and flash
+task firmware:flash-monitor
+```
+
+Full setup guide with wiring reference: [docs/setup_firmware.md](docs/setup_firmware.md).
 
 ---
 
 ## Repository layout
-Portunus
+
+```
+Portunus/
+├── server/                    Go server
+│   ├── cmd/portunus-server/   Entry point
+│   ├── api/portunus/v1/       Generated protobuf + gRPC Go stubs
+│   └── internal/
+│       ├── config/            Environment variable config
+│       ├── db/                SQLite open, migrate, write worker
+│       ├── httpapi/           HTTP handlers, middleware, admin API
+│       ├── grpcapi/           gRPC handlers, interceptors
+│       └── portunus/
+│           ├── service/       Business logic (heartbeat, access, admin)
+│           ├── store/         Store interfaces + SQLite implementations
+│           └── types/         Domain types
 │
-├── server/                 # Go server for APIs and Admin UI
+├── access_module/             ESP32-S3 firmware (ESP-IDF / C++)
+│   ├── main/                  Composition root
+│   ├── core/system_fsm/       Central state machine
+│   ├── components/
+│   │   ├── portunus_interfaces/   ICredentialReader, IAccessPoint, IFeedback
+│   │   ├── portunus_types/        Shared types (credential_t, events, errors)
+│   │   ├── portunus_config/       Kconfig-driven constants
+│   │   └── portunus_proto/        Nanopb-generated protobuf C stubs
+│   ├── drivers/
+│   │   ├── reader_mfrc522/    MFRC522 SPI driver → ICredentialReader
+│   │   ├── access_point_gpio/ Door strike + reed switch → IAccessPoint
+│   │   └── feedback_led/      LED patterns → IFeedback
+│   └── services/
+│       ├── event_bus/         FreeRTOS queue-backed pub/sub
+│       ├── heartbeat_service/ Periodic health telemetry
+│       ├── wifi_mgr/          WiFi STA with auto-reconnect
+│       ├── server_comm/       Event bus ↔ server bridge (HTTP/gRPC + protobuf)
+│       └── grpc_client/       HTTP/2+TLS client via nghttp2
 │
-└── door_access_module/     # ESP-IDF folder for ESP32 fromware
+├── proto/                     Protobuf definitions (single source of truth)
+│   ├── portunus/v1/portunus.proto
+│   └── nanopb/portunus.options
+│
+├── scripts/
+│   ├── generate_certs.sh      Private CA + server TLS cert generation
+│   ├── proto_gen.py           Protobuf code generation (Go + Nanopb)
+│   ├── check_fmt.py           Go format checker
+│   └── clean.py               Cross-platform artifact cleanup
+│
+├── docs/                      Project documentation
+├── Taskfile.yml               Build, test, lint, deploy task runner
+└── project_plan.md            Phased development plan and design rationale
+```
+
+---
+
+## Documentation
+
+| Document | Description |
+|---|---|
+| [Server setup](docs/setup_server.md) | Install dependencies, configure, run, and deploy the Go server |
+| [Firmware setup](docs/setup_firmware.md) | Install ESP-IDF, wire hardware, configure Kconfig, build and flash |
+| [CI/CD pipeline](docs/ci_cd_pipeline.md) | Local build/test/deploy pipeline, cross-compilation, deployment to Raspberry Pi |
+| [Architecture](docs/architecture.md) | System design, firmware layering, server structure, event bus, data flow |
+| [Database](docs/database.md) | SQLite schema, migrations, write model, useful queries |
+| [Security](docs/security.md) | Threat model, defense layers, TLS/HMAC details, hardening checklist |
+| [API reference](docs/api.md) | HTTP and gRPC endpoint documentation (device + admin) |
+| [Project plan](project_plan.md) | Phased roadmap, design decisions, hardware specs |
+
+---
+
+## Hardware
+
+| Component | Specification |
+|---|---|
+| Microcontroller | ESP32-S3 WROOM-1 (dual-core Xtensa LX7, WiFi, BLE) |
+| RFID reader | MFRC522 (SPI, 13.56 MHz, ISO 14443A) |
+| Door actuator | Electric door strike via relay/MOSFET |
+| Door sensor | Magnetic reed switch |
+| Status indicator | LED |
+| Server | Raspberry Pi 5 (or any Debian Linux host) |
+
+See [Firmware setup — Wiring reference](docs/setup_firmware.md#wiring-reference) for pin assignments and wiring diagrams.
+
+---
+
+## Task commands
+
+Common commands (run from the repo root):
+
+```bash
+task test:server          # Run all server tests
+task build:server         # Build server binary
+task build:server:arm64   # Cross-compile for Raspberry Pi
+task deploy:server        # Deploy to Pi via SSH
+task firmware:build       # Build ESP32 firmware
+task firmware:flash       # Flash to connected ESP32
+task firmware:menuconfig  # Open Kconfig UI
+task certs:generate       # Generate TLS certificates
+task ci:all               # Full validation suite
+task --list               # Show all available commands
+```
+
+---
+
+## License
+
+[GNU General Public License v3.0](LICENSE)

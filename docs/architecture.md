@@ -1,1 +1,381 @@
-TODO
+# Portunus — Architecture
+
+System architecture for the Portunus door access control system.
+
+**Last updated:** March 2026
+
+---
+
+## System overview
+
+Portunus is a LAN-first door access control system with two primary components: an ESP32-based **access module** at each door and a Go-based **server** on the local network.
+
+```
+                          Local Network
+                               │
+         ┌─────────────────────┼─────────────────────────┐
+         │                     │                         │
+    ┌────┴─────┐         ┌─────┴──────┐          ┌───────┴───────┐
+    │  Access  │  proto  │  Portunus  │   JSON   │   Admin CLI   │
+    │  Module  │◄───────►│   Server   │◄────────►│   / curl      │
+    │  (ESP32) │  + TLS  │   (Go)     │  + TLS   │               │
+    └────┬─────┘  + HMAC └─────┬──────┘  + Bearer└───────────────┘
+         │                     │
+    ┌────┴─────┐         ┌─────┴──────┐
+    │ Hardware │         │  SQLite DB │
+    │ RFID     │         │ modules    │
+    │ Strike   │         │ cards      │
+    │ Reed SW  │         │ heartbeats │
+    │ LED      │         │ access_log │
+    └──────────┘         └────────────┘
+```
+
+The access module reads RFID cards, sends access requests to the server, and actuates the door strike based on the server's grant/deny decision. The server manages device registration, card policies, and maintains an audit trail. All communication is encrypted (TLS) and authenticated (HMAC-SHA256).
+
+---
+
+## Access module (firmware)
+
+### Layered architecture
+
+The firmware follows a domain-driven layering strategy designed to separate hardware concerns from business logic. Dependencies flow strictly downward — no layer imports from a layer above it.
+
+```
+┌───────────────────────────────────────────────────────────────────┐
+│                        main.cpp                                   │
+│              Composition root — constructs concrete modules,      │
+│              injects them into the FSM, starts services           │
+└───────────────────────┬───────────────────────────────────────────┘
+                        │ constructs & injects
+                        ▼
+┌───────────────────────────────────────────────────────────────────┐
+│                      System FSM  (core/)                          │
+│  Top-level decision maker. Owns card polling, unlock timing,      │
+│  reed switch monitoring, feedback coordination.                   │
+│  Programs against interfaces only — never imports a driver.       │
+└──────┬──────────────┬──────────────┬──────────────┬───────────────┘
+       │              │              │              │
+       ▼              ▼              ▼              ▼
+  ICredential    IAccessPoint    IFeedback      event_bus
+    Reader                                     (services/)
+  (interfaces/)  (interfaces/)  (interfaces/)
+       │              │              │
+       ▼              ▼              ▼
+  ReaderMfrc522  AccessPointGpio  FeedbackLed
+  (drivers/)     (drivers/)       (drivers/)
+       │              │              │
+       ▼              ▼              ▼
+  mfrc522_hal    door_strike      led_hal
+  (SPI)          reed_switch      (GPIO)
+                 (GPIO)
+```
+
+### Layer responsibilities
+
+**Application (main.cpp)** — The composition root. Initializes platform services (NVS, WiFi, event bus), constructs concrete module instances, injects them into the FSM as interface pointers, and starts independent services. After startup, `app_main` returns and FreeRTOS tasks take over.
+
+**Core (system_fsm/)** — The central state machine. Transitions through `BOOT → INITIALIZING → OPERATIONAL → ERROR`. In the operational state it runs two FreeRTOS tasks: the FSM main loop (event processing, reed switch polling, unlock timer management) and a card polling sub-task. The FSM programs against `ICredentialReader`, `IAccessPoint`, and `IFeedback` — it has no knowledge of SPI registers, GPIO pins, or HTTP endpoints.
+
+**Interfaces (portunus_interfaces/)** — Pure virtual C++ classes defining the contracts between the FSM and hardware. `ICredentialReader` exposes `read()` and `halt()`. `IAccessPoint` exposes `unlock()`, `lock()`, and `is_open()`. `IFeedback` exposes `indicate(feedback_type_t)`. Any pointer may be `nullptr` to indicate absent hardware — the FSM sets the corresponding capability flag to false and adapts.
+
+**Drivers** — Concrete implementations of the interfaces. Each driver wraps a hardware-specific HAL (SPI for MFRC522, GPIO for door strike/reed switch/LED). The driver layer is the only code that calls ESP-IDF hardware APIs directly. Swapping hardware (e.g., MFRC522 → PN532, electric strike → magnetic lock) means writing a new driver that implements the same interface — no FSM changes required.
+
+**Services** — Infrastructure components with no hardware knowledge. The event bus provides inter-component messaging. The heartbeat service emits periodic health events. The WiFi manager handles connection and reconnection. The server comm component bridges the event bus to the Portunus server over HTTP or gRPC.
+
+**Common (portunus_types/, portunus_config/)** — Dependency-free shared definitions. Type definitions (`credential_t`, event types, error codes, system states) and Kconfig-driven configuration constants (pin assignments, timing parameters, network settings, security settings). Every other layer can import from common; common imports from nothing.
+
+### Event bus
+
+All inter-component communication flows through a FreeRTOS queue-backed publish/subscribe event bus. This is the messaging backbone that decouples the FSM from services and from server communication.
+
+The event bus uses a single dispatcher queue (MVP topology). A dedicated FreeRTOS task dequeues events and invokes matching subscriber callbacks. Callbacks execute on the dispatcher task's stack, so they must be short and non-blocking. Components that need to do blocking work (like HTTP I/O) copy the event into their own internal queue and process it on their own task.
+
+Event types are statically defined in `event_types.h`, grouped by subsystem:
+
+| Group | Events | Published by | Consumed by |
+|---|---|---|---|
+| System | `BOOT_COMPLETE` | FSM | — |
+| Credential | `CREDENTIAL_READ`, `CREDENTIAL_READ_ERROR` | Card poll task | FSM, server_comm |
+| Heartbeat | `HEARTBEAT` | Heartbeat service | server_comm |
+| Access | `ACCESS_GRANTED`, `ACCESS_DENIED` | server_comm | FSM |
+| Door state | `DOOR_OPENED`, `DOOR_CLOSED` | FSM | — |
+| FSM | `UNLOCK_TIMEOUT` | FSM | — |
+
+Events are fixed-size structs (`portunus_event_t`) copied into the queue by value — no heap allocation. The event envelope contains an ID and a union of typed payloads.
+
+### Access request flow (card tap to door unlock)
+
+```
+Card in field
+     │
+     ▼
+[card_poll task]  mfrc522 → read() → credential_t
+     │
+     ▼ EVENT_CREDENTIAL_READ (event bus)
+     │
+     ├──► [FSM]          indicate(CARD_READ) → LED solid on
+     │
+     └──► [server_comm]  encode protobuf → POST /v1/access_request
+                              │
+                              ▼
+                         [Portunus Server]  → Decide() → granted/denied
+                              │
+                              ▼
+                         decode protobuf response
+                              │
+                              ▼ EVENT_ACCESS_GRANTED or EVENT_ACCESS_DENIED (event bus)
+                              │
+                              └──► [FSM]
+                                     │
+                                     ├─ granted: unlock() → start hold timer → indicate(ACCESS_GRANTED)
+                                     │              │
+                                     │              └─ timer expires or door opens+closes → lock()
+                                     │
+                                     └─ denied:  indicate(ACCESS_DENIED)
+```
+
+If the network is unavailable when a card is tapped, `server_comm` publishes `EVENT_ACCESS_DENIED` with reason `no_network` so the FSM always clears the CARD_READ feedback and shows an error indication.
+
+### FreeRTOS task map
+
+| Task | Priority | Stack | Responsibility |
+|---|---|---|---|
+| `evt_dispatch` | 5 | 4 KB | Event bus dispatcher — invokes subscriber callbacks |
+| `fsm` | 5 | 4 KB | FSM main loop — event processing, reed switch polling, unlock timer |
+| `card_poll` | 4 | 4 KB | MFRC522 polling — SPI reads, publishes credential events |
+| `led_pattern` | 3 | 2 KB | LED blink patterns — non-blocking, preemptive |
+| `heartbeat` | 3 | 2 KB | Periodic heartbeat event generation |
+| `server_comm` | 2 | 6–10 KB | HTTP/gRPC I/O — blocking network calls on a dedicated stack |
+
+The `server_comm` task uses a larger stack (10 KB) when gRPC is enabled to accommodate the nghttp2 HTTP/2 session state.
+
+---
+
+## Server
+
+### Layered architecture
+
+The server follows a conventional Go layered architecture: transport → service → store.
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                         cmd/main.go                              │
+│  Composition root — wires stores, services, transports, starts   │
+│  listeners, handles graceful shutdown                            │
+└───────┬───────────────────────────────┬──────────────────────────┘
+        │                               │
+        ▼                               ▼
+  ┌────────────┐                  ┌────────────┐
+  │  httpapi   │                  │  grpcapi   │
+  │            │                  │            │
+  │ POST /v1/* │                  │ gRPC RPCs  │
+  │ /admin/v1/*│                  │ (protobuf) │
+  │ (JSON +    │                  │            │
+  │  protobuf) │                  │            │
+  └─────┬──────┘                  └──────┬─────┘
+        │  middleware:                   │  interceptors:
+        │  logging, HMAC,                │  logging, HMAC
+        │  admin Bearer auth             │
+        │                                │
+        └──────────┬─────────────────────┘
+                   │ domain types
+                   ▼
+        ┌─────────────────────┐
+        │   Service layer     │
+        │                     │
+        │ HeartbeatService    │    records telemetry, checks device registry
+        │ AccessService       │    evaluates card against policy, records audit event
+        │ AdminService        │    CRUD for modules, cards, doors
+        │ DeviceRegistry      │    IsKnown() / NoteSeen() for module identity
+        │ HeartbeatPruner     │    background goroutine, retention-based cleanup
+        └─────────┬───────────┘
+                  │ store interfaces
+                  ▼
+        ┌─────────────────────┐
+        │   Store layer       │
+        │                     │
+        │ HeartbeatStore      │    UpsertHeartbeat, PruneOlderThan
+        │ DeviceStore         │    IsKnown, MarkSeen
+        │ AccessEventStore    │    RecordEvent (append-only audit log)
+        │ CardStore           │    RegisterCard, IsCardAllowed, SetCardStatus
+        │ ModuleAdminStore    │    CommissionModule, RevokeModule, door CRUD
+        └─────────┬───────────┘
+                  │ sql.DB
+                  ▼
+        ┌─────────────────────┐
+        │   SQLite (WAL mode) │
+        │   via modernc.org   │
+        │   /sqlite (pure Go) │
+        └─────────────────────┘
+```
+
+### Transport layer
+
+The server exposes two concurrent transport interfaces, both delegating to the same service layer:
+
+**HTTP (httpapi/)** — Handles device endpoints (`POST /v1/heartbeat`, `POST /v1/access_request`) and admin endpoints (`/admin/v1/*`). Device endpoints accept both JSON and protobuf (`application/x-protobuf`) request bodies. Admin endpoints are JSON-only. The middleware chain applies logging → admin Bearer auth → HMAC signature verification → routing.
+
+**gRPC (grpcapi/)** — Implements `PortunusService` with `SendHeartbeat` and `RequestAccess` RPCs. Runs on a separate port and co-exists with the HTTP server. Uses interceptors for logging and HMAC verification. Enabled by setting `PORTUNUS_GRPC_ADDR`.
+
+Both transports convert protobuf/JSON requests into domain types (`types.HeartbeatRequest`, `types.AccessRequest`), call the same service methods, and convert the response back. This means the business logic is transport-agnostic and tested without HTTP or gRPC in the loop.
+
+### Service layer
+
+**HeartbeatService** — Validates the module ID, checks the device registry, upserts the heartbeat record, and returns a response indicating whether the module is known. Every heartbeat updates `last_seen_at` on the module record regardless of known status (so the server can track unknown devices trying to connect).
+
+**AccessService** — The access decision engine. Validates module ID and card ID, checks module registration via `DeviceRegistry.IsKnown()`, then evaluates the card against the active policy. The policy lookup sequence is: (1) `AllowAll` flag (dev/testing bypass), (2) `CardStore.IsCardAllowed()` with SHA-256 hash lookup (production path), (3) legacy `AllowedCardIDs` env-var map (fallback). Every decision — granted or denied — is recorded in the access event audit log.
+
+**AdminService** — CRUD operations for modules (commission, revoke, delete), cards (register, set status, delete), and doors (register, delete). Card IDs are SHA-256 hashed before storage — the raw card UID is never persisted.
+
+**DeviceRegistry** — Thin wrapper around `DeviceStore` that defines the "known" predicate: a module is known if it is commissioned, enabled, and not revoked. Unknown modules still get their heartbeats and access attempts recorded (for observability), but access is always denied.
+
+**HeartbeatPruner** — Background goroutine that periodically deletes heartbeat records older than the configured retention period. Runs on a configurable interval (default 6 hours). Disabled when retention is set to 0.
+
+### Store layer
+
+All store interfaces are defined in `store/` as Go interfaces. The production implementation (`store/sqlite/`) uses the serialized write worker for mutations and direct reads for queries.
+
+**Write serialization:** All write operations go through a `db.Worker` — a single goroutine that processes transactions sequentially via a buffered channel. This eliminates SQLite's "database is locked" errors under concurrent access without requiring external locking. The worker executes each write inside a transaction; callers block until their transaction commits or the context expires.
+
+**Module auto-creation:** When a heartbeat or access request arrives from an unregistered module ID, `ensureModule()` creates a row with `enabled=0` and no `commissioned_at_ms`. This satisfies foreign key constraints for heartbeat and access event records while keeping the module in an "unknown" state. Only an explicit admin action (or dev seeding) promotes a module to commissioned.
+
+---
+
+## Communication protocol
+
+### Protobuf contract
+
+A single `.proto` file (`proto/portunus/v1/portunus.proto`) is the source of truth for the wire format between the server and access modules. Both sides generate code from this file:
+
+| Side | Generator | Output |
+|---|---|---|
+| Server (Go) | `protoc` + `protoc-gen-go` / `protoc-gen-go-grpc` | `server/api/portunus/v1/*.pb.go` |
+| ESP32 (C) | `protoc` + Nanopb generator | `access_module/components/portunus_proto/portunus/v1/*.pb.c/.h` |
+
+Generated files are committed to the repo. Regeneration is only needed when the `.proto` file changes. A CI check (`task proto:check`) verifies generated code hasn't drifted from the committed version.
+
+Compatibility rules: only append new fields (never reorder or reuse a field number), mark removed fields as `reserved`, keep optional semantics where the ESP32 may not have the data.
+
+### Dual transport
+
+The access module supports two transport modes, selected at build time via Kconfig:
+
+**HTTP/1.1 + protobuf (default)** — The module POSTs Nanopb-encoded protobuf bodies with `Content-Type: application/x-protobuf` and an HMAC signature header. The server's HTTP handler detects the content type and decodes protobuf instead of JSON.
+
+**gRPC over HTTP/2+TLS (`CONFIG_PORTUNUS_USE_GRPC=y`)** — The module uses a custom gRPC client built on `nghttp2` + `esp-tls`. It speaks the gRPC wire protocol (5-byte length-prefixed protobuf in HTTP/2 DATA frames) directly, without a full gRPC library. HMAC signatures are attached as custom gRPC metadata (`x-portunus-sig`).
+
+Both transports encode identical protobuf messages. The server can run both listeners simultaneously — HTTP for legacy modules and admin API, gRPC for modules with gRPC firmware.
+
+### Message types
+
+| RPC | Request | Response | Purpose |
+|---|---|---|---|
+| `SendHeartbeat` | `HeartbeatRequest` (module_id, firmware_version, uptime, rssi, ip, free_heap, sequence) | `HeartbeatResponse` (ok, known, module_id, server_time) | Periodic health telemetry |
+| `RequestAccess` | `AccessRequest` (module_id, card_id, door_closed, requested_at) | `AccessResponse` (ok, known, granted, reason, module_id, server_time) | Card tap → access decision |
+
+---
+
+## Data model
+
+### Entities
+
+```
+┌──────────┐       ┌──────────────┐       ┌──────────────────┐
+│  doors   │       │   modules    │       │ module_heartbeats│
+│          │1─────*│              │1─────*│                  │
+│ door_id  │       │ module_id    │       │ heartbeat_id     │
+│ name     │       │ door_id (FK) │       │ module_id (FK)   │
+│ location │       │ display_name │       │ received_at_ms   │
+│          │       │ enabled      │       │ seq, uptime,     │
+│          │       │ commissioned │       │ fw_version,      │
+│          │       │ revoked      │       │ rssi, ip,        │
+│          │       │ last_seen    │       │ free_heap        │
+└──────────┘       │ last_ip      │       └──────────────────┘
+                   │ last_fw_ver  │
+                   │ last_rssi    │       ┌──────────────────┐
+                   └──────┬───────┘       │  access_events   │
+                          │               │                  │
+                          │         *────1│ access_event_id  │
+                          └───────────────│ module_id (FK)   │
+                                          │ door_id (FK)     │
+                   ┌──────────┐           │ card_id_hash(FK) │
+                   │  cards   │     *────1│ decision_granted │
+                   │          │───────────│ decision_reason  │
+                   │ card_hash│           │ decided_at_ms    │
+                   │ tag      │           └──────────────────┘
+                   │ status   │
+                   └──────────┘
+```
+
+**doors** — Physical door locations. A door can have zero or more modules installed.
+
+**modules** — Registered access module devices. Each module is optionally assigned to a door. A module's lifecycle is: auto-created (unknown, `enabled=0`) → commissioned (via admin API, `enabled=1`, `commissioned_at_ms` set) → optionally revoked (`revoked_at_ms` set). A module is "known" only when commissioned, enabled, and not revoked.
+
+**module_heartbeats** — Append-only telemetry log. Each row records a single heartbeat with the module's reported health data. Subject to retention-based pruning.
+
+**cards** — RFID card registrations. Card IDs are stored as SHA-256 hashes (32 bytes) — the raw card UID is never persisted. Each card has a status (`active`, `disabled`, `lost`) and an optional human-readable tag.
+
+**access_events** — Append-only audit log. Every access decision — granted or denied — is recorded with the module ID, card hash, decision reason, and timestamps. This is the "who/what/when" trail.
+
+### SQLite configuration
+
+The database uses WAL (Write-Ahead Logging) journal mode for concurrent read/write access, `synchronous=NORMAL` for a performance/safety balance, and a 5-second busy timeout. Foreign keys are enforced. Indexes cover the primary query patterns: module lookups by last_seen, heartbeat queries by module+time, access event queries by module+time and card+time, and retention-based pruning by timestamp.
+
+Schema migrations are embedded in the server binary and applied automatically on startup inside transactions. Each migration is tracked in a `schema_migrations` table. Migrations are forward-only (add, never drop or rename) so that a rollback to an older server binary remains compatible with a newer schema.
+
+---
+
+## Security model
+
+### Transport encryption (TLS)
+
+All communication between access modules and the server is encrypted using TLS. The ESP32 firmware uses ESP-IDF's mbedTLS stack with one of three certificate validation modes:
+
+| Mode | Kconfig | Use case |
+|---|---|---|
+| Custom CA pinning | `PORTUNUS_TLS_USE_CUSTOM_CA=y` | LAN deployments with a private CA (recommended) |
+| Mozilla CA bundle | `PORTUNUS_TLS_USE_CUSTOM_CA=n` | Servers with publicly-trusted certs (Let's Encrypt, etc.) |
+| Skip verification | `PORTUNUS_TLS_SKIP_VERIFY=y` | Development only — disables all cert validation |
+
+For LAN deployments, the `scripts/generate_certs.sh` script creates a private CA and server certificate. The CA certificate is embedded in the firmware binary for certificate pinning. The server certificate includes the server's IP address as a Subject Alternative Name.
+
+### Message authentication (HMAC-SHA256)
+
+TLS protects the transport; HMAC authenticates each message. Every outgoing request from the access module includes an `X-Portunus-Sig` header containing `HMAC-SHA256(pre_shared_key, request_body_bytes)` hex-encoded. The server rejects requests with missing or invalid signatures with HTTP 401 or gRPC `UNAUTHENTICATED`.
+
+The HMAC is computed over the raw protobuf-encoded body (not the HTTP headers or URL). On the server side, the request body is re-marshalled from the parsed protobuf message and the expected HMAC is computed for comparison using constant-time comparison to prevent timing attacks.
+
+### Card ID protection
+
+Raw RFID card UIDs are never stored on the server. When a card is registered via the admin API, the raw UID is SHA-256 hashed before insertion into the `cards` table. When an access request arrives, the server hashes the incoming card ID and compares against stored hashes. This means a database breach does not directly expose card UIDs.
+
+### Admin API authentication
+
+Admin endpoints (`/admin/v1/*`) are protected by Bearer token authentication. Every request must include an `Authorization: Bearer <key>` header matching the server's `PORTUNUS_ADMIN_API_KEY`. Admin requests bypass HMAC verification (they originate from curl or browser, not from ESP32 firmware).
+
+### Firmware secrets
+
+The HMAC pre-shared key and WiFi credentials are stored in the firmware's flash memory via Kconfig. For the current phase, this is acceptable for the target threat model (makerspace/workshop). A planned enhancement will move secrets to an encrypted NVS partition, separating identity material from the firmware binary.
+
+---
+
+## Key design decisions
+
+| Decision | Rationale |
+|---|---|
+| ESP-IDF over Arduino | Full access to FreeRTOS SMP, hardware security APIs (flash encryption, secure boot), and the component build system. |
+| Module abstraction (interfaces) | Enables hardware substitution (MFRC522 → PN532, strike → mag lock) without changing FSM logic. Enables unit testing with mock implementations. |
+| FreeRTOS event bus | Natural fit for ESP-IDF's SMP FreeRTOS on the dual-core ESP32-S3. Decouples components without shared mutable state. |
+| Single dispatcher queue (MVP) | Simpler than per-subscriber queues. Sufficient for the current subscriber count. Documented as a scaling decision to revisit. |
+| `nullptr` for absent hardware | The FSM adapts to missing hardware via capability flags rather than conditional compilation. Supports bench testing and incremental hardware integration. |
+| Go for server | Strong concurrency model, single-binary deployment, excellent cross-compilation (arm64 for Pi from x86_64 dev machine with no extra toolchains). |
+| Pure-Go SQLite (modernc.org) | No CGo dependency means trivial cross-compilation and no C toolchain required on the deployment target. |
+| Serialized write worker | Eliminates SQLite's "database is locked" without requiring WAL-only or connection pooling complexity. Single goroutine processes all writes sequentially. |
+| Protobuf as wire format | Strongly-typed contract, compact binary encoding (important for ESP32 memory), code generation for both Go and C (Nanopb). |
+| Dual transport (HTTP + gRPC) | HTTP/1.1 is simpler to debug and works with curl. gRPC provides bidirectional streaming for future features. Both share the same protobuf messages. |
+| HMAC over request body | Application-level authentication independent of TLS. Verifies that the message came from an enrolled device, not just any TLS client. |
+| SHA-256 card hashing | Protects card UIDs at rest. A database breach does not expose raw card IDs that could be cloned. |
+| Forward-only migrations | Server binary rollbacks remain compatible with newer database schemas. Older code ignores columns and tables it doesn't know about. |
+| Server-side access decisions | The ESP32 never decides access locally — it always asks the server. This centralizes policy, simplifies the firmware, and ensures the audit trail is complete. Offline behavior is a planned future enhancement. |
+| WiFi as service, not module | WiFi is platform-intrinsic on ESP32. A service is sufficient unless alternative transports (Ethernet, cellular) are introduced, at which point it could be promoted to a full module. |
+| Kconfig for all configuration | Dev/prod differences are managed through sdkconfig overlays. No `#define` scattered across source files. All parameters are tunable via `menuconfig`. |
