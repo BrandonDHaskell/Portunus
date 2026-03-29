@@ -1,243 +1,435 @@
 # Portunus — Database
 
-SQLite schema, migration system, write model, and operational reference for the Portunus server.
+Current-state reference for the Portunus server database: schema, migrations, write behavior, retention, and practical operational notes.
 
-**Last updated:** March 2026
+**Last updated:** March 29, 2026
 
 ---
 
 ## Overview
 
-The Portunus server uses SQLite as its sole data store, accessed through a pure-Go driver (`modernc.org/sqlite`) that requires no CGo or system SQLite library. The database file lives at the path specified by `PORTUNUS_DB_PATH` (default `./data/portunus.db`). The server creates the file, parent directory, and all tables automatically on first startup.
+The Portunus server currently uses **SQLite** as its only persistent datastore. The Go server opens the database through the pure-Go `modernc.org/sqlite` driver, creates the parent directory if needed, applies embedded migrations on startup, and in `dev` mode seeds a starter door plus at least one commissioned module.
 
-Connection pragmas applied on every open: `foreign_keys=ON`, `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`. The connection pool is fixed at one connection (`MaxOpenConns=1`, `MaxIdleConns=1`) for SQLite safety.
+Default database path:
+
+- `./data/portunus.db`
+
+The following PRAGMAs are applied through the connection DSN every time the database is opened:
+
+- `foreign_keys=ON`
+- `journal_mode=WAL`
+- `synchronous=NORMAL`
+- `busy_timeout=5000`
+
+The connection pool is intentionally constrained to a **single SQLite connection**:
+
+- `MaxOpenConns=1`
+- `MaxIdleConns=1`
+- `ConnMaxLifetime=0`
+
+This matches the current server design and reduces lock contention in a single-process deployment.
+
+---
+
+## Current database responsibilities
+
+Today the database is responsible for five main concerns:
+
+1. **Inventory of doors and modules**
+2. **Current module snapshot data** such as last seen time, last firmware version, and last RSSI
+3. **Append-only heartbeat history**
+4. **Registered card storage** using SHA-256 card hashes rather than raw card IDs
+5. **Append-only access audit events** for grant and deny decisions
+
+It is also used by the admin API for module, door, and card management.
 
 ---
 
 ## Schema reference
 
-### doors
+### `doors`
 
-Physical door locations. A door can have zero or more modules installed at it.
+Represents physical door locations. A door can exist even if no module is assigned to it yet.
 
-| Column | Type | Constraints | Description |
+| Column | Type | Constraints | Notes |
 |---|---|---|---|
-| `door_id` | TEXT | PRIMARY KEY | Unique identifier (e.g. `door_main`, `workshop_east`) |
-| `name` | TEXT | NOT NULL | Human-readable name |
-| `location` | TEXT | | Optional location description |
+| `door_id` | TEXT | PRIMARY KEY | Stable door identifier such as `door_main` |
+| `name` | TEXT | NOT NULL | Human-readable door name |
+| `location` | TEXT | nullable | Optional freeform location text |
 | `created_at_ms` | INTEGER | NOT NULL | Unix epoch milliseconds |
 | `updated_at_ms` | INTEGER | NOT NULL | Unix epoch milliseconds |
 
-### modules
+---
 
-Registered access module devices. Each module is optionally assigned to a door.
+### `modules`
 
-| Column | Type | Constraints | Description |
+Represents access modules known to the server.
+
+| Column | Type | Constraints | Notes |
 |---|---|---|---|
-| `module_id` | TEXT | PRIMARY KEY | Unique identifier matching the firmware's `PORTUNUS_MODULE_ID` |
-| `door_id` | TEXT | FK → doors, ON DELETE SET NULL | Door this module is installed at (nullable) |
-| `display_name` | TEXT | | Human-readable label |
-| `enabled` | INTEGER | NOT NULL, CHECK (0 or 1) | Whether the module is active |
-| `commissioned_at_ms` | INTEGER | | When the module was commissioned (nullable = not yet commissioned) |
-| `revoked_at_ms` | INTEGER | | When the module was revoked (nullable = not revoked) |
-| `last_seen_at_ms` | INTEGER | | Timestamp of most recent heartbeat or access request |
-| `last_ip` | TEXT | | Last reported IP address |
-| `last_fw_version` | TEXT | | Last reported firmware version string |
-| `last_wifi_rssi` | INTEGER | | Last reported WiFi RSSI in dBm |
-| `last_strike_unlocked` | INTEGER | CHECK (0 or 1) | Last reported strike state |
+| `module_id` | TEXT | PRIMARY KEY | Must match the device module ID |
+| `door_id` | TEXT | FK → `doors(door_id)` ON DELETE SET NULL | Optional door assignment |
+| `display_name` | TEXT | nullable | Admin-facing label |
+| `enabled` | INTEGER | NOT NULL, default `1`, CHECK 0/1 | Used as part of the “known module” check |
+| `commissioned_at_ms` | INTEGER | nullable | Null means not commissioned |
+| `revoked_at_ms` | INTEGER | nullable | Null means not revoked |
+| `last_seen_at_ms` | INTEGER | nullable | Most recent module activity recorded by the server |
+| `last_ip` | TEXT | nullable | Last reported IP string |
+| `last_fw_version` | TEXT | nullable | Last reported firmware version |
+| `last_wifi_rssi` | INTEGER | nullable | Last reported RSSI |
+| `last_strike_unlocked` | INTEGER | nullable, CHECK 0/1 | **Present in schema but not currently populated by the active write path** |
 | `created_at_ms` | INTEGER | NOT NULL | Unix epoch milliseconds |
 | `updated_at_ms` | INTEGER | NOT NULL | Unix epoch milliseconds |
 
-**Module lifecycle:** A module row can be created in two ways. The admin API (`POST /admin/v1/modules`) creates a commissioned, enabled module. Alternatively, when an unknown module sends a heartbeat or access request, `ensureModule()` auto-creates a row with `enabled=0` and no `commissioned_at_ms` — this satisfies foreign key constraints while keeping the module in an "unknown" state. Only an admin action (or dev seeding) promotes it to commissioned.
+#### Current module lifecycle behavior
 
-**"Known" predicate:** A module is considered "known" by the device registry when `enabled=1` AND `commissioned_at_ms` is not null AND `revoked_at_ms` is null. Unknown modules have their heartbeats and access attempts recorded, but access is always denied.
+The current code uses two module creation paths:
 
-### module_heartbeats
+- **Admin commissioning path**: `AdminService.RegisterModule()` calls `CommissionModule()`, which inserts or promotes a module to `enabled=1` and sets `commissioned_at_ms`.
+- **Auto-create path for unknown modules**: heartbeat and device “seen” updates call `ensureModule()`, which inserts a minimal row with `enabled=0` and no `commissioned_at_ms` if the module does not already exist.
 
-Append-only telemetry log. Each row records one heartbeat from a module. Subject to retention-based pruning.
+This means unknown modules are still represented in the database so that heartbeat rows and access audit rows can satisfy foreign key constraints.
 
-| Column | Type | Constraints | Description |
+#### Current “known module” rule
+
+`DeviceStore.IsKnown()` currently treats a module as known only when all of the following are true:
+
+- `enabled = 1`
+- `commissioned_at_ms IS NOT NULL`
+- `revoked_at_ms IS NULL`
+
+That is the rule used by the device registry and therefore the access decision path.
+
+---
+
+### `module_heartbeats`
+
+Append-only heartbeat history from access modules.
+
+| Column | Type | Constraints | Notes |
 |---|---|---|---|
 | `heartbeat_id` | INTEGER | PRIMARY KEY AUTOINCREMENT | Row ID |
-| `module_id` | TEXT | NOT NULL, FK → modules, ON DELETE CASCADE | Reporting module |
-| `received_at_ms` | INTEGER | NOT NULL | Server-side receive timestamp |
-| `seq` | INTEGER | | Module's monotonic heartbeat counter (resets on reboot) |
-| `uptime_ms` | INTEGER | | Module uptime in milliseconds |
-| `fw_version` | TEXT | | Firmware version string |
-| `wifi_rssi` | INTEGER | | WiFi signal strength in dBm |
-| `strike_unlocked` | INTEGER | CHECK (0 or 1) | Door strike state at time of heartbeat |
-| `ip` | TEXT | | Module's IP address |
-| `free_heap_bytes` | INTEGER | | Free heap memory in bytes (added in migration 0003) |
+| `module_id` | TEXT | NOT NULL, FK → `modules(module_id)` ON DELETE CASCADE | Reporting module |
+| `received_at_ms` | INTEGER | NOT NULL | Server receive time |
+| `seq` | INTEGER | nullable | Device sequence number when provided |
+| `uptime_ms` | INTEGER | nullable | Stored in milliseconds; derived from firmware `uptime_s` |
+| `fw_version` | TEXT | nullable | Firmware version string |
+| `wifi_rssi` | INTEGER | nullable | Reported RSSI |
+| `strike_unlocked` | INTEGER | nullable, CHECK 0/1 | **Present in schema but not currently written by `HeartbeatStore.UpsertHeartbeat()`** |
+| `ip` | TEXT | nullable | Reported IP string |
+| `free_heap_bytes` | INTEGER | nullable | Added in migration `0003` |
 
-When a heartbeat is recorded, the `modules` row is also updated with `last_seen_at_ms`, `last_ip`, `last_fw_version`, and `last_wifi_rssi` as a snapshot for fast status queries without scanning the heartbeat table.
+#### What the current heartbeat path actually stores
 
-### cards
+`HeartbeatStore.UpsertHeartbeat()` currently writes:
 
-RFID card registrations. Card IDs are stored as SHA-256 hashes — the raw card UID is never persisted.
+- `module_id`
+- `received_at_ms`
+- `seq` when non-zero
+- `uptime_ms` when non-zero
+- `fw_version`
+- `wifi_rssi`
+- `ip`
+- `free_heap_bytes` when non-zero
 
-| Column | Type | Constraints | Description |
+It also updates the module snapshot in `modules` with:
+
+- `last_seen_at_ms`
+- `last_ip`
+- `last_fw_version`
+- `last_wifi_rssi`
+- `updated_at_ms`
+
+#### Important current limitation
+
+The current heartbeat request type includes fields such as `DoorClosed`, and the schema includes strike-related columns, but the active SQLite heartbeat write path **does not persist door state or strike state today**.
+
+So the schema is slightly ahead of the data actually being written.
+
+---
+
+### `cards`
+
+Stores registered RFID cards as SHA-256 hashes rather than raw card IDs.
+
+| Column | Type | Constraints | Notes |
 |---|---|---|---|
-| `card_id_hash` | BLOB | PRIMARY KEY, CHECK (length = 32) | SHA-256 hash of the raw card UID |
-| `card_tag` | TEXT | | Human-readable label (e.g. "Brandon's key") |
-| `status` | TEXT | NOT NULL, DEFAULT 'active', CHECK (active/disabled/lost) | Card status |
-| `created_at_ms` | INTEGER | NOT NULL | When the card was registered |
-| `updated_at_ms` | INTEGER | NOT NULL | Last status change |
-| `last_seen_at_ms` | INTEGER | | Last time this card was used for an access request |
+| `card_id_hash` | BLOB | PRIMARY KEY, CHECK length = 32 | SHA-256 hash bytes |
+| `card_tag` | TEXT | nullable | Human-readable label |
+| `status` | TEXT | NOT NULL, default `active`, CHECK in `active`, `disabled`, `lost` | Current card state |
+| `created_at_ms` | INTEGER | NOT NULL | Registration time |
+| `updated_at_ms` | INTEGER | NOT NULL | Last modification time |
+| `last_seen_at_ms` | INTEGER | nullable | Updated when an active card is successfully checked |
 
-**Status values:** `active` (access allowed), `disabled` (temporarily blocked), `lost` (permanently blocked, retained for audit trail). Only `active` cards pass the `IsCardAllowed()` check.
+#### Current card behavior
 
-### access_events
+- Admin card registration hashes the supplied card ID with SHA-256 before insertion.
+- `IsCardAllowed()` looks up the hash and returns `true` only when `status = 'active'`.
+- When an active card is checked, the current implementation updates `last_seen_at_ms` and `updated_at_ms` as a side effect.
 
-Append-only audit log. Every access decision — granted or denied — is recorded here. This is the "who/what/when" trail.
+#### Current status semantics
 
-| Column | Type | Constraints | Description |
+- `active`: eligible to grant access
+- `disabled`: present but denied
+- `lost`: present but denied
+
+---
+
+### `access_events`
+
+Append-only audit log of access decisions.
+
+| Column | Type | Constraints | Notes |
 |---|---|---|---|
 | `access_event_id` | INTEGER | PRIMARY KEY AUTOINCREMENT | Row ID |
-| `module_id` | TEXT | NOT NULL, FK → modules, ON DELETE CASCADE | Module that reported the card tap |
-| `door_id` | TEXT | FK → doors, ON DELETE SET NULL | Door the module was assigned to at the time |
-| `received_at_ms` | INTEGER | NOT NULL | Server-side receive timestamp |
-| `requested_at_ms` | INTEGER | | Optional device-reported timestamp |
-| `door_closed` | INTEGER | CHECK (0 or 1) | Reed switch state at time of card tap |
-| `card_id_hash` | BLOB | FK → cards, ON DELETE SET NULL, CHECK (null or length = 32) | SHA-256 hash of the card UID |
-| `decision_granted` | INTEGER | NOT NULL, CHECK (0 or 1) | 1 = access granted, 0 = denied |
-| `decision_reason` | TEXT | NOT NULL | Why the decision was made (e.g. `card_allowed`, `card_not_allowed`, `unknown_module`) |
-| `policy_version` | INTEGER | | Reserved for future policy versioning |
-| `decided_at_ms` | INTEGER | NOT NULL | When the server made the decision |
+| `module_id` | TEXT | NOT NULL, FK → `modules(module_id)` ON DELETE CASCADE | Reporting module |
+| `door_id` | TEXT | FK → `doors(door_id)` ON DELETE SET NULL | Resolved from the module’s current door assignment at write time |
+| `received_at_ms` | INTEGER | NOT NULL | Server-side event time |
+| `requested_at_ms` | INTEGER | nullable | Optional device-reported timestamp when parseable |
+| `door_closed` | INTEGER | nullable, CHECK 0/1 | Door state from the access request when provided |
+| `card_id_hash` | BLOB | nullable, FK → `cards(card_id_hash)` ON DELETE SET NULL, CHECK null or length=32 | SHA-256 of the card ID used in the request |
+| `decision_granted` | INTEGER | NOT NULL, CHECK 0/1 | Grant/deny flag |
+| `decision_reason` | TEXT | NOT NULL | Reason string from the decision path |
+| `policy_version` | INTEGER | nullable | Present in schema but not currently written by `AccessEventStore` |
+| `decided_at_ms` | INTEGER | NOT NULL | Server-side decision time |
 
-**Foreign key behavior:** If a module is deleted, its heartbeats and access events are cascade-deleted. If a door is deleted, the `door_id` in modules and access events is set to null (the records survive). If a card is deleted, the `card_id_hash` in access events is set to null (the decision record survives).
+#### What the current access path records
 
-### schema_migrations
+`AccessService.recordEvent()` currently records:
 
-Tracks which migrations have been applied. Managed by the migration system, not by application code.
+- `module_id`
+- `received_at_ms`
+- `requested_at_ms` when the device timestamp parses successfully
+- `door_closed` when provided
+- SHA-256 `card_id_hash`
+- `decision_granted`
+- `decision_reason`
+- `decided_at_ms`
 
-| Column | Type | Constraints | Description |
+`AccessEventStore.RecordEvent()` resolves `door_id` from the module’s current assignment in the `modules` table at insert time.
+
+#### Current decision reasons seen in code
+
+Examples of reason strings currently emitted by the service layer include:
+
+- `unknown_module`
+- `allow_all`
+- `card_allowed`
+- `card_not_allowed`
+- `card_lookup_error`
+
+---
+
+### `schema_migrations`
+
+Tracks applied schema migrations.
+
+| Column | Type | Constraints | Notes |
 |---|---|---|---|
-| `version` | INTEGER | PRIMARY KEY | Migration version number |
-| `applied_at_ms` | INTEGER | NOT NULL | When the migration was applied |
+| `version` | INTEGER | PRIMARY KEY | Migration version |
+| `applied_at_ms` | INTEGER | NOT NULL | Application time in Unix epoch milliseconds |
+
+This table is created by `db.Migrate()` before versioned migrations are applied.
+
+---
+
+## Foreign key behavior
+
+Current foreign key behavior in the schema:
+
+- Deleting a `door` sets referencing `modules.door_id` to `NULL`
+- Deleting a `door` sets referencing `access_events.door_id` to `NULL`
+- Deleting a `module` cascades to `module_heartbeats`
+- Deleting a `module` cascades to `access_events`
+- Deleting a `card` sets `access_events.card_id_hash` to `NULL`
+
+This preserves audit history where practical while still allowing entities to be removed.
 
 ---
 
 ## Indexes
 
-Created in migration `0002_indexes.sql`. These cover the primary query and pruning patterns.
+The following indexes are created in migration `0002_indexes.sql`.
 
-| Index | Table | Columns | Purpose |
+| Index | Table | Columns | Current purpose |
 |---|---|---|---|
-| `idx_modules_last_seen` | modules | `last_seen_at_ms` | Find stale or recently active modules |
-| `idx_heartbeats_module_time` | module_heartbeats | `module_id, received_at_ms` | Query heartbeat history for a specific module |
-| `idx_heartbeats_time` | module_heartbeats | `received_at_ms` | Retention pruning (delete rows older than cutoff) |
-| `idx_cards_last_seen` | cards | `last_seen_at_ms` | Find recently used or unused cards |
-| `idx_access_module_time` | access_events | `module_id, received_at_ms` | Query access history for a specific module |
-| `idx_access_card_time` | access_events | `card_id_hash, received_at_ms` | Query access history for a specific card |
-| `idx_access_time` | access_events | `received_at_ms` | Time-range queries and future retention pruning |
+| `idx_modules_last_seen` | `modules` | `last_seen_at_ms` | Find recently active or stale modules |
+| `idx_heartbeats_module_time` | `module_heartbeats` | `module_id, received_at_ms` | Per-module heartbeat history |
+| `idx_heartbeats_time` | `module_heartbeats` | `received_at_ms` | Heartbeat retention pruning |
+| `idx_cards_last_seen` | `cards` | `last_seen_at_ms` | Card usage lookups |
+| `idx_access_module_time` | `access_events` | `module_id, received_at_ms` | Per-module audit history |
+| `idx_access_card_time` | `access_events` | `card_id_hash, received_at_ms` | Per-card audit history |
+| `idx_access_time` | `access_events` | `received_at_ms` | Time-range reporting |
 
 ---
 
 ## Migration system
 
-Migrations are SQL files embedded in the server binary at compile time (Go `embed`). They live in `server/internal/db/migrations/` and follow the naming convention `NNNN_description.sql` (e.g. `0001_init.sql`).
+Migrations live in:
 
-On startup, the server creates the `schema_migrations` tracking table (if it doesn't exist), reads all embedded `.sql` files, sorts them by version number, and applies any that haven't been applied yet. Each migration runs inside a transaction — if the SQL fails, the transaction is rolled back and the migration version is not recorded. The server exits with an error if a migration fails.
+- `server/internal/db/migrations/`
+
+They are embedded into the server binary with Go `embed` and applied at startup by `db.Migrate()`.
+
+Current migration naming convention:
+
+- `NNNN_description.sql`
+
+Current flow:
+
+1. Ensure `schema_migrations` exists
+2. Read embedded `.sql` migration files
+3. Parse version from filename
+4. Sort by version
+5. Skip versions already recorded in `schema_migrations`
+6. Apply each pending migration inside a transaction
+7. Insert the applied version into `schema_migrations`
+
+If a migration fails, the transaction is rolled back and server startup fails.
 
 ### Current migrations
 
-| Version | File | Description |
+| Version | File | Purpose |
 |---|---|---|
-| 1 | `0001_init.sql` | Creates all tables: doors, modules, module_heartbeats, cards, access_events |
-| 2 | `0002_indexes.sql` | Adds indexes for query and pruning performance |
-| 3 | `0003_add_free_heap.sql` | Adds `free_heap_bytes` column to module_heartbeats |
+| `0001` | `0001_init.sql` | Base schema |
+| `0002` | `0002_indexes.sql` | Query and pruning indexes |
+| `0003` | `0003_add_free_heap.sql` | Adds `free_heap_bytes` to `module_heartbeats` |
 
-### Adding a new migration
+### Current compatibility note
 
-1. Create a new file: `server/internal/db/migrations/0004_description.sql`
-2. Write idempotent SQL (use `IF NOT EXISTS` for creates, `ALTER TABLE` for additions)
-3. Rebuild the server — the file is embedded automatically via `//go:embed migrations/*.sql`
-4. On the next startup, the new migration is applied and tracked
-
-**Compatibility rule:** Migrations are forward-only. They add tables, columns, and indexes but never drop, rename, or remove. This ensures an older server binary remains compatible with a database that has had newer migrations applied, which makes rollbacks safe.
+The migration system is **forward-only** in practice. The current migration set only adds schema and does not implement rollback scripts.
 
 ---
 
-## Write model
+## Write behavior
 
-All database writes are serialized through a single-goroutine worker (`db.Worker`). The worker runs a loop that reads `TxFn` closures from a buffered channel (capacity 256), executes each inside a transaction, and sends the result back to the caller.
+### Serialized write worker
 
-```
-  Goroutine A ──► worker.Do(ctx, fn) ──► chan job ──► Worker loop ──► tx.Begin
-  Goroutine B ──► worker.Do(ctx, fn) ──►            │                 tx.Exec
-  Goroutine C ──► worker.Do(ctx, fn) ──►            │                 tx.Commit
-                                                    │               send result
-                                                    ▼
-                                              sequential execution
-```
+Most runtime database writes are intentionally funneled through `db.Worker`, which executes transaction closures sequentially on a buffered job channel.
 
-This eliminates SQLite's "database is locked" errors without requiring external locking or connection-per-goroutine pooling. The caller blocks until their transaction commits or the context expires. If a caller's context expires while queued, the write is still executed (the result is discarded) — this prevents half-finished transactions.
+This is the current pattern used by:
 
-Read operations bypass the worker and query the database directly on the shared `*sql.DB` connection. WAL mode allows concurrent reads with the serialized writer.
+- `HeartbeatStore.UpsertHeartbeat()`
+- `HeartbeatStore.PruneOlderThan()`
+- `AccessEventStore.RecordEvent()`
+- `ModuleAdminStore` write methods
+- `CardStore.RegisterCard()`
+- `CardStore.SetCardStatus()`
+- `CardStore.DeleteCard()`
+- `DeviceStore.MarkSeen()`
+
+This design reduces SQLite write contention and keeps multi-step writes grouped inside explicit transactions.
+
+### Important current exceptions
+
+Not every write in the codebase uses the worker.
+
+1. **`CardStore.IsCardAllowed()` updates `cards.last_seen_at_ms` directly via `s.db.ExecContext()`** when the card is active.
+2. **`db.SeedDev()` writes directly** during startup seeding in dev mode before normal request handling begins.
+3. Reads query the shared `*sql.DB` directly.
+
+So the most accurate statement for the current codebase is:
+
+> Portunus serializes most runtime writes through a single worker, but there are a small number of direct write-side effects that bypass the worker today.
+
+### Current worker semantics
+
+`Worker.Do()` enqueues a job and waits for the result, but it uses the caller’s context when beginning and executing the transaction. That means context cancellation can still cause the queued or running write to fail.
+
+The code comments describe the intent clearly, but the exact behavior is determined by the same context passed into `BeginTx()` and the transaction work itself.
+
+---
+
+## Dev seeding behavior
+
+When `PORTUNUS_ENV=dev`, the server calls `db.SeedDev()` on startup.
+
+Current dev seeding does the following:
+
+- Ensures a starter door exists:
+  - `door_id = 'door_main'`
+  - `name = 'Main Door'`
+  - `location = 'Dev'`
+- Creates at least one commissioned module assigned to `door_main`
+- If `PORTUNUS_KNOWN_MODULES` is empty, it seeds a default module:
+  - `door-001`
+
+This is useful for local development and smoke testing, but it should not be treated as production provisioning behavior.
 
 ---
 
 ## Heartbeat pruning
 
-The `HeartbeatPruner` is a background goroutine that deletes heartbeat records older than a configurable retention period. It runs an immediate prune on startup and then repeats on a timer.
+Heartbeat retention is implemented by `HeartbeatPruner`, which periodically deletes old rows from `module_heartbeats`.
 
-| Config variable | Default | Description |
+Current environment variables:
+
+| Variable | Default | Meaning |
 |---|---|---|
-| `PORTUNUS_HEARTBEAT_RETENTION_DAYS` | 30 | Days of heartbeat history to keep. Set to 0 to disable pruning. |
-| `PORTUNUS_PRUNE_INTERVAL_HOURS` | 6 | How often the pruner runs. |
+| `PORTUNUS_HEARTBEAT_RETENTION_DAYS` | `30` | Number of days of heartbeat history to keep; `0` disables pruning |
+| `PORTUNUS_PRUNE_INTERVAL_HOURS` | `6` | How often the pruner runs |
 
-The pruner uses the `idx_heartbeats_time` index for an efficient range delete. It logs the count of deleted rows on each pass.
+Current behavior:
 
-Access events are not pruned — they are an append-only audit trail intended to be retained indefinitely. If access event pruning becomes necessary in the future, it should follow the same pattern as heartbeat pruning with its own retention config.
+- Runs an immediate prune on startup
+- Runs on a repeating timer after that
+- Deletes rows where `received_at_ms` is older than the computed cutoff
+- Logs how many rows were deleted when the count is non-zero
 
----
-
-## Timestamp convention
-
-All timestamps in the database are stored as Unix epoch milliseconds (INTEGER). This avoids SQLite's lack of a native datetime type and makes time-range queries simple integer comparisons. The Go server converts between `time.Time` and `int64` milliseconds at the store layer boundary — all application code above the store works with `time.Time`.
-
-The ESP32 firmware does not have a real-time clock. The `requested_at_ms` field in access events is optional (nullable) and populated only if the device reports a timestamp. The `received_at_ms` field is always populated by the server using its own wall clock.
+Only heartbeat history is pruned today. `access_events` are retained indefinitely by the current implementation.
 
 ---
 
-## Backup and restore
+## Timestamp conventions
 
-### Offline backup (server stopped)
+All timestamps are stored as **Unix epoch milliseconds** in SQLite `INTEGER` columns.
+
+This is the current convention across the schema and matches the Go server’s store layer.
+
+Important details from the current implementation:
+
+- `received_at_ms` values are always generated by the server
+- `requested_at_ms` in `access_events` is optional and only stored when the device timestamp parses as RFC3339 or RFC3339Nano
+- `decided_at_ms` is generated by the server
+- For access events, `received_at_ms` and `decided_at_ms` are currently usually the same moment because `AccessService.recordEvent()` uses the server decision time for both
+- For heartbeat rows, the firmware’s `uptime_s` is converted to `uptime_ms`
+
+---
+
+## Current backup guidance
+
+SQLite WAL mode creates companion files next to the main database file:
+
+- `portunus.db-wal`
+- `portunus.db-shm`
+
+Do not delete these while the server is running.
+
+### Offline backup
 
 ```bash
-cp /var/lib/portunus/portunus.db /var/lib/portunus/backups/portunus-$(date +%Y%m%d).db
+cp ./data/portunus.db ./data/portunus-backup.db
 ```
 
-### Online backup (server running)
-
-WAL mode allows a safe online backup using the SQLite CLI:
+### Online backup with `sqlite3`
 
 ```bash
-sqlite3 /var/lib/portunus/portunus.db ".backup '/var/lib/portunus/backups/portunus-$(date +%Y%m%d).db'"
+sqlite3 ./data/portunus.db ".backup './data/portunus-backup.db'"
 ```
-
-This creates a consistent snapshot without stopping the server. The backup includes all WAL-committed data.
 
 ### Restore
 
-Stop the server, replace the database file, and restart:
+1. Stop the server
+2. Replace the database file with the backup copy
+3. Restart the server
 
-```bash
-sudo systemctl stop portunus-server
-cp /var/lib/portunus/backups/portunus-20260315.db /var/lib/portunus/portunus.db
-sudo chown portunus:portunus /var/lib/portunus/portunus.db
-sudo systemctl start portunus-server
-```
-
-The server applies any missing migrations on startup, so restoring an older backup to a newer server binary is safe.
+On startup, the server will apply any pending embedded migrations.
 
 ---
 
 ## Useful queries
 
-These queries can be run with the `sqlite3` CLI against the database file. Useful for debugging, reporting, and operational monitoring.
-
-**Caution:** Do not run write queries with the `sqlite3` CLI while the server is running — this bypasses the serialized write worker and can cause "database is locked" errors. Read queries are safe at any time.
+These queries are intended for read-only inspection with `sqlite3`.
 
 ### Module status overview
 
@@ -245,8 +437,11 @@ These queries can be run with the `sqlite3` CLI against the database file. Usefu
 SELECT
   module_id,
   display_name,
-  CASE WHEN enabled = 1 AND commissioned_at_ms IS NOT NULL AND revoked_at_ms IS NULL
-       THEN 'known' ELSE 'unknown' END AS status,
+  CASE
+    WHEN enabled = 1 AND commissioned_at_ms IS NOT NULL AND revoked_at_ms IS NULL
+      THEN 'known'
+    ELSE 'unknown'
+  END AS status,
   datetime(last_seen_at_ms / 1000, 'unixepoch') AS last_seen,
   last_ip,
   last_fw_version,
@@ -259,53 +454,64 @@ ORDER BY last_seen_at_ms DESC;
 
 ```sql
 SELECT
-  datetime(ae.received_at_ms / 1000, 'unixepoch') AS time,
-  ae.module_id,
-  CASE ae.decision_granted WHEN 1 THEN 'GRANTED' ELSE 'DENIED' END AS decision,
-  ae.decision_reason,
-  hex(ae.card_id_hash) AS card_hash
-FROM access_events ae
-ORDER BY ae.received_at_ms DESC
+  datetime(received_at_ms / 1000, 'unixepoch') AS time,
+  module_id,
+  CASE decision_granted WHEN 1 THEN 'GRANTED' ELSE 'DENIED' END AS decision,
+  decision_reason,
+  hex(card_id_hash) AS card_hash,
+  door_id
+FROM access_events
+ORDER BY received_at_ms DESC
 LIMIT 50;
 ```
 
-### Access events for a specific card
+### Access events for a specific module
 
 ```sql
--- First, find the card hash from a known card UID:
--- In Python: hashlib.sha256(b"04:A3:2B:1C").hexdigest()
--- Or register the card via the admin API and note the returned hash.
-
 SELECT
-  datetime(ae.received_at_ms / 1000, 'unixepoch') AS time,
-  ae.module_id,
-  CASE ae.decision_granted WHEN 1 THEN 'GRANTED' ELSE 'DENIED' END AS decision,
-  ae.decision_reason
-FROM access_events ae
-WHERE ae.card_id_hash = X'<64-char-hex-hash>'
-ORDER BY ae.received_at_ms DESC;
+  datetime(received_at_ms / 1000, 'unixepoch') AS time,
+  CASE decision_granted WHEN 1 THEN 'GRANTED' ELSE 'DENIED' END AS decision,
+  decision_reason,
+  hex(card_id_hash) AS card_hash
+FROM access_events
+WHERE module_id = 'door-001'
+ORDER BY received_at_ms DESC;
 ```
 
-### Cards and their status
+### Access events for a specific card hash
+
+```sql
+SELECT
+  datetime(received_at_ms / 1000, 'unixepoch') AS time,
+  module_id,
+  CASE decision_granted WHEN 1 THEN 'GRANTED' ELSE 'DENIED' END AS decision,
+  decision_reason
+FROM access_events
+WHERE card_id_hash = X'<64-char-hex-hash>'
+ORDER BY received_at_ms DESC;
+```
+
+### Registered cards
 
 ```sql
 SELECT
   hex(card_id_hash) AS card_hash,
   card_tag,
   status,
-  datetime(created_at_ms / 1000, 'unixepoch') AS registered,
-  datetime(last_seen_at_ms / 1000, 'unixepoch') AS last_used
+  datetime(created_at_ms / 1000, 'unixepoch') AS created_at,
+  datetime(last_seen_at_ms / 1000, 'unixepoch') AS last_seen
 FROM cards
 ORDER BY created_at_ms DESC;
 ```
 
-### Heartbeat history for a module
+### Heartbeat history for one module
 
 ```sql
 SELECT
   datetime(received_at_ms / 1000, 'unixepoch') AS time,
   seq,
-  uptime_ms / 1000 AS uptime_sec,
+  uptime_ms / 1000 AS uptime_seconds,
+  fw_version,
   wifi_rssi,
   ip,
   free_heap_bytes
@@ -315,10 +521,9 @@ ORDER BY received_at_ms DESC
 LIMIT 20;
 ```
 
-### Modules that haven't checked in recently
+### Modules not seen recently
 
 ```sql
--- Modules not seen in the last 5 minutes (300000 ms)
 SELECT
   module_id,
   display_name,
@@ -330,46 +535,27 @@ WHERE last_seen_at_ms IS NOT NULL
 ORDER BY last_seen_at_ms ASC;
 ```
 
-### Access grant/deny counts by day
+### Row counts by table
 
 ```sql
-SELECT
-  date(received_at_ms / 1000, 'unixepoch') AS day,
-  SUM(decision_granted) AS granted,
-  COUNT(*) - SUM(decision_granted) AS denied,
-  COUNT(*) AS total
-FROM access_events
-GROUP BY day
-ORDER BY day DESC
-LIMIT 30;
-```
-
-### Database size and table row counts
-
-```sql
-SELECT
-  'doors' AS tbl, COUNT(*) AS rows FROM doors
-UNION ALL SELECT
-  'modules', COUNT(*) FROM modules
-UNION ALL SELECT
-  'module_heartbeats', COUNT(*) FROM module_heartbeats
-UNION ALL SELECT
-  'cards', COUNT(*) FROM cards
-UNION ALL SELECT
-  'access_events', COUNT(*) FROM access_events
-UNION ALL SELECT
-  'schema_migrations', COUNT(*) FROM schema_migrations;
+SELECT 'doors' AS table_name, COUNT(*) AS rows FROM doors
+UNION ALL SELECT 'modules', COUNT(*) FROM modules
+UNION ALL SELECT 'module_heartbeats', COUNT(*) FROM module_heartbeats
+UNION ALL SELECT 'cards', COUNT(*) FROM cards
+UNION ALL SELECT 'access_events', COUNT(*) FROM access_events
+UNION ALL SELECT 'schema_migrations', COUNT(*) FROM schema_migrations;
 ```
 
 ---
 
-## File location and permissions
+## File location notes
 
-| Environment | Path | Owner | Permissions |
-|---|---|---|---|
-| Dev | `./data/portunus.db` (relative to server working dir) | Current user | Default |
-| Production | `/var/lib/portunus/portunus.db` | `portunus:portunus` | `0644` (file), `0755` (directory) |
+By default, the current server uses:
 
-The server creates the parent directory and database file automatically on first startup. In production, the systemd service runs as the `portunus` user with `ReadWritePaths=/var/lib/portunus` — see [Server Setup — Running as a systemd service](setup_server.md#running-as-a-systemd-service).
+- `./data/portunus.db`
 
-SQLite also creates `-wal` and `-shm` companion files alongside the main database file during WAL mode operation. These are managed by SQLite and should not be deleted manually while the server is running.
+That path can be overridden with:
+
+- `PORTUNUS_DB_PATH`
+
+The server creates the parent directory automatically if it does not exist.

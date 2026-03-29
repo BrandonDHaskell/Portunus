@@ -1,94 +1,84 @@
 # Portunus — Firmware Setup (Access Module)
 
-Build, configure, and flash the ESP32-S3 firmware for the Portunus door access module.
-
-**Last updated:** March 2026
+Build, configure, flash, and test the ESP32-S3 firmware for the Portunus access module.
 
 ---
 
-## Prerequisites at a glance
+## What the firmware does today
+
+The current access module firmware runs on an ESP32-S3 and provides:
+
+- MFRC522 RFID credential reading over SPI
+- door strike control over GPIO
+- reed switch door-state sensing over GPIO
+- single-LED status feedback
+- WiFi station connectivity
+- periodic heartbeat publishing
+- access-request submission to the Portunus server
+- two transport modes:
+  - **HTTP/1.1 + protobuf** (default)
+  - **gRPC over HTTP/2 + TLS** (optional)
+- TLS support
+- HMAC-SHA256 request signing
+- a central `SystemFSM` that coordinates credential flow, access decisions, unlock timing, door-state handling, and feedback
+
+The firmware is built with **ESP-IDF** and uses **Kconfig** for Portunus-specific settings.
+
+---
+
+## Current project layout
+
+The firmware lives under `access_module/`:
+
+```text
+access_module/
+├── CMakeLists.txt
+├── README.md
+├── partitions.csv
+├── main/
+│   ├── CMakeLists.txt
+│   ├── Kconfig.projbuild
+│   └── main.cpp
+├── components/
+│   ├── portunus_config/
+│   ├── portunus_interfaces/
+│   ├── portunus_proto/
+│   └── portunus_types/
+├── core/
+│   └── system_fsm/
+├── drivers/
+│   ├── access_point_gpio/
+│   ├── feedback_led/
+│   └── reader_mfrc522/
+├── services/
+│   ├── event_bus/
+│   ├── grpc_client/
+│   ├── heartbeat_service/
+│   ├── server_comm/
+│   └── wifi_mgr/
+└── scripts/
+    ├── clean.py
+    └── proto_gen.py
+```
+
+`main/main.cpp` is the composition root. It initializes the platform, constructs the enabled drivers and services, injects them into `SystemFSM`, and starts the runtime.
+
+---
+
+## Prerequisites
 
 ### Software
 
-| Dependency | Minimum version | Purpose | Install section |
-|---|---|---|---|
-| ESP-IDF | 5.4+ | ESP32 toolchain, build system, FreeRTOS | [Install ESP-IDF](#install-esp-idf) |
-| Python | 3.9+ | ESP-IDF tools, utility scripts | Installed with ESP-IDF |
-| Task | 3.x | Task runner (build, flash, menuconfig commands) | [Install Task](#install-task) |
-| openssl | 1.1.1+ | Generate TLS certificates for server pinning | [TLS certificate setup](#tls-certificate-setup) |
-| protoc + Nanopb | 3.21+ / 0.4.9+ | Regenerate protobuf C stubs (only if `.proto` files change) | [Protobuf tooling](#protobuf-tooling-optional) |
-| Git | any | Clone the repository | Usually pre-installed on Debian |
+You need:
 
-ESP-IDF bundles its own Python virtual environment, cross-compiler toolchain (Xtensa GCC), and all necessary libraries. No separate C/C++ cross-compiler install is required.
+- **ESP-IDF 5.x** with ESP32-S3 support
+- **Python 3**
+- **CMake** and **Ninja**
+- **Task** if you want to use the repo task wrappers
+- **OpenSSL** if you want to generate a private CA and server certs for TLS pinning
+- **protobuf tooling + Nanopb** only if you change the `.proto` contract
 
-### Hardware
-
-| Component | Specification | Purpose |
-|---|---|---|
-| ESP32-S3 WROOM-1 dev board | Dual-core Xtensa LX7, WiFi, BLE, USB-UART | Microcontroller running the access module firmware |
-| MFRC522 RFID module | SPI interface, 13.56 MHz, ISO 14443A | Reads MIFARE RFID cards/tags |
-| Electric door strike | 12V or 24V, fail-secure | Door lock actuator (controlled via relay or MOSFET) |
-| Reed switch | Normally-open or normally-closed magnetic | Door open/closed state sensing |
-| Relay or MOSFET module | Logic-level compatible (3.3V trigger) | Switches the door strike from ESP32 GPIO |
-| LED | Standard 3.3V or with current-limiting resistor | Status feedback (access granted, denied, system state) |
-| USB cable | USB-A to USB-C or Micro-USB (matches your dev board) | Programming and serial monitor |
-| Breadboard + jumper wires | — | Development wiring |
-
-For bench testing, you can start with just the ESP32 and MFRC522. The door strike, reed switch, and LED can each be disabled independently via Kconfig so you don't need all hardware present to build and test.
-
----
-
-## Wiring reference
-
-### MFRC522 RFID reader (SPI)
-
-| MFRC522 Pin | ESP32-S3 GPIO | Kconfig setting |
-|---|---|---|
-| MOSI | GPIO 37 | `PORTUNUS_SPI_MOSI_PIN` |
-| MISO | GPIO 38 | `PORTUNUS_SPI_MISO_PIN` |
-| SCK | GPIO 36 | `PORTUNUS_SPI_SCLK_PIN` |
-| SDA (CS) | GPIO 35 | `PORTUNUS_SPI_CS_PIN` |
-| RST | GPIO 4 | `PORTUNUS_MFRC522_RST_PIN` |
-| 3.3V | 3V3 | — |
-| GND | GND | — |
-
-The MFRC522 operates at 3.3V. Do not connect to 5V — it will damage the module.
-
-### Door strike
-
-| Connection | ESP32-S3 GPIO | Kconfig setting |
-|---|---|---|
-| Relay/MOSFET signal | GPIO 5 | `PORTUNUS_DOOR_STRIKE_PIN` |
-
-The ESP32 GPIO drives a relay or logic-level MOSFET that switches the door strike's power supply. The strike itself runs on its own 12V/24V supply — never power it from the ESP32. Configure active-high (default) or active-low logic via `PORTUNUS_DOOR_STRIKE_ACTIVE_LOW` in menuconfig.
-
-### Reed switch
-
-| Connection | ESP32-S3 GPIO | Kconfig setting |
-|---|---|---|
-| Reed switch signal | GPIO 6 | `PORTUNUS_REED_SWITCH_PIN` |
-
-The firmware enables an internal pull-up on this pin. Wire the reed switch between the GPIO pin and GND. Default configuration is normally-open (circuit closed when door is shut, i.e., magnet aligned with sensor). If your reed switch is normally-closed, enable `PORTUNUS_REED_SWITCH_NC` in menuconfig. Software debounce is applied at 50ms (configurable via `PORTUNUS_REED_SWITCH_DEBOUNCE_MS`).
-
-### Status LED
-
-| Connection | ESP32-S3 GPIO | Kconfig setting |
-|---|---|---|
-| LED anode (through resistor) | GPIO 7 | `PORTUNUS_LED_PIN` |
-
-Active-high. Use an appropriate current-limiting resistor for your LED (e.g. 220Ω for a standard 3.3V LED).
-
-### Pin assignments are configurable
-
-All pin assignments above are defaults. Override any of them in menuconfig under **Portunus Configuration → SPI Pin Assignments** and **Portunus Configuration → Door Hardware Pin Assignments** without changing code.
-
----
-
-## Install ESP-IDF
-
-ESP-IDF is Espressif's official development framework. It includes the Xtensa cross-compiler, FreeRTOS, drivers, and the `idf.py` build tool.
-
-Install prerequisites (Debian/Ubuntu):
+On Debian/Ubuntu, a typical ESP-IDF host setup looks like:
 
 ```bash
 sudo apt update
@@ -97,422 +87,416 @@ sudo apt install -y git wget flex bison gperf python3 python3-pip \
   dfu-util libusb-1.0-0
 ```
 
-Clone and install ESP-IDF:
+### Hardware
+
+For full end-to-end firmware testing, the currently supported hardware is:
+
+- ESP32-S3 development board
+- MFRC522 RFID reader
+- door strike driven through an appropriate relay or MOSFET stage
+- reed switch
+- single status LED with resistor
+- USB cable for flash + serial monitor
+
+For partial bench testing, you can disable individual hardware features in `menuconfig`.
+
+---
+
+## Install ESP-IDF
+
+Install ESP-IDF using Espressif’s normal process. Example:
 
 ```bash
 mkdir -p ~/esp
 cd ~/esp
-git clone -b v5.4.1 --recursive https://github.com/espressif/esp-idf.git
+git clone --recursive https://github.com/espressif/esp-idf.git
 cd esp-idf
 ./install.sh esp32s3
-```
-
-The `install.sh` script creates a Python virtual environment and downloads the Xtensa toolchain. It does not modify your system Python.
-
-After installation, you must source the ESP-IDF environment in every terminal session before building:
-
-```bash
-. ~/esp/esp-idf/export.sh
-```
-
-To avoid typing this every time, add an alias to your shell profile:
-
-```bash
-echo 'alias get_idf=". ~/esp/esp-idf/export.sh"' >> ~/.bashrc
-```
-
-Then run `get_idf` at the start of each session.
-
-Verify the installation:
-
-```bash
-idf.py --version
-```
-
----
-
-## Install Task
-
-[Task](https://taskfile.dev) is used as the project's build/test runner. Install it via Go or a standalone binary.
-
-If you have Go installed:
-
-```bash
-go install github.com/go-task/task/v3/cmd/task@latest
-```
-
-If you don't have Go (and only need the firmware side), install Task directly:
-
-```bash
-sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b ~/.local/bin
+. ./export.sh
 ```
 
 Verify:
 
 ```bash
-task --version
+idf.py --version
 ```
+
+You must source the ESP-IDF environment in each shell before building unless you have wrapped it in your shell profile.
 
 ---
 
-## Clone and build
+## Clone the repo and build the default firmware
 
 ```bash
 git clone https://github.com/BrandonDHaskell/Portunus.git
 cd Portunus
-
-# Source the ESP-IDF environment
 . ~/esp/esp-idf/export.sh
 
-# Build the firmware
 task firmware:build
 ```
 
-On the first build, the IDF Component Manager automatically downloads two external dependencies from the Espressif component registry: `nikas-belogolov/nanopb` (protobuf runtime) and `espressif/nghttp` (HTTP/2, only used when gRPC is enabled). These are cached in `access_module/managed_components/` and do not require manual installation.
+That task runs `idf.py build` from `access_module/`.
+
+You can also build directly without Task:
+
+```bash
+cd access_module
+idf.py build
+```
 
 ---
 
-## Configuration (menuconfig)
+## Configuration workflow
 
-The firmware is configured through ESP-IDF's Kconfig system. All Portunus-specific settings live under a single menu:
+The implemented configuration path is **ESP-IDF menuconfig**.
+
+Open it with:
 
 ```bash
 task firmware:menuconfig
 ```
 
-This opens a terminal UI. Navigate to **Portunus Configuration** to find the following submenus:
+or:
 
-### Feature Toggles
+```bash
+cd access_module
+idf.py menuconfig
+```
 
-Enable or disable hardware components independently. This is how you build firmware for bench testing without all hardware connected.
+All Portunus-specific settings are defined in:
 
-| Setting | Default | Description |
-|---|---|---|
-| `PORTUNUS_ENABLE_MFRC522` | y | MFRC522 RFID reader and card polling task |
-| `PORTUNUS_ENABLE_DOOR_STRIKE` | y | Door strike GPIO output |
-| `PORTUNUS_ENABLE_REED_SWITCH` | y | Reed switch GPIO input and debounce |
-| `PORTUNUS_ENABLE_LED` | y | Status LED and pattern task |
-| `PORTUNUS_ENABLE_WIFI` | y | WiFi STA and server communication |
-| `PORTUNUS_ENABLE_HEARTBEAT` | y | Periodic heartbeat reporting |
+```text
+access_module/main/Kconfig.projbuild
+```
 
-When a feature is disabled, its driver is not compiled and its FreeRTOS task is not created. The FSM receives a `nullptr` for that module and adapts its behavior accordingly.
+### Important current-state note about dev/prod overlay builds
 
-### Network Configuration
+The root `Taskfile.yml` defines these commands:
 
-| Setting | Default | Description |
-|---|---|---|
-| `PORTUNUS_MODULE_ID` | `door-001` | Unique name sent in every heartbeat and access request (max 32 chars) |
-| `PORTUNUS_WIFI_SSID` | `portunus-dev` | WiFi network SSID |
-| `PORTUNUS_WIFI_PASSWORD` | *(empty)* | WPA2 passphrase |
-| `PORTUNUS_SERVER_HOST` | `192.168.1.100` | Portunus server IP or hostname |
-| `PORTUNUS_SERVER_PORT` | `8080` | Server HTTP port (used when TLS is disabled) |
-| `PORTUNUS_SERVER_REQUEST_TIMEOUT_MS` | `5000` | HTTP/gRPC request timeout |
-| `PORTUNUS_WIFI_CONNECT_TIMEOUT_MS` | `15000` | Max time to wait for WiFi at boot |
-| `PORTUNUS_WIFI_RECONNECT_INTERVAL_MS` | `1000` | Base reconnect delay (doubles on failure, caps at 60s) |
+- `task firmware:build:dev`
+- `task firmware:build:prod`
 
-### Security Configuration
+Those commands expect `sdkconfig.defaults`, `sdkconfig.defaults.dev`, and `sdkconfig.defaults.prod` to exist under `access_module/`.
 
-| Setting | Default | Description |
-|---|---|---|
-| `PORTUNUS_USE_TLS` | y | Enable HTTPS for server communication |
-| `PORTUNUS_TLS_SERVER_PORT` | `8443` | HTTPS port (used when TLS is enabled) |
-| `PORTUNUS_TLS_SKIP_VERIFY` | n | Skip certificate validation — **dev only, never in production** |
-| `PORTUNUS_TLS_USE_CUSTOM_CA` | y | Pin to embedded CA cert instead of Mozilla bundle (recommended for LAN) |
-| `PORTUNUS_HMAC_ENABLED` | y | Sign requests with HMAC-SHA256 |
-| `PORTUNUS_HMAC_SECRET` | *(empty)* | Pre-shared HMAC key — must match `PORTUNUS_HMAC_SECRET` on the server |
+Those files are **not present in this repository snapshot**.
 
-### Transport Configuration
+So, in the current state of the repo, the reliable configuration workflow is:
 
-| Setting | Default | Description |
-|---|---|---|
-| `PORTUNUS_USE_GRPC` | n | Use gRPC (HTTP/2) instead of HTTP/1.1 (requires TLS) |
-| `PORTUNUS_GRPC_SERVER_PORT` | `50051` | gRPC server port |
+1. use `menuconfig`
+2. save the generated `sdkconfig`
+3. build with `task firmware:build` or `idf.py build`
 
-### Timing Configuration
-
-| Setting | Default | Range | Description |
-|---|---|---|---|
-| `PORTUNUS_HEARTBEAT_INTERVAL_MS` | `10000` | 1000–60000 | Heartbeat reporting interval |
-| `PORTUNUS_MFRC522_POLL_INTERVAL_MS` | `250` | 50–2000 | Card reader polling interval |
-| `PORTUNUS_CARD_REREAD_DELAY_MS` | `1000` | 200–5000 | Delay after a successful card read to prevent re-reads |
-| `PORTUNUS_UNLOCK_HOLD_MS` | `5000` | 1000–30000 | How long the strike stays energized after access granted |
-| `PORTUNUS_FSM_POLL_INTERVAL_MS` | `100` | 50–500 | Reed switch poll and unlock timer check interval |
-| `PORTUNUS_REED_SWITCH_DEBOUNCE_MS` | `50` | 20–200 | Reed switch debounce time |
-
-### Event Bus Configuration
-
-| Setting | Default | Range | Description |
-|---|---|---|---|
-| `PORTUNUS_EVENT_QUEUE_LENGTH` | `16` | 4–64 | Dispatcher queue depth |
-| `PORTUNUS_MAX_EVENT_SUBSCRIBERS` | `8` | 2–32 | Maximum subscriber callbacks |
-| `PORTUNUS_EVENT_QUEUE_TIMEOUT_MS` | `100` | 10–5000 | Queue send/receive timeout |
+Do not rely on the dev/prod overlay tasks unless you add those overlay files yourself.
 
 ---
 
-## Dev vs. production builds
+## Portunus configuration menus currently implemented
 
-The firmware supports sdkconfig overlays for managing dev and prod differences in a single command:
+The current Kconfig menus are:
 
-```bash
-# Dev build (verbose logging, no flash encryption, TLS cert skip optional)
-task firmware:build:dev
+- **Feature Toggles**
+- **Security Configuration**
+- **Transport Configuration**
+- **Network Configuration**
+- **Task Configuration**
+- **SPI Pin Assignments (MFRC522)**
+- **Door Hardware Pin Assignments**
+- **Door Configuration**
+- **Timing Configuration**
+- **Event Bus Configuration**
 
-# Production build (warning-only logs, flash encryption, strict TLS)
-task firmware:build:prod
-```
+### Feature Toggles
 
-These commands use the corresponding sdkconfig overlay files:
+These currently control which firmware subsystems are enabled:
 
-| Setting | Dev | Prod |
-|---|---|---|
-| Log verbosity | Verbose / Debug | Warning only |
-| Serial console | Enabled | Disabled or restricted |
-| Flash encryption | Off | Enforced |
-| Secure boot | Off | Enforced |
-| TLS cert verification | Can be skipped | Strict |
+- `PORTUNUS_ENABLE_MFRC522`
+- `PORTUNUS_ENABLE_HEARTBEAT`
+- `PORTUNUS_ENABLE_WIFI`
+- `PORTUNUS_ENABLE_DOOR_STRIKE`
+- `PORTUNUS_ENABLE_REED_SWITCH`
+- `PORTUNUS_ENABLE_LED`
 
-When switching between dev and prod overlays, do a full clean first to avoid stale sdkconfig artifacts:
+This matters at build time because `main/CMakeLists.txt` conditionally pulls in the matching drivers and services based on these toggles.
 
-```bash
-task firmware:clean
-task firmware:build:prod
-```
+### Security Configuration
+
+The current security-related options include:
+
+- `PORTUNUS_USE_TLS`
+- `PORTUNUS_TLS_SERVER_PORT`
+- `PORTUNUS_TLS_SKIP_VERIFY`
+- `PORTUNUS_TLS_USE_CUSTOM_CA`
+- `PORTUNUS_HMAC_ENABLED`
+- `PORTUNUS_HMAC_SECRET`
+
+Current behavior:
+
+- TLS is supported today.
+- You can pin to a custom CA cert embedded in the firmware.
+- You can fall back to the ESP-IDF Mozilla CA bundle when not using a custom CA.
+- HMAC signing is implemented today and must match the server-side shared secret.
+
+### Transport Configuration
+
+The transport options currently implemented are:
+
+- `PORTUNUS_USE_GRPC`
+- `PORTUNUS_GRPC_SERVER_PORT`
+
+Current behavior:
+
+- when `PORTUNUS_USE_GRPC=n`, the firmware uses the HTTP path in `services/server_comm/`
+- when `PORTUNUS_USE_GRPC=y`, the firmware uses the `grpc_client` path
+- gRPC currently depends on TLS being enabled
+
+### Network Configuration
+
+The key network settings currently exposed are:
+
+- `PORTUNUS_MODULE_ID`
+- `PORTUNUS_WIFI_SSID`
+- `PORTUNUS_WIFI_PASSWORD`
+- `PORTUNUS_WIFI_CONNECT_TIMEOUT_MS`
+- `PORTUNUS_WIFI_RECONNECT_INTERVAL_MS`
+- `PORTUNUS_SERVER_HOST`
+- `PORTUNUS_SERVER_PORT`
+- `PORTUNUS_SERVER_REQUEST_TIMEOUT_MS`
+
+### Hardware and timing configuration
+
+The current Kconfig file also exposes:
+
+- MFRC522 SPI pin selection
+- door strike pin + active-low option
+- reed switch pin + normally-closed option
+- LED pin
+- unlock hold duration
+- reed debounce duration
+- FSM poll interval
+- heartbeat interval
+- RFID poll interval
+- card re-read delay
+- event bus timeout/depth/subscriber limits
+
+---
+
+## Default wiring values currently reflected in Kconfig
+
+These are the current default GPIO assignments from `Kconfig.projbuild`.
+
+### MFRC522
+
+| MFRC522 Pin | Default ESP32-S3 GPIO |
+|---|---:|
+| MOSI | 37 |
+| MISO | 38 |
+| SCLK | 36 |
+| SDA / CS | 35 |
+| RST | 4 |
+
+### Door hardware and LED
+
+| Function | Default ESP32-S3 GPIO |
+|---|---:|
+| Door strike | 5 |
+| Reed switch | 6 |
+| Status LED | 7 |
+
+The reed switch defaults to an internal-pullup style configuration, and the strike defaults to active-high unless changed in `menuconfig`.
 
 ---
 
 ## TLS certificate setup
 
-For the firmware to validate the server's TLS certificate on a private LAN, it needs the CA certificate embedded in flash. This is handled automatically if you've already run the cert generation script (see [Server Setup — TLS certificate setup](setup_server.md#tls-certificate-setup)):
+The current repo supports LAN TLS pinning with a private CA.
+
+Generate certificates from the repo root:
 
 ```bash
-# From the repo root:
 task certs:generate -- --ip 192.168.1.100
 ```
 
-This generates `certs/ca.pem` and copies it to `access_module/certs/ca_cert.pem`. The firmware build system (`server_comm/CMakeLists.txt`) embeds this file into the binary via `EMBED_TXTFILES`. At runtime, the ESP-IDF mbedTLS stack validates the server certificate against this embedded CA.
+That script:
 
-If the file is missing and `PORTUNUS_TLS_USE_CUSTOM_CA` is enabled, the build fails with a clear error message pointing you to the cert generation script.
+- creates `certs/ca.pem`
+- creates `certs/server.pem` and `certs/server.key`
+- copies the CA certificate into:
 
-For development without generating certificates, you can temporarily disable cert validation:
-
-```bash
-# In menuconfig: Portunus Configuration → Security Configuration
-#   → Skip TLS certificate verification = y
-#
-# WARNING: This is insecure. Do not use in production.
+```text
+access_module/certs/ca_cert.pem
 ```
+
+When `PORTUNUS_TLS_USE_CUSTOM_CA=y`, `services/server_comm/CMakeLists.txt` embeds that PEM into the firmware image at build time. If the file is missing, the build fails with a clear error.
+
+### Current TLS modes
+
+The implemented TLS modes are:
+
+1. **Custom CA pinning**
+   - recommended for private LAN deployments
+   - requires `access_module/certs/ca_cert.pem`
+
+2. **Public CA bundle**
+   - uses the ESP-IDF certificate bundle
+   - appropriate when the server uses a publicly trusted certificate
+
+3. **Skip verify**
+   - implemented for development only
+   - insecure
+   - should not be used outside of temporary local testing
 
 ---
 
-## HMAC secret provisioning
+## HMAC shared secret setup
 
-The firmware signs every outgoing request with HMAC-SHA256 using a pre-shared key. This key must match the `PORTUNUS_HMAC_SECRET` environment variable on the server.
+The firmware can sign outgoing requests with HMAC-SHA256.
 
-Generate a secret:
+Generate a shared secret:
 
 ```bash
 openssl rand -hex 32
 ```
 
-Set it in the firmware via menuconfig:
+Set that same value in:
 
-```
-Portunus Configuration → Security Configuration → HMAC shared secret
-```
+- firmware `menuconfig` under `PORTUNUS_HMAC_SECRET`
+- server environment as `PORTUNUS_HMAC_SECRET`
 
-And on the server via environment variable:
-
-```bash
-export PORTUNUS_HMAC_SECRET=<same-64-char-hex-string>
-```
-
-The HMAC secret is stored in flash as part of the firmware binary. Treat firmware binaries as sensitive artifacts. For production, a future enhancement will move secrets to an encrypted NVS partition.
+Current-state caveat: the shared secret is stored in the firmware image / flash. The repo does **not** currently implement encrypted secret storage on the device.
 
 ---
 
 ## Flashing and monitoring
 
-Connect the ESP32-S3 to your computer via USB.
+From the repo root:
 
 ```bash
-# Flash the firmware
 task firmware:flash
-
-# Flash and immediately open the serial monitor
-task firmware:flash-monitor
-
-# Open the serial monitor only (firmware already flashed)
 task firmware:monitor
+task firmware:flash-monitor
 ```
 
-If you have multiple serial devices, specify the port explicitly:
+Or directly:
 
 ```bash
-idf.py -p /dev/ttyUSB0 flash monitor
+cd access_module
+idf.py flash
+idf.py monitor
+idf.py flash monitor
 ```
 
-On Debian, you may need to add your user to the `dialout` group for serial port access:
+If needed, specify the serial port explicitly:
+
+```bash
+idf.py -p /dev/ttyACM0 flash monitor
+```
+
+On Debian-based systems, make sure your user has serial-port access:
 
 ```bash
 sudo usermod -a -G dialout $USER
-# Log out and back in for the change to take effect
 ```
 
-### What to expect on first boot
-
-A successful boot sequence in the serial monitor looks like:
-
-```
-Portunus Access Module v0.1.0-mvp
-NVS initialised
-WiFi STA started — connecting to "your-ssid"...
-WiFi connected — IP: 192.168.1.50
-Event bus initialised (queue depth=16, max subscribers=8)
-Credential reader: OK
-Access point: OK
-Feedback: OK
-Capabilities: reader=1 access_point=1 feedback=1 network=1
-System FSM running — state=OPERATIONAL
-Heartbeat OK — known=1 server_time=2026-03-26T...
-```
-
-If any hardware is disabled or fails to initialize, you'll see the corresponding capability set to 0 and a warning. The FSM adapts and continues operating with whatever hardware is available.
+Then log out and back in.
 
 ---
 
-## Switching between dev and production servers
+## First-boot expectations
 
-When using a single ESP32 for both development and production testing, the key settings that change between environments are:
+On a healthy build with WiFi enabled, the normal sequence is:
 
-| Setting | Dev value | Prod value |
-|---|---|---|
-| `PORTUNUS_SERVER_HOST` | Dev machine IP (e.g. `192.168.1.50`) | Pi IP (e.g. `192.168.1.100`) |
-| `PORTUNUS_SERVER_PORT` | `8080` (or TLS port) | `8443` |
-| `PORTUNUS_TLS_SERVER_PORT` | `8443` | `8443` |
-| `PORTUNUS_HMAC_SECRET` | Dev secret | Prod secret |
-| `PORTUNUS_TLS_SKIP_VERIFY` | Optionally `y` | Must be `n` |
-| `PORTUNUS_MODULE_ID` | `door-001` | `door-001` (or unique per-door) |
+1. NVS initializes
+2. WiFi starts
+3. the event bus initializes
+4. enabled drivers are constructed
+5. `SystemFSM` initializes and starts
+6. heartbeat service starts if enabled
+7. server communication starts if WiFi is enabled
 
-The cleanest way to switch is to use the sdkconfig overlay system:
+At runtime:
 
-1. Run a full clean: `task firmware:clean`
-2. Build with the target overlay: `task firmware:build:dev` or `task firmware:build:prod`
-3. Flash: `task firmware:flash`
-
-Alternatively, change individual settings via `task firmware:menuconfig` and rebuild.
-
-**Important:** If the TLS CA certificate differs between your dev and prod servers (e.g., different IPs in the cert SAN), you need to regenerate and re-embed the cert when switching. Re-run `task certs:generate -- --ip <TARGET_SERVER_IP>` and rebuild.
+- credential reads publish events
+- `server_comm` forwards heartbeat and access messages to the server
+- the server response turns into `EVENT_ACCESS_GRANTED` or `EVENT_ACCESS_DENIED`
+- `SystemFSM` unlocks or denies locally and drives the LED feedback path
 
 ---
 
-## Protobuf tooling (optional)
+## Current transport behavior
 
-Protobuf code generation is only needed if you modify `proto/portunus/v1/portunus.proto`. The generated Nanopb C files (`portunus.pb.c` and `portunus.pb.h`) are committed to the repo at `access_module/components/portunus_proto/portunus/v1/`.
+### Default path: HTTP/1.1 + protobuf
 
-If you do need to regenerate:
+This is the current default mode.
+
+`server_comm`:
+
+- subscribes to heartbeat and credential events
+- encodes protobuf messages with Nanopb
+- posts them to the server
+- decodes the protobuf response
+- republishes access decision events back to the event bus
+
+### Optional path: gRPC over HTTP/2 + TLS
+
+This path is implemented and selected through Kconfig.
+
+Use it only when the server is also configured with its gRPC listener.
+
+The firmware still uses the same underlying protobuf message contract; what changes is the transport layer.
+
+---
+
+## Protobuf regeneration
+
+You only need protobuf tooling if you change the shared `.proto` file.
+
+Current task commands:
 
 ```bash
-# Install protoc (the protobuf compiler)
-sudo apt install -y protobuf-compiler
-
-# Install the Nanopb generator
-pip install nanopb --break-system-packages
-# Or via the ESP-IDF managed component (already downloaded on first build)
-
-# Regenerate Nanopb C stubs only
-task proto:gen:nanopb
-
-# Regenerate both Go and Nanopb stubs
 task proto:gen
-
-# CI check: regenerate and fail if output differs from committed files
-task proto:check
+task proto:gen:go
+task proto:gen:nanopb
 ```
 
-The Nanopb options file at `proto/nanopb/portunus.options` controls field size limits (e.g., max string lengths for module_id, card_id, reason) to keep the generated structs fixed-size and stack-allocatable.
+The repo includes:
+
+- a root generator script: `scripts/proto_gen.py`
+- a firmware-local helper: `access_module/scripts/proto_gen.py`
+
+For day-to-day firmware building, you do **not** need to regenerate protobuf files unless the contract changed.
 
 ---
 
-## Available task commands
+## What is not fully represented as a finished firmware workflow yet
 
-All firmware-related commands from the project `Taskfile.yml`:
+To keep this guide aligned with the current repo state, the following should be treated as **not yet fully wired into a committed firmware setup flow**:
 
-| Command | Description |
-|---|---|
-| `task firmware:build` | Build with default sdkconfig |
-| `task firmware:build:dev` | Build with dev overlay (verbose logs, no encryption) |
-| `task firmware:build:prod` | Build with prod overlay (minimal logs, encryption enforced) |
-| `task firmware:flash` | Flash to connected ESP32 |
-| `task firmware:monitor` | Open serial monitor |
-| `task firmware:flash-monitor` | Flash and monitor in one step |
-| `task firmware:menuconfig` | Open the Kconfig configuration UI |
-| `task firmware:clean` | Full clean of build directory |
-| `task certs:generate` | Generate CA + server TLS certs |
-| `task certs:verify` | Verify the certificate chain |
-| `task proto:gen:nanopb` | Regenerate Nanopb C stubs only |
-| `task proto:gen` | Regenerate all protobuf code (Go + Nanopb) |
-| `task proto:check` | Verify generated code is up to date (CI) |
+- committed `sdkconfig.defaults` overlay files for dev/prod builds
+- a completed secure-boot workflow in the firmware setup process
+- a completed flash-encryption workflow in the firmware setup process
+- encrypted on-device storage for HMAC secrets
+
+Those may exist as design intent elsewhere, but they are not part of the current, ready-to-run firmware setup path in this snapshot.
 
 ---
 
-## Component architecture
+## Recommended current workflow
 
-The firmware follows a layered architecture. Understanding this helps when extending or debugging.
+For the current repo state, the most accurate firmware workflow is:
 
-```
-main/                              Composition root — constructs modules, injects into FSM
-  │
-  ▼
-core/system_fsm/                   Top-level state machine (BOOT → OPERATIONAL → ERROR)
-  │                                Owns card polling, unlock timing, reed switch monitoring
-  │                                Programs against interfaces only — no hardware knowledge
-  │
-  ├── components/portunus_interfaces/
-  │     ICredentialReader           read() → credential_t
-  │     IAccessPoint               unlock(), lock(), is_open()
-  │     IFeedback                  indicate(feedback_type_t)
-  │
-  ▼
-drivers/                           Concrete implementations of the interfaces above
-  reader_mfrc522/                  ICredentialReader → SPI MFRC522 driver
-  access_point_gpio/               IAccessPoint → door strike GPIO + reed switch GPIO
-  feedback_led/                    IFeedback → single LED with pattern task
-  │
-services/                          Infrastructure (no hardware knowledge)
-  event_bus/                       FreeRTOS queue-backed pub/sub
-  heartbeat_service/               Periodic health telemetry
-  wifi_mgr/                        WiFi STA with exponential-backoff reconnect
-  server_comm/                     Event bus ↔ server bridge (HTTP or gRPC + protobuf)
-  grpc_client/                     HTTP/2+TLS client using nghttp2 (conditional build)
-  │
-components/                        Shared, dependency-free
-  portunus_types/                  credential_t, error codes, event types, system states
-  portunus_config/                 Kconfig-driven constants (pins, timing, network, security)
-  portunus_proto/                  Nanopb-generated protobuf message types
-```
-
-Dependencies flow strictly downward. The FSM never imports a driver directly — it uses the interface. Drivers never import other drivers. Services never import drivers. This makes it possible to swap hardware (e.g., MFRC522 → PN532, electric strike → magnetic lock) by implementing the interface without changing any business logic.
+1. install and source ESP-IDF
+2. run `task firmware:menuconfig`
+3. set WiFi, module ID, server host, TLS, and HMAC options
+4. if using private-CA TLS, run `task certs:generate -- --ip <SERVER_IP>`
+5. build with `task firmware:build`
+6. flash with `task firmware:flash-monitor`
+7. verify that the server is reachable and that heartbeat + access requests succeed
 
 ---
 
-## Troubleshooting
+## Related docs
 
-**"idf.py: command not found"** — You need to source the ESP-IDF environment in your current terminal: `. ~/esp/esp-idf/export.sh`. This must be done in every new terminal session.
-
-**"Permission denied" on /dev/ttyUSB0** — Add your user to the `dialout` group: `sudo usermod -a -G dialout $USER`. Log out and back in.
-
-**Build fails with "Custom CA cert not found"** — The firmware is configured to pin a CA certificate (`PORTUNUS_TLS_USE_CUSTOM_CA=y`) but `access_module/certs/ca_cert.pem` doesn't exist. Either run `task certs:generate -- --ip <SERVER_IP>` or disable custom CA pinning in menuconfig.
-
-**MFRC522 not responding (no card reads)** — Check SPI wiring. The most common issue is swapped MOSI/MISO. Verify pin assignments in menuconfig match your physical wiring. Confirm the MFRC522 module is powered at 3.3V (not 5V). Check the RST pin connection — set `PORTUNUS_MFRC522_RST_PIN` to `-1` in menuconfig if RST is not wired.
-
-**"WiFi not connected yet — continuing startup"** — The module timed out waiting for WiFi but continues in degraded mode. It reconnects in the background with exponential backoff. Check SSID and password in menuconfig. Verify the access point is reachable and on the same network.
-
-**Heartbeats succeed but access requests return "unknown_module"** — The module ID in the firmware (`PORTUNUS_MODULE_ID`) is not registered on the server. In dev mode, set `PORTUNUS_KNOWN_MODULES=door-001` on the server. In production, register via the admin API: `POST /admin/v1/modules`.
-
-**HMAC signature mismatch (server returns 401)** — The `PORTUNUS_HMAC_SECRET` in the firmware Kconfig must exactly match the `PORTUNUS_HMAC_SECRET` environment variable on the server. Regenerate both from the same `openssl rand -hex 32` output. Watch for trailing whitespace or newlines.
-
-**Door strike doesn't actuate** — Check active-high vs active-low configuration (`PORTUNUS_DOOR_STRIKE_ACTIVE_LOW`). Verify the relay/MOSFET is receiving the GPIO signal. Confirm the strike's power supply is connected and that the relay coil voltage matches your supply. The strike energizes for `PORTUNUS_UNLOCK_HOLD_MS` (default 5 seconds) then re-locks.
-
-**Reed switch reports wrong state** — Check the normally-open vs normally-closed setting (`PORTUNUS_REED_SWITCH_NC`). The default assumes normally-open wiring (circuit closes when magnet aligns = door shut). If your readings are inverted, toggle this setting in menuconfig.
-
-**Stack overflow crashes** — If you see `CORRUPT HEAP` or task watchdog resets, a FreeRTOS task may have exceeded its stack. Increase the relevant stack size in Kconfig (e.g., `PORTUNUS_MFRC522_TASK_STACK_SIZE`). The gRPC transport requires a larger `server_comm` stack (10KB vs 6KB for HTTP) — this is handled automatically by the build.
+- `access_module/README.md` — firmware architecture and runtime overview
+- `docs/api.md` — current server endpoints and request/response behavior
+- `docs/security.md` — current security model and limitations
+- `proto/README.md` — shared protobuf contract used by the firmware and server
