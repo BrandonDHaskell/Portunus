@@ -144,6 +144,7 @@ func main() {
 			opts = append(opts, grpc.Creds(credentials.NewTLS(&tls.Config{
 				Certificates: []tls.Certificate{cert},
 				MinVersion:   tls.VersionTLS12,
+				NextProtos:   []string{"h2"},
 			})))
 		} else {
 			logger.Printf("gRPC: running WITHOUT TLS (not recommended for production)")
