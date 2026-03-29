@@ -1,276 +1,388 @@
 # Portunus — Security
 
-Threat model, defense layers, known limitations, and operational security procedures.
+Current security model, implemented controls, and known limitations for the Portunus snapshot in this repository.
 
 **Last updated:** March 2026
 
 ---
 
+## Overview
+
+Portunus is a LAN-first access-control system built around two main pieces:
+
+- an **ESP32 access module** that reads an RFID card, monitors door hardware, and sends requests to the server
+- a **Go server** that decides whether access should be granted and records operational state in SQLite
+
+In the current codebase, Portunus uses a layered security model:
+
+1. **TLS** protects traffic in transit when enabled.
+2. **HMAC-SHA256 request signing** authenticates device-originated requests when configured.
+3. **Module registry checks** ensure only commissioned, enabled, non-revoked modules are treated as known.
+4. **Card policy checks** ensure only allowed cards are granted access.
+5. **Bearer-token auth** protects the admin API when configured.
+
+A key detail in the current implementation: several controls are **configuration-dependent**. In development, the server can run without TLS, without HMAC enforcement, and without admin API auth. In production-style deployments, those should all be enabled explicitly.
+
+---
+
+## What is implemented today
+
+| Control | Current state | Where it exists |
+|---|---|---|
+| TLS for HTTP server | Implemented, optional | Go HTTP server via `ListenAndServeTLS()` |
+| TLS for gRPC server | Implemented, optional on server | Go gRPC server via `credentials.NewTLS(...)` |
+| TLS for firmware HTTP client | Implemented | ESP-IDF / mbedTLS |
+| TLS for firmware gRPC client | Implemented and required | `grpc_client` uses `esp-tls` + ALPN `h2` |
+| Custom CA pinning in firmware | Implemented | `access_module/certs/ca_cert.pem` embedded into firmware |
+| Mozilla CA bundle fallback | Implemented | Firmware TLS configuration |
+| Skip-verify dev mode | Implemented | `CONFIG_PORTUNUS_TLS_SKIP_VERIFY` |
+| HMAC-SHA256 on device requests | Implemented, optional on server | HTTP middleware and gRPC interceptor |
+| Admin Bearer-token auth | Implemented, optional on server | HTTP admin middleware |
+| Module commissioning / enabled / revoked checks | Implemented | SQLite-backed `DeviceStore.IsKnown()` |
+| SHA-256 hashing of card IDs | Implemented | Card registration, access checks, audit events |
+| Request body size limits | Implemented | HTTP API handlers |
+| Read-header timeout | Implemented | HTTP server |
+| Serialized SQLite writes | Implemented | DB worker |
+
+---
+
 ## Threat model
 
-### Target environment
+### Intended environment
 
-Portunus is designed for makerspaces, workshops, small offices, and home labs. The system operates entirely on a private local network with no cloud connectivity or internet-facing endpoints. The server is physically accessible to the administrator (e.g., a Raspberry Pi in a network closet or under a desk).
+Portunus is designed for private, local-network deployments such as makerspaces, workshops, small offices, and similar shared physical spaces. The server is expected to live on the same LAN as the access modules, typically on a Raspberry Pi or similar small host.
 
-### Adversary profile
+### Attacker assumptions
 
-The security model assumes a casual adversary with low-to-moderate capability — someone who might try to clone an RFID card, sniff WiFi traffic, or plug a laptop into the LAN. It does not attempt to defend against a well-resourced attacker with physical access to the ESP32 hardware, the server, or the ability to perform extended side-channel analysis.
+The current codebase is aimed at resisting:
 
-### What Portunus protects against
+- passive network eavesdropping
+- casual LAN misuse
+- unauthorized module impersonation without the shared secret
+- accidental or unauthorized admin API access when the admin key is set
+- casual database inspection of stored card data
 
-| Threat | Mitigation | How |
-|---|---|---|
-| Network eavesdropping | TLS encryption | All module ↔ server traffic is encrypted using mbedTLS on the ESP32 and Go's `crypto/tls` on the server |
-| Man-in-the-middle | Certificate pinning | The firmware validates the server certificate against an embedded CA cert (LAN deployments) or the Mozilla CA bundle (public certs) |
-| Unauthorized device impersonation | HMAC-SHA256 request signing | Every request is signed with a pre-shared key; the server rejects unsigned or mis-signed requests |
-| Card UID exposure from database breach | SHA-256 hashing | Raw card UIDs are never stored; the database contains only one-way hashes |
-| Unauthorized admin access | Bearer token auth | Admin API requires a secret key in the Authorization header |
-| Request body tampering | HMAC over body bytes | The HMAC covers the full protobuf-encoded request body; modifying any byte invalidates the signature |
-| Oversized request DoS | Request body limits | Device endpoints capped at 4 KB, admin endpoints at 16 KB, with `ReadHeaderTimeout` of 5 seconds |
-| Timing-based HMAC bypass | Constant-time comparison | `hmac.Equal()` (Go) prevents timing side-channels on signature verification |
+It is **not** designed to fully resist:
 
-### What Portunus does NOT protect against
-
-| Threat | Current status | Notes |
-|---|---|---|
-| Physical access to ESP32 flash | Accepted risk (v1) | Firmware secrets (HMAC key, WiFi password) are stored in plaintext flash. Flash encryption is planned but not enabled. |
-| RFID card cloning (UID-only auth) | Accepted risk (v1) | MFRC522 authenticates by UID only, which is trivially cloneable. Acceptable for the makerspace threat model. Migration to MIFARE key-based auth or more secure readers is a future phase. |
-| Denial of service (WiFi jamming) | Out of scope | A jammer can prevent all module ↔ server communication. Physical security of the wireless environment is outside Portunus's control. |
-| Server compromise | Out of scope | If an attacker gains root on the Pi, they control all access decisions. Standard server hardening (firewalls, SSH key-only, unattended-upgrades) is the owner's responsibility. |
-| Physical bypass of door hardware | Out of scope | A door strike can be defeated with physical force. Portunus controls the electronic lock; it does not replace physical security. |
-| Replay attacks | Partially mitigated | TLS prevents replay at the transport layer. Application-level replay prevention (nonces, sequence validation) is not implemented — the same signed request could theoretically be replayed if TLS were somehow stripped. |
+- a determined attacker with physical access to the ESP32 hardware
+- a compromised server host
+- RFID cloning attacks against UID-only cards
+- radio-layer denial of service such as Wi-Fi jamming
+- strong anti-replay guarantees at the application layer
 
 ---
 
-## Defense layers
+## Transport security
 
-The system uses four independent defense mechanisms. Each addresses a different class of threat, and they compose — compromising one does not defeat the others.
+## HTTP server
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│  Layer 1: TLS Encryption                                     │
-│  Prevents eavesdropping and tampering on the wire            │
-│                                                              │
-│  ┌──────────────────────────────────────────────────────────┐│
-│  │  Layer 2: HMAC-SHA256 Request Signing                    ││
-│  │  Proves the message came from an enrolled device         ││
-│  │                                                          ││
-│  │  ┌──────────────────────────────────────────────────────┐││
-│  │  │  Layer 3: Device Registry (server-side)              │││
-│  │  │  Only commissioned, enabled, non-revoked modules     │││
-│  │  │  receive access grants                               │││
-│  │  │                                                      │││
-│  │  │  ┌──────────────────────────────────────────────────┐│││
-│  │  │  │  Layer 4: Card Policy (server-side)              ││││
-│  │  │  │  Only registered, active cards are granted       ││││
-│  │  │  │  access — all decisions are audited              ││││
-│  │  │  └──────────────────────────────────────────────────┘│││
-│  │  └──────────────────────────────────────────────────────┘││
-│  └──────────────────────────────────────────────────────────┘│
-│                                                              │
-│  Admin API: separate Bearer token auth (not HMAC)            │
-└──────────────────────────────────────────────────────────────┘
+The Go HTTP server can run in one of two modes:
+
+- **plain HTTP** when `PORTUNUS_TLS_CERT_FILE` and `PORTUNUS_TLS_KEY_FILE` are not set
+- **HTTPS** when both files are set
+
+In other words, TLS is supported but not forced by the server binary itself. The repo currently supports secure and insecure startup depending on deployment configuration.
+
+## gRPC server
+
+The server can also expose an optional gRPC listener when `PORTUNUS_GRPC_ADDR` is set.
+
+- If TLS cert/key files are configured, the gRPC server uses TLS with `MinVersion: TLS 1.2` and advertises `h2`.
+- If TLS files are absent, the gRPC server still starts, but without TLS, and logs that this is not recommended for production.
+
+## Firmware TLS modes
+
+The ESP32 firmware supports three certificate-validation modes through Kconfig:
+
+### 1. Custom CA pinning
+
+Recommended for LAN deployments.
+
+- `CONFIG_PORTUNUS_USE_TLS=y`
+- `CONFIG_PORTUNUS_TLS_USE_CUSTOM_CA=y`
+- `CONFIG_PORTUNUS_TLS_SKIP_VERIFY=n`
+
+In this mode, the firmware validates the server certificate against a CA certificate embedded into the firmware image. The expected CA file path is:
+
+```text
+access_module/certs/ca_cert.pem
 ```
 
-An attacker would need to break TLS (to see the traffic), forge the HMAC (to impersonate a device), use a registered module ID (to pass the device registry), and present a registered card UID (to get access granted). No single vulnerability in one layer grants access.
+The repo includes `scripts/generate_certs.sh`, which:
+
+- creates a private CA
+- creates a server certificate signed by that CA
+- copies the CA certificate into `access_module/certs/ca_cert.pem`
+
+### 2. Mozilla CA bundle
+
+Supported for deployments using a publicly trusted certificate chain.
+
+- `CONFIG_PORTUNUS_USE_TLS=y`
+- `CONFIG_PORTUNUS_TLS_USE_CUSTOM_CA=n`
+- `CONFIG_PORTUNUS_TLS_SKIP_VERIFY=n`
+
+### 3. Skip verification
+
+Development-only mode.
+
+- `CONFIG_PORTUNUS_USE_TLS=y`
+- `CONFIG_PORTUNUS_TLS_SKIP_VERIFY=y`
+
+This still encrypts the connection, but it does **not** authenticate the server certificate and therefore does not prevent man-in-the-middle attacks.
+
+## gRPC on firmware requires TLS
+
+The firmware’s gRPC transport is only available when TLS is enabled. In the current Kconfig, `CONFIG_PORTUNUS_USE_GRPC` depends on `CONFIG_PORTUNUS_USE_TLS`, and the custom gRPC client uses `esp-tls` with ALPN `"h2"`.
 
 ---
 
-## TLS implementation details
+## Request authentication with HMAC-SHA256
 
-### Server side (Go)
+Portunus currently uses a single pre-shared secret between the firmware and server for device request authentication.
 
-The server uses Go's standard `crypto/tls` package via `http.Server.ListenAndServeTLS()`. The gRPC listener uses `grpc.Creds(credentials.NewTLS(...))` with `MinVersion: tls.VersionTLS12`. Both listeners share the same certificate and private key.
+### HTTP path
 
-TLS is enabled when both `PORTUNUS_TLS_CERT_FILE` and `PORTUNUS_TLS_KEY_FILE` are set. When either is missing, the server falls back to plain HTTP and logs a warning.
+For HTTP device requests, the firmware:
 
-### Firmware side (ESP32)
+1. encodes the protobuf request body
+2. computes `HMAC-SHA256(secret, raw_body_bytes)`
+3. hex-encodes the result
+4. sends it as the `X-Portunus-Sig` header
 
-The ESP32 firmware uses ESP-IDF's mbedTLS stack. Three certificate validation modes are available, selected via Kconfig:
+The server’s HTTP middleware:
 
-**Custom CA pinning (`PORTUNUS_TLS_USE_CUSTOM_CA=y`, recommended for LAN)** — The CA certificate PEM is embedded in the firmware binary via `EMBED_TXTFILES` in `CMakeLists.txt`. At TLS handshake time, mbedTLS validates the server's certificate chain against this embedded CA. If the server presents a cert not signed by this CA, the connection is refused. This is the strongest option for LAN deployments because it limits trust to a single private CA.
+1. reads the raw request body bytes
+2. computes the expected HMAC
+3. compares the supplied and expected values using `hmac.Equal()`
+4. rejects invalid or missing signatures with HTTP `401`
 
-**Mozilla CA bundle (`PORTUNUS_TLS_USE_CUSTOM_CA=n`)** — The firmware validates against the Mozilla CA bundle shipped with ESP-IDF. Suitable when the server has a publicly-trusted certificate (e.g. Let's Encrypt).
+Important detail: on the **HTTP path**, the current server verifies the signature against the **raw request body bytes**, not against a re-marshaled message.
 
-**Skip verification (`PORTUNUS_TLS_SKIP_VERIFY=y`)** — Disables all certificate validation. The connection is encrypted but vulnerable to man-in-the-middle. Intended only for development. The firmware logs a warning: `TLS cert verification DISABLED (dev mode)`.
+### gRPC path
 
-### Certificate generation
+For gRPC device requests, the firmware attaches the signature as lowercase metadata:
 
-The `scripts/generate_certs.sh` script creates a private CA (10-year validity) and a server certificate (825-day validity, Apple's maximum) with the server's IP address as a Subject Alternative Name. The CA cert is copied into `access_module/certs/ca_cert.pem` for firmware embedding. See [Server Setup — TLS certificate setup](setup_server.md#tls-certificate-setup) for the full procedure.
+```text
+x-portunus-sig
+```
 
----
+The server’s gRPC interceptor:
 
-## HMAC implementation details
+1. reads `x-portunus-sig` from incoming metadata
+2. re-marshals the decoded protobuf message with Go’s protobuf library
+3. computes the expected HMAC over those protobuf bytes
+4. rejects invalid or missing signatures with gRPC `UNAUTHENTICATED`
 
-### How it works
+This is slightly different from the HTTP middleware implementation, but both paths are implemented and both are active in the current codebase.
 
-1. The ESP32 encodes the request body using Nanopb (protobuf → bytes).
-2. It computes `HMAC-SHA256(pre_shared_key, body_bytes)` using mbedTLS.
-3. The hex-encoded result (64 characters) is attached as the `X-Portunus-Sig` header (HTTP) or `x-portunus-sig` metadata (gRPC).
-4. The server receives the request, parses the protobuf body, and re-marshals it to bytes.
-5. It computes the expected HMAC using the same pre-shared key.
-6. It compares the received and expected signatures using `hmac.Equal()` (constant-time).
-7. If they don't match, the request is rejected with HTTP 401 / gRPC `UNAUTHENTICATED`.
+### Enforcement is configuration-dependent
 
-### Why HMAC over the body, not a session token
+HMAC is only enforced when the server is started with:
 
-A session token would prove the device authenticated at some point; HMAC over each request body proves that *this specific message* was produced by a device holding the key. If a message is intercepted and modified in transit (hypothetically, if TLS were compromised), the HMAC still catches the tampering. This is defense in depth — TLS should prevent modification, but HMAC provides a second check.
+```text
+PORTUNUS_HMAC_SECRET
+```
 
-### Why re-marshal on the server
+If that variable is empty, device requests are accepted without HMAC validation. That is useful for early development, but it is not a secure production posture.
 
-The Go server does not verify the HMAC against the raw HTTP request bytes. Instead, it parses the protobuf message, then re-marshals it with `proto.Marshal()` to get canonical bytes. This is necessary because Nanopb (C) and the Go protobuf library may produce slightly different byte orderings for the same logical message (field ordering is canonical in proto3, but optional-field presence encoding can differ). In practice, proto3 serialization is deterministic for the same field values, so the re-marshaled bytes match the original.
+### Current key model
 
-### Scope
-
-HMAC is enforced on `POST` requests to device endpoints (`/v1/*`) only. Admin endpoints (`/admin/v1/*`) use Bearer token auth instead, since they originate from curl or browser, not from ESP32 firmware. `GET` requests are not HMAC-signed (there are currently no `GET` device endpoints).
-
----
-
-## Card ID protection
-
-Raw RFID card UIDs are never stored on the server. The protection flow:
-
-**Registration** (admin API): `POST /admin/v1/cards` with `{"card_id": "04:A3:2B:1C"}` → the server computes `SHA-256("04:A3:2B:1C")` → stores the 32-byte hash in the `cards` table → returns the hex-encoded hash to the admin. The raw card ID is discarded after hashing; it exists only in the HTTP request body during processing.
-
-**Access check** (device request): The ESP32 sends the card UID in the `AccessRequest` protobuf. The server computes `SHA-256(card_id)` and looks up the hash in the `cards` table. If found and the card status is `active`, access is granted.
-
-**Implication**: A database breach exposes SHA-256 hashes, not raw UIDs. However, RFID UIDs are short (4–10 bytes) and the space of valid UIDs is small, so an attacker with the hash could potentially brute-force the UID offline. SHA-256 hashing provides a meaningful barrier against casual exposure but is not equivalent to password-grade hashing (bcrypt/argon2). For the target threat model, this is an acceptable tradeoff — the primary risk is physical card cloning, not database theft.
+The current implementation uses **one shared HMAC secret across all modules**. That means a leaked secret affects every device that uses it. Per-device secrets are not yet implemented in this snapshot.
 
 ---
 
-## Server hardening measures
+## Module authorization
 
-The server applies several defensive measures beyond the authentication layers:
+A valid HMAC alone does not make a module trusted.
 
-| Measure | Implementation | Purpose |
-|---|---|---|
-| Request body size limits | `maxRequestBody = 4096` (device), `maxAdminBody = 16384` (admin) | Prevents memory exhaustion from oversized payloads |
-| Read header timeout | `ReadHeaderTimeout: 5 * time.Second` | Prevents slowloris-style connection exhaustion |
-| JSON field validation | `dec.DisallowUnknownFields()` | Rejects requests with unexpected fields (catches typos and injection attempts) |
-| Constant-time HMAC comparison | `hmac.Equal()` | Prevents timing side-channels on signature verification |
-| Serialized DB writes | Single-goroutine write worker | Prevents SQLite lock contention under concurrent requests |
-| Graceful shutdown | `signal.NotifyContext` + `Shutdown(5s timeout)` | Completes in-flight requests before stopping |
-| systemd hardening | `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp` | Limits process capabilities on the production Pi |
+The server also checks whether the module is known. In the SQLite-backed `DeviceStore`, a module is considered known only if it is:
 
----
+- present in the `modules` table
+- `enabled = 1`
+- has a non-null `commissioned_at_ms`
+- has a null `revoked_at_ms`
 
-## Firmware security posture
+This is the current server-side definition of an enrolled module.
 
-### Current state (v1)
-
-| Feature | Status | Notes |
-|---|---|---|
-| TLS encryption | Implemented | Channel encryption for all server communication |
-| Certificate pinning | Implemented | Embedded CA cert validates server identity |
-| HMAC request signing | Implemented | Per-request authentication with pre-shared key |
-| Flash encryption | Not enabled | ESP32-S3 supports it natively; planned for production phase |
-| Secure boot | Not enabled | ESP32-S3 supports it natively; planned for production phase |
-| NVS encryption | Not implemented | Secrets stored in plaintext Kconfig/flash |
-| OTA signature verification | Not implemented | OTA updates are a planned future feature |
-
-### Flash encryption (planned)
-
-ESP32-S3 supports AES-256 flash encryption in hardware. When enabled, the flash contents (including firmware binary and NVS partition) are encrypted at rest. This protects against physical extraction of secrets via JTAG or flash dump. Flash encryption is one-time-programmable on ESP32 — once enabled, it cannot be disabled. The production sdkconfig overlay (`sdkconfig.defaults.prod`) will enforce this.
-
-### Secure boot (planned)
-
-ESP32-S3 supports RSA-based secure boot. When enabled, the bootloader verifies a digital signature on the firmware image before executing it. This prevents unauthorized firmware from running on the device (e.g., modified firmware that bypasses access checks or exfiltrates the HMAC key). Like flash encryption, secure boot involves eFuse programming and must be tested carefully before production deployment.
-
-### Secret storage (current limitation)
-
-The HMAC pre-shared key and WiFi credentials are currently stored in the firmware binary via Kconfig. This means anyone with physical access to the ESP32 can dump the flash and extract these secrets (absent flash encryption). For the makerspace threat model, this is accepted — the devices are installed in semi-trusted environments. A future enhancement will move secrets to an encrypted NVS partition, separating identity material from the firmware image and enabling per-device secret rotation without reflashing the entire firmware.
+Unknown modules are denied access, but the server still updates its last-seen timestamp entry for operational visibility.
 
 ---
 
-## Credential rotation
+## Card handling and privacy
 
-### HMAC secret rotation
+Portunus does **not** persist raw RFID card IDs in the database.
 
-When to rotate: a device is decommissioned, a firmware binary may have been exposed, or on a scheduled basis (e.g., annually).
+### Registration flow
 
-**Procedure:**
+When a card is registered through the admin API, the server:
 
-1. Generate a new secret: `openssl rand -hex 32`
-2. Update the server: set `PORTUNUS_HMAC_SECRET` to the new value and restart
-3. Reflash each access module with the new `CONFIG_PORTUNUS_HMAC_SECRET` in Kconfig
-4. Verify heartbeats are accepted (HTTP 200 in server logs)
+1. receives the raw `card_id`
+2. computes `SHA-256(card_id)`
+3. stores the 32-byte hash in the `cards` table
+4. returns the hex form of that hash in the API response
 
-The server rejects all device requests between step 2 and step 3 — plan the rollout window for a time when doors can be temporarily non-functional, or rotate during a maintenance window.
+### Access decision flow
 
-The current architecture uses a single HMAC key shared across all modules. A compromised key requires reflashing every device. A future enhancement could use per-device keys (provisioned during commissioning) to limit the blast radius.
+When an access request arrives, the server:
 
-### TLS certificate rotation
+1. extracts the raw card ID from the request
+2. computes `SHA-256(card_id)`
+3. checks whether that hash exists and is allowed in the `cards` table
 
-When to rotate: before the certificate's `Not After` date, or when the server's IP address changes.
+### Audit trail
 
-**Procedure:**
+The current access-event write path also stores the hashed card ID in `access_events.card_id_hash` when a card ID is present.
 
-1. Re-run `task certs:generate -- --ip <SERVER_IP>` to create new CA and server certs
-2. Copy the new server cert and key to the production server
-3. Restart the server
-4. Rebuild and reflash the firmware (the CA cert is embedded in the binary)
+### Limitation
 
-If only the server certificate is rotated (signed by the same CA), firmware reflashing is not needed — the embedded CA cert still validates the new server cert. Reflashing is only required when the CA itself is rotated.
-
-### Admin API key rotation
-
-1. Generate a new key: `openssl rand -hex 32`
-2. Update `PORTUNUS_ADMIN_API_KEY` on the server and restart
-3. Update any scripts or tools that call the admin API
-
-No firmware change is needed — access modules never call the admin API.
+This is privacy-improving, but it is not equivalent to password hashing. RFID UIDs are small enough that a motivated attacker who obtains the database could attempt offline guessing. For the current Portunus threat model, the bigger practical risk remains card cloning rather than database cryptanalysis.
 
 ---
 
-## Production hardening checklist
+## Admin API security
 
-Before deploying Portunus in a production environment, verify each item:
+The admin API is protected separately from the device API.
 
-**Server:**
+When `PORTUNUS_ADMIN_API_KEY` is set, `/admin/v1/*` endpoints require:
 
-- [ ] `PORTUNUS_ENV=prod` (disables dev seeding)
-- [ ] `PORTUNUS_TLS_CERT_FILE` and `PORTUNUS_TLS_KEY_FILE` set (TLS enabled)
-- [ ] `PORTUNUS_HMAC_SECRET` set (HMAC enforcement enabled)
-- [ ] `PORTUNUS_ADMIN_API_KEY` set (admin API protected)
-- [ ] `PORTUNUS_ALLOW_ALL` is `false` or unset
-- [ ] Server running as systemd service under dedicated `portunus` user (not root)
-- [ ] Database file owned by `portunus` user with appropriate permissions
-- [ ] Server cert private key has `0600` permissions
-- [ ] Environment file (`portunus.env`) has `0600` permissions
-- [ ] Firewall allows only the necessary ports (e.g., 8443, 50051)
-- [ ] SSH access to the Pi uses key-based auth (no password login)
+```text
+Authorization: Bearer <key>
+```
 
-**Firmware:**
+If `PORTUNUS_ADMIN_API_KEY` is empty, admin routes are not protected by Bearer-token auth. That may be acceptable for isolated local development, but it should not be treated as secure deployment.
 
-- [ ] `PORTUNUS_TLS_SKIP_VERIFY=n` (cert verification enabled)
-- [ ] `PORTUNUS_TLS_USE_CUSTOM_CA=y` with valid CA cert embedded (LAN deployments)
-- [ ] `PORTUNUS_HMAC_ENABLED=y` with correct secret
-- [ ] `PORTUNUS_HMAC_SECRET` matches the server's `PORTUNUS_HMAC_SECRET` exactly
-- [ ] WiFi credentials are correct for the production network
-- [ ] Module ID (`PORTUNUS_MODULE_ID`) is unique per device and registered on the server
-- [ ] Firmware built with prod overlay (`task firmware:build:prod`)
-- [ ] Build artifacts (`.bin` files) treated as sensitive (contain HMAC key)
+Admin routes do **not** use HMAC request signing.
 
-**Network:**
+---
 
-- [ ] Server and modules on the same LAN (or routable subnet)
-- [ ] No device endpoints exposed to the internet
-- [ ] WiFi network uses WPA2 or WPA3
+## Defensive measures in the current server
 
-**Operational:**
+The current server includes several security-relevant hardening measures in code:
 
-- [ ] All cards registered via admin API (not relying on `PORTUNUS_ALLOWED_CARD_IDS`)
-- [ ] Modules commissioned via admin API
-- [ ] Database backup schedule in place
-- [ ] TLS certificate expiry date noted and renewal planned
-- [ ] HMAC secret rotation schedule defined
+| Measure | Current behavior |
+|---|---|
+| Device request size cap | `4096` bytes max via `http.MaxBytesReader` / limited body reads |
+| Admin request size cap | `16384` bytes max |
+| Header timeout | `ReadHeaderTimeout: 5s` |
+| Constant-time HMAC compare | Uses `hmac.Equal()` |
+| Unknown JSON field rejection | Admin JSON decoding uses `DisallowUnknownFields()` |
+| Serialized writes | SQLite writes funnel through a single worker to reduce lock contention |
+| Graceful shutdown | HTTP shutdown + gRPC graceful stop on SIGINT/SIGTERM |
+
+These measures do not replace authentication, but they improve robustness against malformed or abusive requests.
+
+---
+
+## Firmware secret handling and current limitations
+
+The current firmware stores sensitive material in build-time configuration:
+
+- Wi-Fi SSID and password
+- HMAC shared secret
+- server host and related transport settings
+
+Today, those values are effectively part of the firmware image / device flash configuration. The Kconfig help text already warns that the HMAC secret is stored in flash and that build artifacts should be protected.
+
+### Not currently implemented as an active repo workflow
+
+The following security features are **not** part of the current implemented Portunus workflow in this snapshot:
+
+- ESP32 flash encryption
+- ESP32 secure boot
+- encrypted NVS-backed secret storage
+- OTA signing / OTA verification flow
+- per-device HMAC secrets
+- application-layer nonce or sequence validation for anti-replay
+
+Some of these are reasonable future hardening steps, but they should not be described as active protections in the current codebase.
+
+---
+
+## Replay protection
+
+Replay protection is only partial in the current implementation.
+
+- TLS protects traffic in transit and makes passive replay much harder in normal operation.
+- Heartbeat messages include sequence and uptime fields, and those values are stored.
+- However, the server does **not** currently reject requests based on reused nonces, duplicate sequence numbers, or timestamp freshness.
+
+So, at the application layer, explicit anti-replay enforcement is **not implemented yet**.
+
+---
+
+## Known accepted risks in the current project
+
+These are the most important current limitations to be clear about:
+
+### RFID UID cloning
+
+The current access flow is based on card UID-style identification. That is practical for the project’s current phase, but it is not strong cryptographic card authentication.
+
+### Physical access to the ESP32
+
+Because secure boot and flash encryption are not part of the current workflow, someone with enough physical access to the module may be able to extract firmware-stored secrets.
+
+### Server compromise
+
+If the server host is compromised, the attacker controls access decisions and database contents. Portunus assumes the host operating system is administered separately and sensibly.
+
+### Wi-Fi denial of service
+
+Portunus cannot defend against radio-layer jamming or general Wi-Fi disruption.
+
+### Physical bypass of the door hardware
+
+Portunus controls an electronic access path. It does not replace the need for physically robust locks, strike hardware, enclosure design, and door construction.
+
+---
+
+## Strongest currently supported deployment posture
+
+For the current codebase, the strongest practical setup is:
+
+### Server
+
+- set `PORTUNUS_TLS_CERT_FILE` and `PORTUNUS_TLS_KEY_FILE`
+- set `PORTUNUS_HMAC_SECRET`
+- set `PORTUNUS_ADMIN_API_KEY`
+- leave `PORTUNUS_ALLOW_ALL` unset or `false`
+- commission modules through the admin API
+- register cards in the database instead of relying on legacy env-var allowlists
+
+### Firmware
+
+- enable TLS
+- keep `TLS_SKIP_VERIFY` disabled
+- use `TLS_USE_CUSTOM_CA` with a generated private CA for LAN deployment
+- enable HMAC signing
+- ensure `CONFIG_PORTUNUS_HMAC_SECRET` exactly matches the server secret
+- treat firmware binaries and config outputs as sensitive artifacts
+
+This is the best match to the project’s current intended security posture.
+
+---
+
+## What this document intentionally does not claim
+
+To stay aligned with the current repository, this document does **not** claim that Portunus already has:
+
+- a finished production overlay workflow for ESP32 hardening
+- mandatory TLS in all modes
+- mandatory HMAC in all modes
+- hardware-backed secret protection on the firmware side
+- strong anti-replay at the application layer
+- cryptographically strong smart-card authentication
+
+Those may be good next steps, but they are not the current implemented baseline.
 
 ---
 
 ## Related documentation
 
-- [Architecture — Security model](architecture.md#security-model): mechanism overview and design rationale
-- [Shared secrets setup guide](../access_module/shared_secrets_setup.md): step-by-step TLS and HMAC provisioning
-- [Server setup — TLS certificate setup](setup_server.md#tls-certificate-setup): cert generation and deployment
-- [Firmware setup — Security Configuration](setup_firmware.md#security-configuration): Kconfig security settings reference
-- [API reference — Authentication](api.md#authentication): HMAC and Bearer token request formats
+- [Architecture](architecture.md)
+- [API reference](api.md)
+- [Server setup](setup_server.md)
+- [Firmware setup](setup_firmware.md)
+- [Access module setup and architecture](../access_module/README.md)
+- [Shared secrets setup](../access_module/shared_secrets_setup.md)
