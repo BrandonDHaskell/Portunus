@@ -35,6 +35,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <arpa/inet.h>  /* htonl / ntohl */
+#include <sys/socket.h> /* setsockopt / SO_RCVTIMEO */
 
 static const char *TAG = "grpc_client";
 
@@ -568,6 +569,25 @@ portunus_err_t grpc_client_connect(grpc_client_handle_t c)
     }
 
     ESP_LOGI(TAG, "TLS connected, setting up HTTP/2 session");
+
+    /* ── Set a short read timeout on the underlying socket ────────────── */
+    /* Without this, esp_tls_conn_read() blocks indefinitely when no data
+     * is available, which prevents nghttp2_session_recv() from returning
+     * control to the pump loop.  A 100ms timeout causes the read to
+     * return ESP_TLS_ERR_SSL_WANT_READ, which cb_recv maps to
+     * NGHTTP2_ERR_WOULDBLOCK, allowing the pump to loop, send pending
+     * frames (e.g. WINDOW_UPDATE), and retry the read. */
+    {
+        int sock_fd = -1;
+        if (esp_tls_get_conn_sockfd(c->tls, &sock_fd) == ESP_OK && sock_fd >= 0) {
+            struct timeval tv = {};
+            tv.tv_sec  = 0;
+            tv.tv_usec = 100000; /* 100 ms */
+            setsockopt(sock_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        } else {
+            ESP_LOGW(TAG, "Could not set socket read timeout — pump may block");
+        }
+    }
 
     /* ── nghttp2 session ───────────────────────────────────────────────── */
 

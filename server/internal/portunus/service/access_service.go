@@ -142,7 +142,12 @@ func (s *AccessService) recordEvent(
 		rec.RequestedAt = t
 	}
 
-	// CardIDHash left nil — wired up in item 3 (card hashing).
+	// Hash the card ID for the audit trail (same algorithm as card registration).
+	cardID := strings.TrimSpace(req.CardID)
+	if cardID != "" {
+		h := sha256.Sum256([]byte(cardID))
+		rec.CardIDHash = h[:]
+	}
 
 	_ = s.eventStore.RecordEvent(ctx, rec)
 }

@@ -5,7 +5,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"io"
 	"log"
 	"time"
 
@@ -73,7 +72,6 @@ func HMACInterceptor(secret string) grpc.UnaryServerInterceptor {
 
 		// Compute expected HMAC-SHA256.
 		mac := hmac.New(sha256.New, secretBytes)
-		_, _ = io.WriteString(mac, "")
 		mac.Write(body)
 		expectedSig := mac.Sum(nil)
 
