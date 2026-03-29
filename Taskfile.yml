@@ -5,8 +5,12 @@
 #   task test              — run all tests
 #   task test:server       — run server tests only
 #   task build:server      — build the server binary
+#   task build:server:arm64 — cross-compile for Raspberry Pi
+#   task deploy:server     — build, copy, and restart on the Pi
 #   task proto:gen         — regenerate protobuf code (Go + Nanopb)
 #   task firmware:build    — build the ESP32 firmware
+#   task ci:all            — full validation suite
+#   task release           — validate + deploy server + build prod firmware
 #   task clean             — remove build artifacts
 #
 # Cross-platform:
@@ -14,8 +18,18 @@
 #   Python (required by ESP-IDF) handles file operations that would
 #   otherwise need shell-specific syntax. Go and idf.py commands are
 #   natively cross-platform.
+#
+# Deployment:
+#   Deploy tasks use SSH to push the server binary to a Raspberry Pi.
+#   Configure the target in a .env file (gitignored) in the repo root:
+#
+#     DEPLOY_HOST=pi@192.168.1.100
+#     DEPLOY_DIR=/opt/portunus
+#     DEPLOY_SERVICE=portunus-server
 
 version: "3"
+
+dotenv: ['.env']
 
 vars:
   # ── Cross-platform Python resolution ────────────────────────────────────
@@ -99,6 +113,15 @@ tasks:
     dir: "{{.SERVER_DIR}}"
     cmds:
       - go build -o bin/portunus-server{{.EXE}} ./cmd/portunus-server
+
+  build:server:arm64:
+    desc: Cross-compile server binary for Raspberry Pi (arm64)
+    dir: "{{.SERVER_DIR}}"
+    env:
+      GOOS: linux
+      GOARCH: arm64
+    cmds:
+      - go build -o bin/portunus-server-linux-arm64 ./cmd/portunus-server
 
   clean:server:
     desc: Clean server build artifacts
@@ -210,6 +233,58 @@ tasks:
     cmds:
       - idf.py fullclean
 
+  # ─── Deploy ────────────────────────────────────────────────────────────────
+  # Requires SSH key-based auth to the Pi. Configure target in .env:
+  #   DEPLOY_HOST=pi@192.168.1.100
+  #   DEPLOY_DIR=/opt/portunus
+  #   DEPLOY_SERVICE=portunus-server
+
+  deploy:server:
+    desc: Build, copy, and restart the server on the Raspberry Pi
+    deps: [build:server:arm64]
+    vars:
+      DEPLOY_HOST: '{{.DEPLOY_HOST | default "pi@192.168.1.100"}}'
+      DEPLOY_DIR: '{{.DEPLOY_DIR | default "/opt/portunus"}}'
+      DEPLOY_SERVICE: '{{.DEPLOY_SERVICE | default "portunus-server"}}'
+    cmds:
+      - echo "Deploying to {{.DEPLOY_HOST}}:{{.DEPLOY_DIR}}"
+      # Back up current binary on the Pi
+      - ssh {{.DEPLOY_HOST}} "sudo cp {{.DEPLOY_DIR}}/bin/portunus-server {{.DEPLOY_DIR}}/bin/portunus-server.prev 2>/dev/null || true"
+      # Copy new binary
+      - scp {{.SERVER_DIR}}/bin/portunus-server-linux-arm64 {{.DEPLOY_HOST}}:/tmp/portunus-server
+      # Move into place and restart
+      - ssh {{.DEPLOY_HOST}} "sudo mv /tmp/portunus-server {{.DEPLOY_DIR}}/bin/portunus-server && sudo chmod 755 {{.DEPLOY_DIR}}/bin/portunus-server && sudo systemctl restart {{.DEPLOY_SERVICE}}"
+      # Verify
+      - ssh {{.DEPLOY_HOST}} "sudo systemctl is-active {{.DEPLOY_SERVICE}}"
+      - echo "Deploy complete"
+
+  deploy:server:status:
+    desc: Check the server status on the Raspberry Pi
+    vars:
+      DEPLOY_HOST: '{{.DEPLOY_HOST | default "pi@192.168.1.100"}}'
+      DEPLOY_SERVICE: '{{.DEPLOY_SERVICE | default "portunus-server"}}'
+    cmds:
+      - ssh {{.DEPLOY_HOST}} "sudo systemctl status {{.DEPLOY_SERVICE}} --no-pager"
+
+  deploy:server:logs:
+    desc: Tail server logs on the Raspberry Pi
+    vars:
+      DEPLOY_HOST: '{{.DEPLOY_HOST | default "pi@192.168.1.100"}}'
+      DEPLOY_SERVICE: '{{.DEPLOY_SERVICE | default "portunus-server"}}'
+    cmds:
+      - ssh {{.DEPLOY_HOST}} "sudo journalctl -u {{.DEPLOY_SERVICE}} -f"
+
+  deploy:server:rollback:
+    desc: Roll back to the previous server binary on the Raspberry Pi
+    vars:
+      DEPLOY_HOST: '{{.DEPLOY_HOST | default "pi@192.168.1.100"}}'
+      DEPLOY_DIR: '{{.DEPLOY_DIR | default "/opt/portunus"}}'
+      DEPLOY_SERVICE: '{{.DEPLOY_SERVICE | default "portunus-server"}}'
+    cmds:
+      - ssh {{.DEPLOY_HOST}} "sudo systemctl stop {{.DEPLOY_SERVICE}} && sudo cp {{.DEPLOY_DIR}}/bin/portunus-server.prev {{.DEPLOY_DIR}}/bin/portunus-server && sudo systemctl start {{.DEPLOY_SERVICE}}"
+      - ssh {{.DEPLOY_HOST}} "sudo systemctl is-active {{.DEPLOY_SERVICE}}"
+      - echo "Rollback complete"
+
   # ─── CI ───────────────────────────────────────────────────────────────────
 
   proto:check:
@@ -223,3 +298,19 @@ tasks:
       - task: vet:server
       - task: fmt:server
       - task: test:server:race
+
+  ci:all:
+    desc: Full CI — server checks + proto drift + firmware compile
+    cmds:
+      - task: ci:server
+      - task: proto:check
+      - task: firmware:build
+
+  release:
+    desc: Full release — validate, deploy server, build prod firmware
+    cmds:
+      - task: ci:all
+      - task: deploy:server
+      - task: firmware:clean
+      - task: firmware:build:prod
+      - echo "Server deployed. Firmware built. Flash with 'task firmware:flash'"
