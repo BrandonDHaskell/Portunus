@@ -70,4 +70,6 @@ jobs:
 
       - name: Build firmware
         working-directory: access_module
-        run: idf.py build
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py build
