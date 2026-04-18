@@ -90,6 +90,7 @@ static const char *TAG = "mfrc522";
 /* ── Module state ──────────────────────────────────────────────────────────── */
 
 static spi_device_handle_t s_spi_handle = NULL;
+static bool                s_spi_error  = false;  /* set by reg_read on transfer failure */
 
 /* ── Low-level SPI register access ─────────────────────────────────────────── */
 
@@ -111,6 +112,7 @@ static uint8_t reg_read(uint8_t reg)
     esp_err_t err = spi_device_transmit(s_spi_handle, &txn);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "SPI read reg 0x%02x failed: %s", reg, esp_err_to_name(err));
+        s_spi_error = true;
         return 0;
     }
     return rx[1];
@@ -165,6 +167,8 @@ static portunus_err_t transceive(const uint8_t *send_buf, uint8_t send_len,
 {
     uint8_t tx_last_bits = valid_bits ? (*valid_bits & 0x07) : 0;
 
+    s_spi_error = false;
+
     reg_write(REG_COMMAND, CMD_IDLE);          /* Stop any active command */
     reg_write(REG_COM_IRQ, 0x7F);             /* Clear all interrupt flags */
     reg_write(REG_FIFO_LEVEL, 0x80);          /* Flush FIFO */
@@ -183,6 +187,9 @@ static portunus_err_t transceive(const uint8_t *send_buf, uint8_t send_len,
     uint8_t irq;
     do {
         irq = reg_read(REG_COM_IRQ);
+        if (s_spi_error) {
+            return PORTUNUS_ERR_SPI_TRANSFER;
+        }
         if (--timeout_loops == 0) {
             ESP_LOGD(TAG, "Transceive timeout");
             return PORTUNUS_ERR_TIMEOUT;
@@ -196,6 +203,9 @@ static portunus_err_t transceive(const uint8_t *send_buf, uint8_t send_len,
 
     /* Check for errors */
     uint8_t error_reg = reg_read(REG_ERROR);
+    if (s_spi_error) {
+        return PORTUNUS_ERR_SPI_TRANSFER;
+    }
     if (error_reg & 0x13) {  /* BufferOvfl | ParityErr | ProtocolErr */
         ESP_LOGD(TAG, "Transceive error: 0x%02x", error_reg);
         if (error_reg & 0x08) {  /* CollErr */

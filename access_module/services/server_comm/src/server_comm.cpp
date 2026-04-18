@@ -82,6 +82,9 @@ static bool           s_initialized  = false;
 #if PORTUNUS_USE_GRPC
 /* gRPC client handle — persistent HTTP/2+TLS connection to the server. */
 static grpc_client_handle_t s_grpc_handle = NULL;
+/* Idle-tick counter for keepalive PINGs (1 tick ≈ 1 s). */
+static int s_idle_ticks = 0;
+#define GRPC_PING_INTERVAL_TICKS 30
 #else
 /* Reusable URL buffers built once at init */
 static char s_heartbeat_url[URL_MAX_LEN];
@@ -484,10 +487,7 @@ static void handle_credential(const event_credential_read_t *cred)
         publish_access_denied(req.card_id, "grpc_error");
         return;
     }
-    /* gRPC uses status codes for transport-level errors.
-     * PERMISSION_DENIED maps to the old HTTP 403 (unknown module). */
-    if (grpc_status != GRPC_STATUS_OK &&
-        grpc_status != GRPC_STATUS_PERMISSION_DENIED) {
+    if (grpc_status != GRPC_STATUS_OK) {
         ESP_LOGW(TAG, "Access gRPC status: %d", grpc_status);
         publish_access_denied(req.card_id, "grpc_status_error");
         return;
@@ -504,8 +504,7 @@ static void handle_credential(const event_credential_read_t *cred)
         return;
     }
 
-    /* Accept 200 (granted/denied) and 403 (unknown module) */
-    if (status != 200 && status != 403) {
+    if (status != 200) {
         ESP_LOGW(TAG, "Access server returned HTTP %d", status);
         publish_access_denied(req.card_id, "http_status_error");
         return;
@@ -550,8 +549,23 @@ static void comm_task(void *arg)
 
     for (;;) {
         if (xQueueReceive(s_comm_queue, &event, pdMS_TO_TICKS(1000)) != pdTRUE) {
+#if PORTUNUS_USE_GRPC
+            if (++s_idle_ticks >= GRPC_PING_INTERVAL_TICKS) {
+                s_idle_ticks = 0;
+                if (s_grpc_handle != NULL && grpc_client_is_connected(s_grpc_handle)) {
+                    portunus_err_t perr = grpc_client_send_ping(s_grpc_handle);
+                    if (perr != PORTUNUS_OK) {
+                        ESP_LOGW(TAG, "keepalive PING failed: 0x%04x", (unsigned)perr);
+                    }
+                }
+            }
+#endif
             continue;   /* Idle tick — nothing queued */
         }
+
+#if PORTUNUS_USE_GRPC
+        s_idle_ticks = 0;  /* Reset on any RPC activity */
+#endif
 
         if (!wifi_mgr_is_connected()) {
             ESP_LOGD(TAG, "WiFi not connected — dropping event 0x%04x",

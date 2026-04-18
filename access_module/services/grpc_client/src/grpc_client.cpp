@@ -50,6 +50,10 @@ static constexpr int MAX_CUSTOM_METADATA = 4;
 /** Maximum length for a metadata key or value. */
 static constexpr size_t MAX_METADATA_LEN = 128;
 
+/** Upper bound on outbound RPC payload; avoids heap allocation on the hot path.
+ *  Sized to HeartbeatRequest_size (142) + margin. */
+static constexpr size_t GRPC_MAX_REQUEST_PAYLOAD = 192;
+
 /* ── Internal types ────────────────────────────────────────────────────────── */
 
 /** Custom metadata key-value pair. */
@@ -66,15 +70,16 @@ struct metadata_entry_t {
  */
 struct stream_state_t {
     /* Response accumulation */
-    uint8_t *resp_buf;       /**< Caller's response buffer. */
-    size_t   resp_cap;       /**< Capacity of resp_buf. */
-    size_t   resp_len;       /**< Bytes written so far (includes gRPC frame header). */
+    uint8_t *resp_buf;           /**< Caller's response buffer. */
+    size_t   resp_cap;           /**< Capacity of resp_buf. */
+    size_t   resp_len;           /**< Bytes written so far (includes gRPC frame header). */
 
     /* gRPC trailers */
-    int      grpc_status;    /**< Parsed grpc-status from trailers (-1 = not received). */
-    bool     headers_done;   /**< True after initial HEADERS frame received. */
-    bool     stream_closed;  /**< True after stream is fully closed. */
-    bool     got_error;      /**< True if an error occurred during the stream. */
+    int      grpc_status;        /**< Parsed grpc-status from trailers (-1 = not received). */
+    bool     headers_done;       /**< True after initial HEADERS frame received. */
+    bool     stream_closed;      /**< True after stream is fully closed. */
+    bool     got_error;          /**< True if an error occurred during the stream. */
+    uint32_t stream_error_code;  /**< HTTP/2 RST_STREAM error code (0 = clean close). */
 };
 
 /** Main client structure (opaque to callers). */
@@ -87,6 +92,7 @@ struct grpc_client {
 
     /* HTTP/2 session */
     nghttp2_session      *session;
+    bool                  settings_received; /**< True after server SETTINGS frame received. */
 
     /* Custom metadata headers sent with every RPC */
     metadata_entry_t      metadata[MAX_CUSTOM_METADATA];
@@ -283,6 +289,7 @@ static int cb_on_data_chunk(nghttp2_session *session, uint8_t flags,
 
     if (to_copy < len) {
         ESP_LOGW(TAG, "gRPC response truncated: buffer full (%zu bytes)", ss->resp_cap);
+        ss->got_error = true;
     }
 
     return 0;
@@ -296,11 +303,16 @@ static int cb_on_frame_recv(nghttp2_session *session,
                              const nghttp2_frame *frame,
                              void *user_data)
 {
-    (void)user_data;
-
     if (frame->hd.stream_id == 0) {
+        /* Track server SETTINGS arrival for handshake completion (B19). */
+        if (frame->hd.type == NGHTTP2_SETTINGS &&
+            !(frame->hd.flags & NGHTTP2_FLAG_ACK)) {
+            auto *c = static_cast<grpc_client *>(user_data);
+            c->settings_received = true;
+        }
         return 0; /* Connection-level frame (SETTINGS, PING, etc.) */
     }
+    (void)user_data;
 
     auto *ss = static_cast<stream_state_t *>(
         nghttp2_session_get_stream_user_data(session, frame->hd.stream_id));
@@ -333,9 +345,8 @@ static int cb_on_stream_close(nghttp2_session *session, int32_t stream_id,
 
     ss->stream_closed = true;
     if (error_code != 0) {
-        ESP_LOGW(TAG, "Stream %d closed with error: 0x%08x",
-                 static_cast<int>(stream_id), static_cast<unsigned>(error_code));
         ss->got_error = true;
+        ss->stream_error_code = error_code;
     }
 
     return 0;
@@ -422,16 +433,14 @@ static portunus_err_t pump_session(grpc_client *c, stream_state_t *ss)
             return PORTUNUS_ERR_HTTP_CONNECT;
         }
 
-        /* If we're not waiting on a specific stream (e.g. initial SETTINGS
-         * exchange), check if session wants to continue. */
+        /* Connection-level pump (initial SETTINGS exchange or PING keepalive).
+         * Exit once the server's SETTINGS has been received and we have
+         * nothing left to send (our SETTINGS ACK has been flushed). */
         if (ss == nullptr) {
-            if (nghttp2_session_want_read(c->session) == 0 &&
+            if (c->settings_received &&
                 nghttp2_session_want_write(c->session) == 0) {
                 return PORTUNUS_OK;
             }
-            /* For the initial handshake, break after one send+recv cycle
-             * once we've sent our SETTINGS and received the server's. */
-            return PORTUNUS_OK;
         }
 
         /* Small yield to avoid starving other tasks. */
@@ -616,7 +625,8 @@ portunus_err_t grpc_client_connect(grpc_client_handle_t c)
         return PORTUNUS_ERR_HTTP_CONNECT;
     }
 
-    /* Pump to exchange SETTINGS. */
+    /* Pump to exchange SETTINGS — reset the flag so pump_session knows to wait. */
+    c->settings_received = false;
     err = pump_session(c, nullptr);
     if (err != PORTUNUS_OK) {
         ESP_LOGE(TAG, "HTTP/2 SETTINGS exchange failed");
@@ -647,6 +657,7 @@ void grpc_client_disconnect(grpc_client_handle_t c)
     }
 
     c->connected = false;
+    memset(c->metadata, 0, sizeof(c->metadata));
 }
 
 bool grpc_client_is_connected(grpc_client_handle_t c)
@@ -691,6 +702,27 @@ portunus_err_t grpc_client_set_metadata(grpc_client_handle_t c,
     return PORTUNUS_OK;
 }
 
+portunus_err_t grpc_client_send_ping(grpc_client_handle_t c)
+{
+    if (c == nullptr || !c->connected) {
+        return PORTUNUS_ERR_INVALID_ARG;
+    }
+
+    static const uint8_t opaque[8] = {'P','O','R','T','U','N','U','S'};
+    int rv = nghttp2_submit_ping(c->session, NGHTTP2_FLAG_NONE, opaque);
+    if (rv != 0) {
+        ESP_LOGE(TAG, "nghttp2_submit_ping failed: %s", nghttp2_strerror(rv));
+        c->connected = false;
+        return PORTUNUS_ERR_HTTP_CONNECT;
+    }
+
+    portunus_err_t err = pump_session(c, nullptr);
+    if (err != PORTUNUS_OK) {
+        c->connected = false;
+    }
+    return err;
+}
+
 portunus_err_t grpc_client_unary_call(grpc_client_handle_t c,
                                        const char *service_method,
                                        const uint8_t *req_buf, size_t req_len,
@@ -716,15 +748,15 @@ portunus_err_t grpc_client_unary_call(grpc_client_handle_t c,
 
     /* ── Build gRPC frame (5-byte prefix + protobuf) ───────────────────── */
 
-    size_t grpc_frame_len = GRPC_FRAME_HEADER_LEN + req_len;
-    auto *grpc_frame = static_cast<uint8_t *>(malloc(grpc_frame_len));
-    if (grpc_frame == nullptr) {
-        return PORTUNUS_ERR_NO_MEMORY;
+    if (req_len > GRPC_MAX_REQUEST_PAYLOAD) {
+        ESP_LOGE(TAG, "Request payload too large: %zu > %zu", req_len, GRPC_MAX_REQUEST_PAYLOAD);
+        return PORTUNUS_ERR_PROTO_ENCODE;
     }
+    uint8_t grpc_frame[GRPC_FRAME_HEADER_LEN + GRPC_MAX_REQUEST_PAYLOAD];
+    size_t grpc_frame_len = GRPC_FRAME_HEADER_LEN + req_len;
 
     size_t encoded_len = 0;
     if (!grpc_frame_encode(req_buf, req_len, grpc_frame, grpc_frame_len, &encoded_len)) {
-        free(grpc_frame);
         return PORTUNUS_ERR_PROTO_ENCODE;
     }
 
@@ -747,11 +779,7 @@ portunus_err_t grpc_client_unary_call(grpc_client_handle_t c,
     }
 
     size_t total_hdrs = BASE_HDR_COUNT + custom_count;
-    auto *hdrs = static_cast<nghttp2_nv *>(malloc(total_hdrs * sizeof(nghttp2_nv)));
-    if (hdrs == nullptr) {
-        free(grpc_frame);
-        return PORTUNUS_ERR_NO_MEMORY;
-    }
+    nghttp2_nv hdrs[BASE_HDR_COUNT + MAX_CUSTOM_METADATA];
 
     /* Copy base headers. */
     memcpy(hdrs, base_hdrs, BASE_HDR_COUNT * sizeof(nghttp2_nv));
@@ -792,12 +820,9 @@ portunus_err_t grpc_client_unary_call(grpc_client_handle_t c,
     int32_t stream_id = nghttp2_submit_request(
         c->session, nullptr, hdrs, total_hdrs, &data_prd, &ss);
 
-    free(hdrs);
-
     if (stream_id < 0) {
         ESP_LOGE(TAG, "nghttp2_submit_request failed: %s",
                  nghttp2_strerror(stream_id));
-        free(grpc_frame);
         c->connected = false;
         return PORTUNUS_ERR_HTTP_CONNECT;
     }
@@ -808,14 +833,15 @@ portunus_err_t grpc_client_unary_call(grpc_client_handle_t c,
     /* ── Pump until stream completes ───────────────────────────────────── */
 
     portunus_err_t err = pump_session(c, &ss);
-    free(grpc_frame);
 
     if (err != PORTUNUS_OK) {
         return err;
     }
 
     if (ss.got_error) {
-        ESP_LOGW(TAG, "Stream error on %s", service_method);
+        /* Log the HTTP/2 error code so operators can distinguish retry vs back-off. */
+        ESP_LOGW(TAG, "Stream error on %s: RST code=0x%x", service_method,
+                 static_cast<unsigned>(ss.stream_error_code));
         c->connected = false;
         return PORTUNUS_ERR_HTTP_CONNECT;
     }

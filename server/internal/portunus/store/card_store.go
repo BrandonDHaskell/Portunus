@@ -6,7 +6,10 @@ import (
 	"time"
 )
 
-var ErrCardAlreadyExists = errors.New("card already registered")
+var (
+	ErrCardAlreadyExists = errors.New("card already registered")
+	ErrNotFound          = errors.New("record not found")
+)
 
 // CardRecord represents a row in the cards table.
 type CardRecord struct {

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -299,7 +300,7 @@ func adminAuthMiddleware(apiKey string, next http.Handler) http.Handler {
 		}
 
 		token := strings.TrimSpace(auth[len(prefix):])
-		if token != apiKey {
+		if subtle.ConstantTimeCompare([]byte(token), []byte(apiKey)) != 1 {
 			writeError(w, http.StatusForbidden, "forbidden", "invalid admin API key")
 			return
 		}

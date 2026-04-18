@@ -25,7 +25,8 @@ dependencies:
     version: 0.4.10
 direct_dependencies:
 - espressif/nghttp
+- idf
 - nikas-belogolov/nanopb
-manifest_hash: b07733c4062b728d1365f9af1a64d433884b5c71a3bc7052efd6de5420529767
+manifest_hash: 7c81e5165c4ac232c35dcc599dbe974f2e02ba614a28207581c702ab20a4652a
 target: esp32s3
 version: 2.0.0

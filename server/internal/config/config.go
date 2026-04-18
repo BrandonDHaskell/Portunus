@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"strconv"
 	"strings"
@@ -41,6 +42,39 @@ type Config struct {
 	// Authorization: Bearer <key> header matching this value.
 	// Generate with: openssl rand -hex 32
 	AdminAPIKey string
+
+	// Card hash secret for keyed HMAC-SHA256 card ID hashing.
+	// When set, card IDs are hashed with HMAC-SHA256(secret, cardID) instead
+	// of bare SHA-256, preventing rainbow-table attacks on a stolen database.
+	// Generate with: openssl rand -hex 32
+	// Required in prod mode.
+	CardHashSecret string
+}
+
+// Validate returns an error if the config is unsafe for prod mode.
+// In dev mode it always returns nil.
+func (c Config) Validate() error {
+	if c.Env != "prod" {
+		return nil
+	}
+
+	var errs []error
+	if c.TLSCertFile == "" || c.TLSKeyFile == "" {
+		errs = append(errs, errors.New("prod requires TLS: set PORTUNUS_TLS_CERT_FILE and PORTUNUS_TLS_KEY_FILE"))
+	}
+	if c.HMACSecret == "" {
+		errs = append(errs, errors.New("prod requires HMAC auth: set PORTUNUS_HMAC_SECRET"))
+	}
+	if c.AdminAPIKey == "" {
+		errs = append(errs, errors.New("prod requires an admin API key: set PORTUNUS_ADMIN_API_KEY"))
+	}
+	if c.AllowAll {
+		errs = append(errs, errors.New("prod forbids PORTUNUS_ALLOW_ALL=true"))
+	}
+	if c.CardHashSecret == "" {
+		errs = append(errs, errors.New("prod requires a card hash secret: set PORTUNUS_CARD_HASH_SECRET"))
+	}
+	return errors.Join(errs...)
 }
 
 func FromEnv() Config {
@@ -68,6 +102,7 @@ func FromEnv() Config {
 	hmacSecret := os.Getenv("PORTUNUS_HMAC_SECRET")
 	adminAPIKey := strings.TrimSpace(os.Getenv("PORTUNUS_ADMIN_API_KEY"))
 	grpcAddr := strings.TrimSpace(os.Getenv("PORTUNUS_GRPC_ADDR"))
+	cardHashSecret := os.Getenv("PORTUNUS_CARD_HASH_SECRET")
 
 	return Config{
 		HTTPAddr: addr,
@@ -82,10 +117,11 @@ func FromEnv() Config {
 		HeartbeatRetentionDays: retentionDays,
 		PruneIntervalHours:     pruneInterval,
 
-		TLSCertFile: tlsCert,
-		TLSKeyFile:  tlsKey,
-		HMACSecret:  hmacSecret,
-		AdminAPIKey: adminAPIKey,
+		TLSCertFile:    tlsCert,
+		TLSKeyFile:     tlsKey,
+		HMACSecret:     hmacSecret,
+		AdminAPIKey:    adminAPIKey,
+		CardHashSecret: cardHashSecret,
 	}
 }
 

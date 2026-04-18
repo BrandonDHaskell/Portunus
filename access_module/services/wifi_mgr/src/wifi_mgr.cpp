@@ -90,15 +90,18 @@ static void reconnect_task(void *arg)
         ESP_LOGI(TAG, "Reconnect: waiting %" PRIu32 " ms before retry", delay_ms);
         vTaskDelay(pdMS_TO_TICKS(delay_ms));
 
-        /* Advance the backoff for the NEXT attempt (cap at ceiling). */
-        s_reconnect_interval_ms =
-            std::min(s_reconnect_interval_ms * 2, RECONNECT_CEILING_MS);
-
-        /* If we reconnected during the delay (e.g. short blip), skip. */
+        /* If a blip-reconnect succeeded during the delay, the IP event handler
+           already reset s_reconnect_interval_ms.  Advancing backoff here would
+           overwrite that reset, leaving the next real disconnect with a stale
+           (too-long) interval.  Only advance when we actually attempt a connect. */
         if (s_connected) {
             ESP_LOGI(TAG, "Reconnect: already connected, skipping attempt");
             continue;
         }
+
+        /* Advance the backoff for the NEXT attempt (cap at ceiling). */
+        s_reconnect_interval_ms =
+            std::min(s_reconnect_interval_ms * 2, RECONNECT_CEILING_MS);
 
         ESP_LOGI(TAG, "Reconnect: calling esp_wifi_connect()");
         esp_err_t err = esp_wifi_connect();
