@@ -55,7 +55,7 @@ portunus_err_t FeedbackLed::init()
 
     portunus_err_t err = led_init();
     if (err != PORTUNUS_OK) {
-        ESP_LOGE(TAG, "LED HAL init failed: 0x%" PRIx32, err);
+        ESP_LOGE(TAG, "LED HAL init failed: 0x%" PRIx32, (uint32_t)err);
         return err;
     }
 
