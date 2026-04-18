@@ -194,6 +194,15 @@ func (s *Server) handleAccessRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if !resp.Known {
+		if protoReq {
+			writeProto(w, http.StatusForbidden, accessResponseToProto(resp))
+		} else {
+			writeJSON(w, http.StatusForbidden, resp)
+		}
+		return
+	}
+
 	if protoReq {
 		writeProto(w, http.StatusOK, accessResponseToProto(resp))
 	} else {
