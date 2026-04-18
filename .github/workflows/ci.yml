@@ -70,6 +70,8 @@ jobs:
 
       - name: Build firmware
         working-directory: access_module
+        env:
+          SDKCONFIG_DEFAULTS: "sdkconfig.defaults;sdkconfig.defaults.dev"
         run: |
           . $IDF_PATH/export.sh
           idf.py build
