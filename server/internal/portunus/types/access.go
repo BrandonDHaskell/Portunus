@@ -1,10 +1,10 @@
 package types
 
 type AccessRequest struct {
-	ModuleID      string `json:"module_id"`
-	CardID        string `json:"card_id"`
-	DoorClosed    *bool  `json:"door_closed,omitempty"`
-	RequestedAt   string `json:"requested_at,omitempty"` // optional device timestamp
+	ModuleID    string `json:"module_id"`
+	CardID      string `json:"card_id"`
+	DoorClosed  *bool  `json:"door_closed,omitempty"`
+	RequestedAt string `json:"requested_at,omitempty"` // optional device timestamp
 }
 
 type AccessResponse struct {

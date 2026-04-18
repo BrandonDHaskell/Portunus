@@ -6,9 +6,9 @@ import (
 )
 
 type DeviceRecord struct {
-	ModuleID  string
-	Known     bool
-	LastSeen  time.Time
+	ModuleID string
+	Known    bool
+	LastSeen time.Time
 }
 
 type DeviceStore interface {
