@@ -827,7 +827,7 @@ portunus_err_t grpc_client_unary_call(grpc_client_handle_t c,
         return PORTUNUS_ERR_HTTP_CONNECT;
     }
 
-    ESP_LOGD(TAG, "Submitted gRPC request on stream %d: %s (%zu bytes)",
+    ESP_LOGD(TAG, "Submitted gRPC request on stream %" PRId32 ": %s (%zu bytes)",
              stream_id, service_method, req_len);
 
     /* ── Pump until stream completes ───────────────────────────────────── */
