@@ -37,7 +37,7 @@ portunus_err_t AccessPointGpio::init()
     {
         portunus_err_t err = door_strike_init();
         if (err != PORTUNUS_OK) {
-            ESP_LOGE(TAG, "Door strike init failed: 0x%04x" PRIx32, err);
+            ESP_LOGE(TAG, "Door strike init failed: 0x%" PRIx32, (uint32_t)err);
             return err;
         }
         any_capability = true;
@@ -48,7 +48,7 @@ portunus_err_t AccessPointGpio::init()
     {
         portunus_err_t err = reed_switch_init();
         if (err != PORTUNUS_OK) {
-            ESP_LOGE(TAG, "Reed switch init failed: 0x%04x" PRIx32, err);
+            ESP_LOGE(TAG, "Reed switch init failed: 0x%" PRIx32, (uint32_t)err);
             return err;
         }
         any_capability = true;

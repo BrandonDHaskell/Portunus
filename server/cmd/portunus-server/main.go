@@ -14,6 +14,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
 
 	pb "github.com/BrandonDHaskell/Portunus/server/api/portunus/v1"
@@ -29,6 +30,10 @@ import (
 func main() {
 	cfg := config.FromEnv()
 	logger := log.New(os.Stdout, "portunus-server ", log.LstdFlags|log.LUTC)
+
+	if err := cfg.Validate(); err != nil {
+		logger.Fatalf("configuration error:\n%v", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -87,8 +92,14 @@ func main() {
 	// or cardStore is nil.
 	accessSvc.SetCardStore(cardStore)
 
+	cardHashSecret := []byte(cfg.CardHashSecret)
+	if cfg.CardHashSecret == "" {
+		logger.Printf("WARNING: PORTUNUS_CARD_HASH_SECRET not set — card IDs hashed without a key (insecure, dev only)")
+	}
+	accessSvc.SetCardHashSecret(cardHashSecret)
+
 	// Admin service for module/card/door management via REST API.
-	adminSvc := service.NewAdminService(moduleAdminStore, cardStore)
+	adminSvc := service.NewAdminService(moduleAdminStore, cardStore, cardHashSecret)
 
 	// HTTP
 	srv := httpapi.NewServer(httpapi.Dependencies{
@@ -133,6 +144,15 @@ func main() {
 
 		opts := []grpc.ServerOption{
 			grpc.ChainUnaryInterceptor(interceptors...),
+			grpc.KeepaliveParams(keepalive.ServerParameters{
+				MaxConnectionIdle: 5 * time.Minute,
+				Time:              2 * time.Minute,
+				Timeout:           20 * time.Second,
+			}),
+			grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+				MinTime:             30 * time.Second,
+				PermitWithoutStream: true,
+			}),
 		}
 
 		// TLS for gRPC — uses the same cert/key as the HTTP server.
@@ -185,6 +205,15 @@ func main() {
 
 	// Gracefully stop the gRPC server if it was started.
 	if grpcServer != nil {
-		grpcServer.GracefulStop()
+		stopped := make(chan struct{})
+		go func() {
+			grpcServer.GracefulStop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+		case <-time.After(5 * time.Second):
+			grpcServer.Stop()
+		}
 	}
 }

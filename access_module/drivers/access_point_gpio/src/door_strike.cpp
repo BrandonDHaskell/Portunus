@@ -43,6 +43,12 @@ portunus_err_t door_strike_init(void)
         return PORTUNUS_OK;
     }
 
+    /* Set safe inactive level in the output register *before* enabling the pin
+       as an output.  Without this, active-low configurations briefly pulse the
+       actuator between gpio_config (output enabled, level defaults to LOW) and
+       the subsequent gpio_set_level call. */
+    gpio_set_level(static_cast<gpio_num_t>(PIN_DOOR_STRIKE), STRIKE_LEVEL_INACTIVE);
+
     gpio_config_t io_conf = {};
     io_conf.pin_bit_mask = (1ULL << PIN_DOOR_STRIKE);
     io_conf.mode         = GPIO_MODE_OUTPUT;
@@ -55,9 +61,6 @@ portunus_err_t door_strike_init(void)
         ESP_LOGE(TAG, "GPIO config failed: %s", esp_err_to_name(err));
         return PORTUNUS_ERR_GPIO_INIT;
     }
-
-    /* Fail-secure: always start de-energized (locked). */
-    gpio_set_level(static_cast<gpio_num_t>(PIN_DOOR_STRIKE), STRIKE_LEVEL_INACTIVE);
     s_energized   = false;
     s_initialized = true;
 

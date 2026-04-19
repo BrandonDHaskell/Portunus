@@ -118,19 +118,6 @@ func (s *Server) RequestAccess(ctx context.Context, req *pb.AccessRequest) (*pb.
 		}
 	}
 
-	// If the module is not registered, return PERMISSION_DENIED.
-	// This mirrors the HTTP 403 behaviour for unknown modules.
-	if !resp.Known {
-		return &pb.AccessResponse{
-			Ok:         resp.OK,
-			Known:      false,
-			Granted:    false,
-			Reason:     resp.Reason,
-			ModuleId:   resp.ModuleID,
-			ServerTime: resp.ServerTime,
-		}, status.Errorf(codes.PermissionDenied, "unknown module: %s", resp.ModuleID)
-	}
-
 	return &pb.AccessResponse{
 		Ok:         resp.OK,
 		Known:      resp.Known,

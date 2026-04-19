@@ -101,7 +101,7 @@ UPDATE cards SET status = ?, updated_at_ms = ? WHERE card_id_hash = ?;
 		}
 		n, _ := res.RowsAffected()
 		if n == 0 {
-			return sql.ErrNoRows
+			return store.ErrNotFound
 		}
 		return nil
 	})
@@ -117,7 +117,7 @@ DELETE FROM cards WHERE card_id_hash = ?;
 		}
 		n, _ := res.RowsAffected()
 		if n == 0 {
-			return sql.ErrNoRows
+			return store.ErrNotFound
 		}
 		return nil
 	})
@@ -136,11 +136,19 @@ SELECT status FROM cards WHERE card_id_hash = ?;
 	}
 
 	if status == "active" {
-		// Update last_seen_at as a background side effect.
 		now := time.Now().UTC().UnixMilli()
-		_, _ = s.db.ExecContext(ctx, `
+		// Route through the writer to respect the single-writer invariant.
+		// Run in a goroutine so the access response is not delayed.
+		go func() {
+			wCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = s.writer.Do(wCtx, func(wCtx context.Context, tx *sql.Tx) error {
+				_, err := tx.ExecContext(wCtx, `
 UPDATE cards SET last_seen_at_ms = ?, updated_at_ms = ? WHERE card_id_hash = ?;
 `, now, now, cardIDHash)
+				return err
+			})
+		}()
 	}
 
 	return status == "active", nil

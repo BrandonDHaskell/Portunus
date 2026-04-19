@@ -82,7 +82,7 @@ portunus_err_t SystemFSM::init()
             ESP_LOGI(TAG, "Credential reader: OK");
         } else {
             m_caps.has_reader = false;
-            ESP_LOGW(TAG, "Credential reader init failed (0x%04x) — card polling disabled PRIx32", err);
+            ESP_LOGW(TAG, "Credential reader init failed (0x%" PRIx32 ") — card polling disabled", (uint32_t)err);
         }
     } else {
         m_caps.has_reader = false;
@@ -97,7 +97,7 @@ portunus_err_t SystemFSM::init()
             ESP_LOGI(TAG, "Access point: OK");
         } else {
             m_caps.has_access_point = false;
-            ESP_LOGW(TAG, "Access point init failed (0x%04x) — door control disabled PRIx32", err);
+            ESP_LOGW(TAG, "Access point init failed (0x%" PRIx32 ") — door control disabled", (uint32_t)err);
         }
     } else {
         m_caps.has_access_point = false;
@@ -112,7 +112,7 @@ portunus_err_t SystemFSM::init()
             ESP_LOGI(TAG, "Feedback: OK");
         } else {
             m_caps.has_feedback = false;
-            ESP_LOGW(TAG, "Feedback init failed (0x%04x) — LED disabled PRIx32", err);
+            ESP_LOGW(TAG, "Feedback init failed (0x%" PRIx32 ") — LED disabled", (uint32_t)err);
         }
     } else {
         m_caps.has_feedback = false;
@@ -325,7 +325,7 @@ void SystemFSM::process_event(const portunus_event_t &event)
                 ESP_LOGI(TAG, "Strike energized — hold timer started (%d ms)",
                          UNLOCK_HOLD_MS);
             } else {
-                ESP_LOGE(TAG, "Failed to unlock: 0x%04x PRIx32", err);
+                ESP_LOGE(TAG, "Failed to unlock: 0x%" PRIx32, (uint32_t)err);
             }
         } else {
             ESP_LOGW(TAG, "Access granted but no access point — cannot unlock");

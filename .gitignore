@@ -42,9 +42,9 @@
 
 # ESP-IDF
 sdkconfig
-sdkconfig.defaults
 sdkconfig.defaults.dev
 sdkconfig.defaults.prod
+sdkconfig.defaults.secret
 sdkconfig.old
 build/
 

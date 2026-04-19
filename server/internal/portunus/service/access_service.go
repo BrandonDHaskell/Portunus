@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"strings"
 	"time"
@@ -24,10 +23,11 @@ type AccessPolicy struct {
 }
 
 type AccessService struct {
-	registry   *DeviceRegistry
-	policy     AccessPolicy
-	eventStore store.AccessEventStore
-	cardStore  store.CardStore // nil = use legacy AllowedCardIDs map
+	registry       *DeviceRegistry
+	policy         AccessPolicy
+	eventStore     store.AccessEventStore
+	cardStore      store.CardStore // nil = use legacy AllowedCardIDs map
+	cardHashSecret []byte
 }
 
 func NewAccessService(reg *DeviceRegistry, policy AccessPolicy, es store.AccessEventStore) *AccessService {
@@ -38,6 +38,12 @@ func NewAccessService(reg *DeviceRegistry, policy AccessPolicy, es store.AccessE
 // AllowedCardIDs map.  Call after NewAccessService, before serving traffic.
 func (s *AccessService) SetCardStore(cs store.CardStore) {
 	s.cardStore = cs
+}
+
+// SetCardHashSecret sets the HMAC key used to hash card IDs.  Must match the
+// key used at registration time.  Call after NewAccessService, before serving traffic.
+func (s *AccessService) SetCardHashSecret(secret []byte) {
+	s.cardHashSecret = secret
 }
 
 func (s *AccessService) Decide(ctx context.Context, req types.AccessRequest) (types.AccessResponse, error) {
@@ -83,8 +89,7 @@ func (s *AccessService) Decide(ctx context.Context, req types.AccessRequest) (ty
 		reason = "allow_all"
 	} else if s.cardStore != nil {
 		// DB-backed card lookup (production path).
-		hash := sha256.Sum256([]byte(cardID))
-		allowed, err := s.cardStore.IsCardAllowed(ctx, hash[:])
+		allowed, err := s.cardStore.IsCardAllowed(ctx, HashCardID(cardID, s.cardHashSecret))
 		if err != nil {
 			s.recordEvent(ctx, req, false, "card_lookup_error", now)
 			return types.AccessResponse{}, err
@@ -145,8 +150,7 @@ func (s *AccessService) recordEvent(
 	// Hash the card ID for the audit trail (same algorithm as card registration).
 	cardID := strings.TrimSpace(req.CardID)
 	if cardID != "" {
-		h := sha256.Sum256([]byte(cardID))
-		rec.CardIDHash = h[:]
+		rec.CardIDHash = HashCardID(cardID, s.cardHashSecret)
 	}
 
 	_ = s.eventStore.RecordEvent(ctx, rec)

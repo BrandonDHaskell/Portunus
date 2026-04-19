@@ -198,10 +198,14 @@ tasks:
       - idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.dev" build
 
   firmware:build:prod:
-    desc: Build firmware with prod sdkconfig overlay
+    desc: Build firmware with prod sdkconfig overlay (requires PORTUNUS_HMAC_SECRET in .env)
     dir: "{{.FIRMWARE_DIR}}"
     cmds:
-      - idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.prod" build
+      - |
+        : "${PORTUNUS_HMAC_SECRET:?PORTUNUS_HMAC_SECRET must be set in .env}"
+        printf 'CONFIG_PORTUNUS_HMAC_SECRET="%s"\n' "$PORTUNUS_HMAC_SECRET" > sdkconfig.defaults.secret
+        trap "rm -f sdkconfig.defaults.secret" EXIT
+        idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.prod;sdkconfig.defaults.secret" build
 
   firmware:flash:
     desc: Flash firmware to connected ESP32

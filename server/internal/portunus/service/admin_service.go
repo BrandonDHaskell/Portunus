@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -25,12 +26,13 @@ var (
 )
 
 type AdminService struct {
-	moduleStore store.ModuleAdminStore
-	cardStore   store.CardStore
+	moduleStore    store.ModuleAdminStore
+	cardStore      store.CardStore
+	cardHashSecret []byte
 }
 
-func NewAdminService(ms store.ModuleAdminStore, cs store.CardStore) *AdminService {
-	return &AdminService{moduleStore: ms, cardStore: cs}
+func NewAdminService(ms store.ModuleAdminStore, cs store.CardStore, cardHashSecret []byte) *AdminService {
+	return &AdminService{moduleStore: ms, cardStore: cs, cardHashSecret: cardHashSecret}
 }
 
 // ── Modules ─────────────────────────────────────────────────────────────────
@@ -82,7 +84,10 @@ func (s *AdminService) RevokeModule(ctx context.Context, moduleID string) error 
 		return ErrModuleIDRequired
 	}
 	if err := s.moduleStore.RevokeModule(ctx, moduleID); err != nil {
-		return ErrModuleNotFound
+		if errors.Is(err, store.ErrNotFound) {
+			return ErrModuleNotFound
+		}
+		return fmt.Errorf("revoke module: %w", err)
 	}
 	return nil
 }
@@ -92,16 +97,27 @@ func (s *AdminService) DeleteModule(ctx context.Context, moduleID string) error 
 		return ErrModuleIDRequired
 	}
 	if err := s.moduleStore.DeleteModule(ctx, moduleID); err != nil {
-		return ErrModuleNotFound
+		if errors.Is(err, store.ErrNotFound) {
+			return ErrModuleNotFound
+		}
+		return fmt.Errorf("delete module: %w", err)
 	}
 	return nil
 }
 
 // ── Cards ───────────────────────────────────────────────────────────────────
 
-// HashCardID computes the SHA-256 hash used for card storage and lookups.
-func HashCardID(cardID string) []byte {
-	h := sha256.Sum256([]byte(strings.TrimSpace(cardID)))
+// HashCardID computes the card hash used for storage and lookups.
+// When secret is non-empty, uses HMAC-SHA256(secret, cardID).
+// Falls back to bare SHA-256 when secret is nil (dev/migration only).
+func HashCardID(cardID string, secret []byte) []byte {
+	id := []byte(strings.TrimSpace(cardID))
+	if len(secret) > 0 {
+		mac := hmac.New(sha256.New, secret)
+		mac.Write(id)
+		return mac.Sum(nil)
+	}
+	h := sha256.Sum256(id)
 	return h[:]
 }
 
@@ -111,7 +127,7 @@ func (s *AdminService) RegisterCard(ctx context.Context, req types.RegisterCardR
 		return nil, ErrCardIDRequired
 	}
 
-	hash := HashCardID(cardID)
+	hash := HashCardID(cardID, s.cardHashSecret)
 	if err := s.cardStore.RegisterCard(ctx, hash, req.Tag); err != nil {
 		return nil, err
 	}
@@ -151,7 +167,10 @@ func (s *AdminService) SetCardStatus(ctx context.Context, cardIDHashHex string, 
 		return fmt.Errorf("invalid card_id_hash hex: %w", err)
 	}
 	if err := s.cardStore.SetCardStatus(ctx, hash, status); err != nil {
-		return ErrCardNotFound
+		if errors.Is(err, store.ErrNotFound) {
+			return ErrCardNotFound
+		}
+		return fmt.Errorf("set card status: %w", err)
 	}
 	return nil
 }
@@ -162,7 +181,10 @@ func (s *AdminService) DeleteCard(ctx context.Context, cardIDHashHex string) err
 		return fmt.Errorf("invalid card_id_hash hex: %w", err)
 	}
 	if err := s.cardStore.DeleteCard(ctx, hash); err != nil {
-		return ErrCardNotFound
+		if errors.Is(err, store.ErrNotFound) {
+			return ErrCardNotFound
+		}
+		return fmt.Errorf("delete card: %w", err)
 	}
 	return nil
 }
@@ -214,7 +236,10 @@ func (s *AdminService) DeleteDoor(ctx context.Context, doorID string) error {
 		return ErrDoorIDRequired
 	}
 	if err := s.moduleStore.DeleteDoor(ctx, doorID); err != nil {
-		return ErrDoorNotFound
+		if errors.Is(err, store.ErrNotFound) {
+			return ErrDoorNotFound
+		}
+		return fmt.Errorf("delete door: %w", err)
 	}
 	return nil
 }

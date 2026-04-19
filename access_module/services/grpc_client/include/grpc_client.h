@@ -150,6 +150,18 @@ portunus_err_t grpc_client_unary_call(grpc_client_handle_t handle,
                                        int *resp_len, int *grpc_status);
 
 /**
+ * @brief Send an HTTP/2 PING and wait for the ACK (B18).
+ *
+ * Call periodically during idle periods to prevent NAT/firewall entries
+ * from expiring between heartbeats.  No-op and returns
+ * PORTUNUS_ERR_INVALID_ARG if the client is not connected.
+ *
+ * @return PORTUNUS_OK on success (ACK received within rpc_timeout_ms).
+ *         PORTUNUS_ERR_HTTP_CONNECT if the ping fails (connection gone).
+ */
+portunus_err_t grpc_client_send_ping(grpc_client_handle_t handle);
+
+/**
  * @brief Set custom metadata (headers) sent with every RPC.
  *
  * Used to attach the HMAC signature header.  The key/value are copied

@@ -34,7 +34,11 @@ PROTO_FILE      = PROTO_DIR / "portunus" / "v1" / "portunus.proto"
 NANOPB_OPTIONS  = PROTO_DIR / "nanopb" / "portunus.options"
 
 GO_OUT_DIR      = Path("server") / "api"
-NANOPB_OUT_DIR  = Path("access_module") / "components" / "proto"
+# Root of the IDF component that houses the generated Nanopb files.
+# grpc_tools.protoc reproduces the proto package path under this dir;
+# nanopb_generator CLI writes files flat, so it targets the leaf dir instead.
+NANOPB_COMPONENT_DIR = Path("access_module") / "components" / "portunus_proto"
+NANOPB_GENERATED_DIR = NANOPB_COMPONENT_DIR / "portunus" / "v1"
 
 
 # ── Tool discovery ──────────────────────────────────────────────────────────
@@ -133,10 +137,12 @@ def generate_nanopb(project_root: Path) -> bool:
     proto_dir      = project_root / PROTO_DIR
     proto_file     = project_root / PROTO_FILE
     nanopb_options = project_root / NANOPB_OPTIONS
-    nanopb_out     = project_root / NANOPB_OUT_DIR
 
     # nanopb_generator CLI and grpc_tools.protoc have different invocations.
     if nanopb_cmd[-1] == "nanopb_generator":
+        # CLI writes files flat into the target dir — point at the leaf.
+        nanopb_out = project_root / NANOPB_GENERATED_DIR
+        nanopb_out.mkdir(parents=True, exist_ok=True)
         cmd = [
             *nanopb_cmd,
             f"-I{proto_dir}",
@@ -145,7 +151,9 @@ def generate_nanopb(project_root: Path) -> bool:
             str(proto_file),
         ]
     else:
-        # grpc_tools.protoc path: uses --nanopb_out with embedded options path.
+        # grpc_tools.protoc mirrors the proto package path under the output dir
+        # (portunus/v1/portunus.pb.*), so point at the component root.
+        nanopb_out = project_root / NANOPB_COMPONENT_DIR
         cmd = [
             *nanopb_cmd,
             f"--proto_path={proto_dir}",
@@ -179,7 +187,7 @@ def check_drift(project_root: Path) -> bool:
 
     paths = [
         str(project_root / GO_OUT_DIR),
-        str(project_root / NANOPB_OUT_DIR),
+        str(project_root / NANOPB_COMPONENT_DIR),
     ]
     result = subprocess.run(
         [git, "diff", "--exit-code", *paths],

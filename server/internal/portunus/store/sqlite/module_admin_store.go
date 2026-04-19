@@ -74,7 +74,7 @@ WHERE module_id = ?;
 		}
 		n, _ := res.RowsAffected()
 		if n == 0 {
-			return sql.ErrNoRows
+			return store.ErrNotFound
 		}
 		return nil
 	})
@@ -90,7 +90,7 @@ DELETE FROM modules WHERE module_id = ?;
 		}
 		n, _ := res.RowsAffected()
 		if n == 0 {
-			return sql.ErrNoRows
+			return store.ErrNotFound
 		}
 		return nil
 	})
@@ -192,7 +192,7 @@ DELETE FROM doors WHERE door_id = ?;
 		}
 		n, _ := res.RowsAffected()
 		if n == 0 {
-			return sql.ErrNoRows
+			return store.ErrNotFound
 		}
 		return nil
 	})
