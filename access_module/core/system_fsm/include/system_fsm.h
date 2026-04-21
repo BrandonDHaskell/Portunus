@@ -4,7 +4,7 @@
  *
  * The FSM orchestrates all module interactions:
  *   - Initialises modules and records capability flags.
- *   - Owns the card-polling sub-task.
+ *   - Owns the credential-polling sub-task.
  *   - Subscribes to event bus events and processes them.
  *   - Manages unlock timing (energize → hold → re-lock).
  *   - Polls the reed switch and publishes door state change events.
@@ -62,7 +62,7 @@ public:
     portunus_err_t init();
 
     /**
-     * @brief Start the FSM task and card-polling sub-task.
+     * @brief Start the FSM task and credential-polling sub-task.
      *
      * Must be called after init() and after the event bus is initialised.
      * Subscribes to relevant event bus events and starts the FreeRTOS
@@ -102,11 +102,11 @@ private:
 
     /* ── Task entry points ────────────────────────────────────────────────── */
     static void fsm_task_entry(void *arg);
-    static void card_poll_task_entry(void *arg);
+    static void credential_poll_task_entry(void *arg);
 
     /* ── Internal methods ─────────────────────────────────────────────────── */
     void run();                                  /**< FSM main loop */
-    void poll_card();                            /**< Card polling loop */
+    void poll_credential();                      /**< Credential polling loop */
     void process_event(const portunus_event_t &event);
     void poll_reed_switch();
     void check_unlock_timer();

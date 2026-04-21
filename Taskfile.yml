@@ -37,6 +37,12 @@ vars:
   # Override with: task <target> PYTHON=py
   PYTHON: '{{if eq OS "windows"}}python{{else}}python3{{end}}'
 
+  # ── ESP-IDF Python environment ───────────────────────────────────────────
+  # The ESP-IDF venv has nanopb and grpcio-tools pre-installed.
+  # Proto generation uses this interpreter so system Python stays unmodified.
+  # Override with: task proto:gen IDF_PYTHON=/path/to/python
+  IDF_PYTHON: '{{.HOME}}/.espressif/python_env/idf5.5_py3.13_env/bin/python'
+
   # ── Cross-platform executable extension ─────────────────────────────────
   # Go requires explicit .exe on Windows for 'go build -o'.
   EXE: '{{if eq OS "windows"}}.exe{{end}}'
@@ -159,17 +165,17 @@ tasks:
   proto:gen:
     desc: Regenerate protobuf code for Go and Nanopb
     cmds:
-      - "{{.PYTHON}} scripts/proto_gen.py"
+      - "{{.IDF_PYTHON}} scripts/proto_gen.py"
 
   proto:gen:go:
     desc: Regenerate Go protobuf stubs only
     cmds:
-      - "{{.PYTHON}} scripts/proto_gen.py --go"
+      - "{{.IDF_PYTHON}} scripts/proto_gen.py --go"
 
   proto:gen:nanopb:
     desc: Regenerate Nanopb C stubs for ESP32 only
     cmds:
-      - "{{.PYTHON}} scripts/proto_gen.py --nanopb"
+      - "{{.IDF_PYTHON}} scripts/proto_gen.py --nanopb"
 
   # ─── TLS Certificates ─────────────────────────────────────────────────────
 
@@ -294,7 +300,7 @@ tasks:
   proto:check:
     desc: Verify generated protobuf code is up to date (for CI)
     cmds:
-      - "{{.PYTHON}} scripts/proto_gen.py --check"
+      - "{{.IDF_PYTHON}} scripts/proto_gen.py --check"
 
   ci:server:
     desc: Full server CI check (vet, format, test with race detector)

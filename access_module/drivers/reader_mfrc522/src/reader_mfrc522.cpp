@@ -22,10 +22,10 @@ portunus_err_t ReaderMfrc522::init()
 
 portunus_err_t ReaderMfrc522::read(credential_t *cred)
 {
-    return mfrc522_read_card(cred);
+    return mfrc522_read_credential(cred);
 }
 
 void ReaderMfrc522::halt()
 {
-    mfrc522_halt_card();
+    mfrc522_halt_credential();
 }

@@ -56,7 +56,7 @@ func main() {
 	deviceStore := sqlitestore.NewDeviceStore(dbConn, writer)
 	heartbeatStore := sqlitestore.NewHeartbeatStore(dbConn, writer)
 	accessEventStore := sqlitestore.NewAccessEventStore(dbConn, writer)
-	cardStore := sqlitestore.NewCardStore(dbConn, writer)
+	credentialStore := sqlitestore.NewCredentialStore(dbConn, writer)
 	moduleAdminStore := sqlitestore.NewModuleAdminStore(dbConn, writer)
 
 	// Stores (Memory for dev testing with no DB)
@@ -76,30 +76,28 @@ func main() {
 	pruner.Start(ctx)
 	defer pruner.Stop()
 
-	allowed := make(map[string]struct{}, len(cfg.AllowedCardIDs))
-	for _, c := range cfg.AllowedCardIDs {
+	allowed := make(map[string]struct{}, len(cfg.AllowedCredentialIDs))
+	for _, c := range cfg.AllowedCredentialIDs {
 		allowed[c] = struct{}{}
 	}
 	accessSvc := service.NewAccessService(registry, service.AccessPolicy{
-		AllowAll:       cfg.AllowAll,
-		AllowedCardIDs: allowed,
+		AllowAll:             cfg.AllowAll,
+		AllowedCredentialIDs: allowed,
 	}, accessEventStore)
 
-	// Enable DB-backed card lookups (replaces the legacy AllowedCardIDs
-	// env-var map).  When cards exist in the DB, the access service
-	// hashes the incoming card ID and checks the cards table.  The
-	// AllowedCardIDs map still works as a fallback when the DB is empty
-	// or cardStore is nil.
-	accessSvc.SetCardStore(cardStore)
+	// Enable DB-backed credential lookups (replaces the legacy AllowedCredentialIDs
+	// env-var map).  When credentials exist in the DB, the access service
+	// hashes the incoming credential ID and checks the credentials table.
+	accessSvc.SetCredentialStore(credentialStore)
 
-	cardHashSecret := []byte(cfg.CardHashSecret)
-	if cfg.CardHashSecret == "" {
-		logger.Printf("WARNING: PORTUNUS_CARD_HASH_SECRET not set — card IDs hashed without a key (insecure, dev only)")
+	credentialHashSecret := []byte(cfg.CredentialHashSecret)
+	if cfg.CredentialHashSecret == "" {
+		logger.Printf("WARNING: PORTUNUS_CREDENTIAL_HASH_SECRET not set — credential IDs hashed without a key (insecure, dev only)")
 	}
-	accessSvc.SetCardHashSecret(cardHashSecret)
+	accessSvc.SetCredentialHashSecret(credentialHashSecret)
 
-	// Admin service for module/card/door management via REST API.
-	adminSvc := service.NewAdminService(moduleAdminStore, cardStore, cardHashSecret)
+	// Admin service for module/credential/door management via REST API.
+	adminSvc := service.NewAdminService(moduleAdminStore, credentialStore, credentialHashSecret)
 
 	// HTTP
 	srv := httpapi.NewServer(httpapi.Dependencies{

@@ -241,15 +241,15 @@ func (x *HeartbeatResponse) GetServerTime() string {
 	return ""
 }
 
-// Sent by the access module when a card is presented to the reader.
+// Sent by the access module when a credential is presented to the reader.
 //
 // Server Go equivalent: types.AccessRequest
 type AccessRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Unique identifier for the access module (required).
 	ModuleId string `protobuf:"bytes,1,opt,name=module_id,json=moduleId,proto3" json:"module_id,omitempty"`
-	// Hex-encoded card UID, e.g. "04:A3:2B:1C" (required).
-	CardId string `protobuf:"bytes,2,opt,name=card_id,json=cardId,proto3" json:"card_id,omitempty"`
+	// Hex-encoded credential UID, e.g. "04:A3:2B:1C" (required).
+	CredentialId string `protobuf:"bytes,2,opt,name=credential_id,json=credentialId,proto3" json:"credential_id,omitempty"`
 	// Reed-switch state at the moment of the read.
 	DoorClosed *bool `protobuf:"varint,3,opt,name=door_closed,json=doorClosed,proto3,oneof" json:"door_closed,omitempty"`
 	// Device-local timestamp of the read (ISO 8601 / RFC 3339).
@@ -296,9 +296,9 @@ func (x *AccessRequest) GetModuleId() string {
 	return ""
 }
 
-func (x *AccessRequest) GetCardId() string {
+func (x *AccessRequest) GetCredentialId() string {
 	if x != nil {
-		return x.CardId
+		return x.CredentialId
 	}
 	return ""
 }
@@ -328,8 +328,8 @@ type AccessResponse struct {
 	Known bool `protobuf:"varint,2,opt,name=known,proto3" json:"known,omitempty"`
 	// The access decision: true = unlock, false = deny.
 	Granted bool `protobuf:"varint,3,opt,name=granted,proto3" json:"granted,omitempty"`
-	// Human-readable reason code: "allow_all", "card_allowed",
-	// "card_not_allowed", "unknown_module", "denied".
+	// Human-readable reason code: "allow_all", "credential_allowed",
+	// "credential_not_allowed", "unknown_module", "denied".
 	Reason string `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
 	// Echoed module_id.
 	ModuleId string `protobuf:"bytes,5,opt,name=module_id,json=moduleId,proto3" json:"module_id,omitempty"`
@@ -433,10 +433,10 @@ const file_portunus_v1_portunus_proto_rawDesc = "" +
 	"\x05known\x18\x02 \x01(\bR\x05known\x12\x1b\n" +
 	"\tmodule_id\x18\x03 \x01(\tR\bmoduleId\x12\x1f\n" +
 	"\vserver_time\x18\x04 \x01(\tR\n" +
-	"serverTime\"\x9e\x01\n" +
+	"serverTime\"\xaa\x01\n" +
 	"\rAccessRequest\x12\x1b\n" +
-	"\tmodule_id\x18\x01 \x01(\tR\bmoduleId\x12\x17\n" +
-	"\acard_id\x18\x02 \x01(\tR\x06cardId\x12$\n" +
+	"\tmodule_id\x18\x01 \x01(\tR\bmoduleId\x12#\n" +
+	"\rcredential_id\x18\x02 \x01(\tR\fcredentialId\x12$\n" +
 	"\vdoor_closed\x18\x03 \x01(\bH\x00R\n" +
 	"doorClosed\x88\x01\x01\x12!\n" +
 	"\frequested_at\x18\x04 \x01(\tR\vrequestedAtB\x0e\n" +

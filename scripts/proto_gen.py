@@ -67,7 +67,16 @@ def find_nanopb_generator() -> list[str]:
       3. ESP-IDF managed component (build-time only, not usable here)
 
     We prefer (1) if available, fall back to (2).
+    Checks the running interpreter's bin/ directory first so that venv-local
+    installs (e.g. the ESP-IDF venv) are found even when not on PATH.
     """
+    # Check beside the running interpreter before searching PATH — handles
+    # venv installs (e.g. ESP-IDF) where the venv bin/ is not on PATH.
+    venv_bin = Path(sys.executable).parent
+    venv_nanopb = venv_bin / "nanopb_generator"
+    if venv_nanopb.exists():
+        return [str(venv_nanopb)]
+
     if find_tool("nanopb_generator") is not None:
         return ["nanopb_generator"]
 
@@ -145,9 +154,13 @@ def generate_nanopb(project_root: Path) -> bool:
     nanopb_options = project_root / NANOPB_OPTIONS
 
     # nanopb_generator CLI and grpc_tools.protoc have different invocations.
-    if nanopb_cmd[-1] == "nanopb_generator":
-        # CLI writes files flat into the target dir — point at the leaf.
-        nanopb_out = project_root / NANOPB_GENERATED_DIR
+    # nanopb_cmd[-1] may be a bare name or a full path, so compare by basename.
+    if Path(nanopb_cmd[-1]).name == "nanopb_generator":
+        # nanopb_generator mirrors the proto package path under the output dir
+        # (portunus/v1/portunus.pb.*), so point at the component root — same
+        # as grpc_tools.protoc.  The old assumption that it wrote files "flat"
+        # was incorrect; using the leaf dir caused a doubled portunus/v1/ path.
+        nanopb_out = project_root / NANOPB_COMPONENT_DIR
         nanopb_out.mkdir(parents=True, exist_ok=True)
         cmd = [
             *nanopb_cmd,

@@ -95,9 +95,9 @@ func (s *Server) SendHeartbeat(ctx context.Context, req *pb.HeartbeatRequest) (*
 func (s *Server) RequestAccess(ctx context.Context, req *pb.AccessRequest) (*pb.AccessResponse, error) {
 	// Convert protobuf request → domain type.
 	domainReq := types.AccessRequest{
-		ModuleID:    req.GetModuleId(),
-		CardID:      req.GetCardId(),
-		RequestedAt: req.GetRequestedAt(),
+		ModuleID:     req.GetModuleId(),
+		CredentialID: req.GetCredentialId(),
+		RequestedAt:  req.GetRequestedAt(),
 	}
 	if req.DoorClosed != nil {
 		dc := req.GetDoorClosed()
@@ -110,8 +110,8 @@ func (s *Server) RequestAccess(ctx context.Context, req *pb.AccessRequest) (*pb.
 		switch {
 		case errors.Is(err, service.ErrInvalidModuleID):
 			return nil, status.Errorf(codes.InvalidArgument, "invalid module_id: %v", err)
-		case errors.Is(err, service.ErrInvalidCardID):
-			return nil, status.Errorf(codes.InvalidArgument, "invalid card_id: %v", err)
+		case errors.Is(err, service.ErrInvalidCredentialID):
+			return nil, status.Errorf(codes.InvalidArgument, "invalid credential_id: %v", err)
 		default:
 			s.logger.Printf("access_request gRPC error: %v", err)
 			return nil, status.Errorf(codes.Internal, "unexpected server error")

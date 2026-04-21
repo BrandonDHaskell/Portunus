@@ -94,15 +94,15 @@ message HeartbeatResponse {
 // Access
 // ──────────────────────────────────────────────────────────────────────────
 
-// Sent by the access module when a card is presented to the reader.
+// Sent by the access module when a credential is presented to the reader.
 //
 // Server Go equivalent: types.AccessRequest
 message AccessRequest {
   // Unique identifier for the access module (required).
   string module_id = 1;
 
-  // Hex-encoded card UID, e.g. "04:A3:2B:1C" (required).
-  string card_id = 2;
+  // Hex-encoded credential UID, e.g. "04:A3:2B:1C" (required).
+  string credential_id = 2;
 
   // Reed-switch state at the moment of the read.
   optional bool door_closed = 3;
@@ -125,8 +125,8 @@ message AccessResponse {
   // The access decision: true = unlock, false = deny.
   bool granted = 3;
 
-  // Human-readable reason code: "allow_all", "card_allowed",
-  // "card_not_allowed", "unknown_module", "denied".
+  // Human-readable reason code: "allow_all", "credential_allowed",
+  // "credential_not_allowed", "unknown_module", "denied".
   string reason = 4;
 
   // Echoed module_id.
@@ -157,6 +157,6 @@ service PortunusService {
   // SendHeartbeat records a module health telemetry tick.
   rpc SendHeartbeat(HeartbeatRequest) returns (HeartbeatResponse);
 
-  // RequestAccess evaluates a card-read event and returns an access decision.
+  // RequestAccess evaluates a credential-read event and returns an access decision.
   rpc RequestAccess(AccessRequest) returns (AccessResponse);
 }

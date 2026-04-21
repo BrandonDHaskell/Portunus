@@ -70,7 +70,7 @@ static const char *TAG = "server_comm";
 #else
   #define COMM_TASK_STACK_SIZE    6144
 #endif
-#define COMM_TASK_PRIORITY      2       /* Below heartbeat(3) and card_poll(4) */
+#define COMM_TASK_PRIORITY      2       /* Below heartbeat(3) and credential_poll(4) */
 #define COMM_QUEUE_LENGTH       8       /* Pending events waiting for HTTP I/O */
 #define URL_MAX_LEN            128
 
@@ -356,18 +356,18 @@ static void on_credential_event(const portunus_event_t *event, void *ctx)
  * response, decode failure) so the user always sees a deny indication
  * rather than the CARD_READ LED stuck on indefinitely.
  *
- * @param card_id  Hex-encoded card UID (may be empty if unknown).
- * @param reason   Short reason string for logs / audit trail.
+ * @param credential_id  Hex-encoded credential UID (may be empty if unknown).
+ * @param reason         Short reason string for logs / audit trail.
  */
-static void publish_access_denied(const char *card_id, const char *reason)
+static void publish_access_denied(const char *credential_id, const char *reason)
 {
     portunus_event_t deny;
     memset(&deny, 0, sizeof(deny));
     deny.id = EVENT_ACCESS_DENIED;
 
-    if (card_id != NULL) {
-        strncpy(deny.payload.access_decision.card_id, card_id,
-                sizeof(deny.payload.access_decision.card_id) - 1);
+    if (credential_id != NULL) {
+        strncpy(deny.payload.access_decision.credential_id, credential_id,
+                sizeof(deny.payload.access_decision.credential_id) - 1);
     }
     strncpy(deny.payload.access_decision.reason, reason,
             sizeof(deny.payload.access_decision.reason) - 1);
@@ -460,14 +460,14 @@ static void handle_credential(const event_credential_read_t *cred)
     portunus_v1_AccessRequest req = portunus_v1_AccessRequest_init_zero;
 
     strncpy(req.module_id, PORTUNUS_MODULE_ID, sizeof(req.module_id) - 1);
-    credential_uid_to_hex(&cred->credential, req.card_id, sizeof(req.card_id));
+    credential_uid_to_hex(&cred->credential, req.credential_id, sizeof(req.credential_id));
 
     /* Encode */
     uint8_t req_buf[portunus_v1_AccessRequest_size];
     pb_ostream_t ostream = pb_ostream_from_buffer(req_buf, sizeof(req_buf));
     if (!pb_encode(&ostream, portunus_v1_AccessRequest_fields, &req)) {
         ESP_LOGE(TAG, "Access encode failed: %s", PB_GET_ERROR(&ostream));
-        publish_access_denied(req.card_id, "encode_error");
+        publish_access_denied(req.credential_id, "encode_error");
         return;
     }
 
@@ -484,12 +484,12 @@ static void handle_credential(const event_credential_read_t *cred)
         &resp_len, &grpc_status);
     if (err != PORTUNUS_OK) {
         ESP_LOGW(TAG, "Access gRPC failed: err=0x%04x", (unsigned)err);
-        publish_access_denied(req.card_id, "grpc_error");
+        publish_access_denied(req.credential_id, "grpc_error");
         return;
     }
     if (grpc_status != GRPC_STATUS_OK) {
         ESP_LOGW(TAG, "Access gRPC status: %d", grpc_status);
-        publish_access_denied(req.card_id, "grpc_status_error");
+        publish_access_denied(req.credential_id, "grpc_status_error");
         return;
     }
 #else
@@ -500,13 +500,13 @@ static void handle_credential(const event_credential_read_t *cred)
                                          &resp_len, &status);
     if (err != PORTUNUS_OK) {
         ESP_LOGW(TAG, "Access HTTP failed: err=0x%04x", (unsigned)err);
-        publish_access_denied(req.card_id, "http_error");
+        publish_access_denied(req.credential_id, "http_error");
         return;
     }
 
     if (status != 200) {
         ESP_LOGW(TAG, "Access server returned HTTP %d", status);
-        publish_access_denied(req.card_id, "http_status_error");
+        publish_access_denied(req.credential_id, "http_status_error");
         return;
     }
 #endif /* PORTUNUS_USE_GRPC */
@@ -516,20 +516,20 @@ static void handle_credential(const event_credential_read_t *cred)
     pb_istream_t istream = pb_istream_from_buffer(resp_buf, (size_t)resp_len);
     if (!pb_decode(&istream, portunus_v1_AccessResponse_fields, &resp)) {
         ESP_LOGW(TAG, "Access decode failed: %s", PB_GET_ERROR(&istream));
-        publish_access_denied(req.card_id, "decode_error");
+        publish_access_denied(req.credential_id, "decode_error");
         return;
     }
 
-    ESP_LOGI(TAG, "Access decision — card=%s granted=%d reason=%s known=%d",
-             req.card_id, resp.granted, resp.reason, resp.known);
+    ESP_LOGI(TAG, "Access decision — credential=%s granted=%d reason=%s known=%d",
+             req.credential_id, resp.granted, resp.reason, resp.known);
 
     /* Publish decision event back to the bus */
     portunus_event_t decision;
     memset(&decision, 0, sizeof(decision));
     decision.id = resp.granted ? EVENT_ACCESS_GRANTED : EVENT_ACCESS_DENIED;
 
-    strncpy(decision.payload.access_decision.card_id, req.card_id,
-            sizeof(decision.payload.access_decision.card_id) - 1);
+    strncpy(decision.payload.access_decision.credential_id, req.credential_id,
+            sizeof(decision.payload.access_decision.credential_id) - 1);
     strncpy(decision.payload.access_decision.reason, resp.reason,
             sizeof(decision.payload.access_decision.reason) - 1);
     decision.payload.access_decision.granted = resp.granted;
@@ -574,10 +574,10 @@ static void comm_task(void *arg)
             /* Credential events need a deny so the FSM clears CARD_READ
                feedback.  Heartbeats can be silently dropped. */
             if (event.id == EVENT_CREDENTIAL_READ) {
-                char card_id[CREDENTIAL_UID_HEX_STR_LEN];
+                char credential_id[CREDENTIAL_UID_HEX_STR_LEN];
                 credential_uid_to_hex(&event.payload.credential_read.credential,
-                                      card_id, sizeof(card_id));
-                publish_access_denied(card_id, "no_network");
+                                      credential_id, sizeof(credential_id));
+                publish_access_denied(credential_id, "no_network");
             }
             continue;
         }

@@ -8,8 +8,8 @@
 #   module_id        – PORTUNUS_MAX_NAME_LEN (32) + NUL = 33
 #   firmware_version – "0.1.0-mvp" is 9; 24 chars leaves room for growth
 #   ip               – IPv6 worst case "xxxx:…:xxxx%zone" ≤ 46
-#   card_id          – 10-byte UID as "XX:XX:…:XX" = 29 + NUL = 30
-#   reason           – longest known value "card_not_allowed" = 16; 32 + NUL
+#   credential_id    – 10-byte UID as "XX:XX:…:XX" = 29 + NUL = 30
+#   reason           – longest known value "credential_not_allowed" = 22; 32 + NUL
 #   server_time      – RFC 3339 nano "2025-01-15T12:34:56.123456789Z" ≤ 40
 #   requested_at     – same format as server_time
 #
@@ -30,7 +30,7 @@ portunus.v1.HeartbeatResponse.server_time            max_size:40
 
 # ── AccessRequest ───────────────────────────────────────────────────────
 portunus.v1.AccessRequest.module_id                  max_size:33
-portunus.v1.AccessRequest.card_id                    max_size:30
+portunus.v1.AccessRequest.credential_id              max_size:30
 portunus.v1.AccessRequest.requested_at               max_size:40
 
 # ── AccessResponse ──────────────────────────────────────────────────────

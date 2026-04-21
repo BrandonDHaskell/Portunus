@@ -15,24 +15,24 @@ import (
 )
 
 var (
-	ErrModuleIDRequired = errors.New("module_id is required")
-	ErrCardIDRequired   = errors.New("card_id is required")
-	ErrDoorIDRequired   = errors.New("door_id is required")
-	ErrDoorNameRequired = errors.New("door name is required")
-	ErrInvalidStatus    = errors.New("status must be active, disabled, or lost")
-	ErrCardNotFound     = errors.New("card not found")
-	ErrModuleNotFound   = errors.New("module not found")
-	ErrDoorNotFound     = errors.New("door not found")
+	ErrModuleIDRequired     = errors.New("module_id is required")
+	ErrCredentialIDRequired = errors.New("credential_id is required")
+	ErrDoorIDRequired       = errors.New("door_id is required")
+	ErrDoorNameRequired     = errors.New("door name is required")
+	ErrInvalidStatus        = errors.New("status must be active, disabled, or lost")
+	ErrCredentialNotFound   = errors.New("credential not found")
+	ErrModuleNotFound       = errors.New("module not found")
+	ErrDoorNotFound         = errors.New("door not found")
 )
 
 type AdminService struct {
-	moduleStore    store.ModuleAdminStore
-	cardStore      store.CardStore
-	cardHashSecret []byte
+	moduleStore          store.ModuleAdminStore
+	credentialStore      store.CredentialStore
+	credentialHashSecret []byte
 }
 
-func NewAdminService(ms store.ModuleAdminStore, cs store.CardStore, cardHashSecret []byte) *AdminService {
-	return &AdminService{moduleStore: ms, cardStore: cs, cardHashSecret: cardHashSecret}
+func NewAdminService(ms store.ModuleAdminStore, cs store.CredentialStore, credentialHashSecret []byte) *AdminService {
+	return &AdminService{moduleStore: ms, credentialStore: cs, credentialHashSecret: credentialHashSecret}
 }
 
 // ── Modules ─────────────────────────────────────────────────────────────────
@@ -105,13 +105,13 @@ func (s *AdminService) DeleteModule(ctx context.Context, moduleID string) error 
 	return nil
 }
 
-// ── Cards ───────────────────────────────────────────────────────────────────
+// ── Credentials ──────────────────────────────────────────────────────────────
 
-// HashCardID computes the card hash used for storage and lookups.
-// When secret is non-empty, uses HMAC-SHA256(secret, cardID).
+// HashCredentialID computes the credential hash used for storage and lookups.
+// When secret is non-empty, uses HMAC-SHA256(secret, credentialID).
 // Falls back to bare SHA-256 when secret is nil (dev/migration only).
-func HashCardID(cardID string, secret []byte) []byte {
-	id := []byte(strings.TrimSpace(cardID))
+func HashCredentialID(credentialID string, secret []byte) []byte {
+	id := []byte(strings.TrimSpace(credentialID))
 	if len(secret) > 0 {
 		mac := hmac.New(sha256.New, secret)
 		mac.Write(id)
@@ -121,39 +121,39 @@ func HashCardID(cardID string, secret []byte) []byte {
 	return h[:]
 }
 
-func (s *AdminService) RegisterCard(ctx context.Context, req types.RegisterCardRequest) (*types.CardInfo, error) {
-	cardID := strings.TrimSpace(req.CardID)
-	if cardID == "" {
-		return nil, ErrCardIDRequired
+func (s *AdminService) RegisterCredential(ctx context.Context, req types.RegisterCredentialRequest) (*types.CredentialInfo, error) {
+	credentialID := strings.TrimSpace(req.CredentialID)
+	if credentialID == "" {
+		return nil, ErrCredentialIDRequired
 	}
 
-	hash := HashCardID(cardID, s.cardHashSecret)
-	if err := s.cardStore.RegisterCard(ctx, hash, req.Tag); err != nil {
+	hash := HashCredentialID(credentialID, s.credentialHashSecret)
+	if err := s.credentialStore.RegisterCredential(ctx, hash, req.Tag); err != nil {
 		return nil, err
 	}
 
-	return &types.CardInfo{
-		CardIDHash: hex.EncodeToString(hash),
-		Tag:        req.Tag,
-		Status:     "active",
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+	return &types.CredentialInfo{
+		CredentialHash: hex.EncodeToString(hash),
+		Tag:            req.Tag,
+		Status:         "active",
+		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
 	}, nil
 }
 
-func (s *AdminService) ListCards(ctx context.Context) ([]types.CardInfo, error) {
-	recs, err := s.cardStore.ListCards(ctx)
+func (s *AdminService) ListCredentials(ctx context.Context) ([]types.CredentialInfo, error) {
+	recs, err := s.credentialStore.ListCredentials(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	infos := make([]types.CardInfo, len(recs))
+	infos := make([]types.CredentialInfo, len(recs))
 	for i := range recs {
-		infos[i] = cardRecordToInfo(&recs[i])
+		infos[i] = credentialRecordToInfo(&recs[i])
 	}
 	return infos, nil
 }
 
-func (s *AdminService) SetCardStatus(ctx context.Context, cardIDHashHex string, status string) error {
+func (s *AdminService) SetCredentialStatus(ctx context.Context, credentialHashHex string, status string) error {
 	status = strings.ToLower(strings.TrimSpace(status))
 	switch status {
 	case "active", "disabled", "lost":
@@ -162,29 +162,29 @@ func (s *AdminService) SetCardStatus(ctx context.Context, cardIDHashHex string, 
 		return ErrInvalidStatus
 	}
 
-	hash, err := hex.DecodeString(cardIDHashHex)
+	hash, err := hex.DecodeString(credentialHashHex)
 	if err != nil {
-		return fmt.Errorf("invalid card_id_hash hex: %w", err)
+		return fmt.Errorf("invalid credential_hash hex: %w", err)
 	}
-	if err := s.cardStore.SetCardStatus(ctx, hash, status); err != nil {
+	if err := s.credentialStore.SetCredentialStatus(ctx, hash, status); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return ErrCardNotFound
+			return ErrCredentialNotFound
 		}
-		return fmt.Errorf("set card status: %w", err)
+		return fmt.Errorf("set credential status: %w", err)
 	}
 	return nil
 }
 
-func (s *AdminService) DeleteCard(ctx context.Context, cardIDHashHex string) error {
-	hash, err := hex.DecodeString(cardIDHashHex)
+func (s *AdminService) DeleteCredential(ctx context.Context, credentialHashHex string) error {
+	hash, err := hex.DecodeString(credentialHashHex)
 	if err != nil {
-		return fmt.Errorf("invalid card_id_hash hex: %w", err)
+		return fmt.Errorf("invalid credential_hash hex: %w", err)
 	}
-	if err := s.cardStore.DeleteCard(ctx, hash); err != nil {
+	if err := s.credentialStore.DeleteCredential(ctx, hash); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return ErrCardNotFound
+			return ErrCredentialNotFound
 		}
-		return fmt.Errorf("delete card: %w", err)
+		return fmt.Errorf("delete credential: %w", err)
 	}
 	return nil
 }
@@ -273,12 +273,12 @@ func moduleRecordToInfo(rec *store.ModuleRecord) *types.ModuleInfo {
 	return info
 }
 
-func cardRecordToInfo(rec *store.CardRecord) types.CardInfo {
-	info := types.CardInfo{
-		CardIDHash: hex.EncodeToString(rec.CardIDHash),
-		Tag:        rec.Tag,
-		Status:     rec.Status,
-		CreatedAt:  rec.CreatedAt.Format(time.RFC3339),
+func credentialRecordToInfo(rec *store.CredentialRecord) types.CredentialInfo {
+	info := types.CredentialInfo{
+		CredentialHash: hex.EncodeToString(rec.CredentialHash),
+		Tag:            rec.Tag,
+		Status:         rec.Status,
+		CreatedAt:      rec.CreatedAt.Format(time.RFC3339),
 	}
 	if rec.LastSeenAt != nil {
 		info.LastSeenAt = rec.LastSeenAt.Format(time.RFC3339)

@@ -76,7 +76,7 @@ typedef struct {
  * the decision without needing to know about protobuf or HTTP.
  */
 typedef struct {
-    char     card_id[30];              /**< Hex-encoded card UID that was checked */
+    char     credential_id[30];        /**< Hex-encoded credential UID that was checked */
     char     reason[33];               /**< Server reason code, e.g. "allow_all" */
     bool     granted;                  /**< true = access granted */
     bool     known;                    /**< true = module is registered on server */

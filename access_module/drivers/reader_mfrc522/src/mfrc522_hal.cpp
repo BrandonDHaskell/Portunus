@@ -196,9 +196,9 @@ static portunus_err_t transceive(const uint8_t *send_buf, uint8_t send_len,
         }
     } while (!(irq & (IRQ_RX_DONE | IRQ_IDLE | IRQ_ERR | IRQ_TIMER)));
 
-    /* Check for timer timeout (no card present) */
+    /* Check for timer timeout (no credential present) */
     if (irq & IRQ_TIMER) {
-        return PORTUNUS_ERR_NO_CARD;
+        return PORTUNUS_ERR_NO_CREDENTIAL;
     }
 
     /* Check for errors */
@@ -209,9 +209,9 @@ static portunus_err_t transceive(const uint8_t *send_buf, uint8_t send_len,
     if (error_reg & 0x13) {  /* BufferOvfl | ParityErr | ProtocolErr */
         ESP_LOGD(TAG, "Transceive error: 0x%02x", error_reg);
         if (error_reg & 0x08) {  /* CollErr */
-            return PORTUNUS_ERR_CARD_COLLISION;
+            return PORTUNUS_ERR_CREDENTIAL_COLLISION;
         }
-        return PORTUNUS_ERR_CARD_READ;
+        return PORTUNUS_ERR_CREDENTIAL_READ;
     }
 
     /* Read received data from FIFO */
@@ -287,7 +287,7 @@ static portunus_err_t picc_request(uint8_t *atqa)
         return err;
     }
     if (recv_len != 2) {
-        return PORTUNUS_ERR_CARD_READ;
+        return PORTUNUS_ERR_CREDENTIAL_READ;
     }
 
     return PORTUNUS_OK;
@@ -314,14 +314,14 @@ static portunus_err_t picc_anticoll_select(uint8_t sel_cmd, uint8_t *uid_part)
         return err;
     }
     if (recv_len != 5) {
-        return PORTUNUS_ERR_CARD_READ;
+        return PORTUNUS_ERR_CREDENTIAL_READ;
     }
 
     /* Verify BCC (uid[0] ^ uid[1] ^ uid[2] ^ uid[3] == uid[4]) */
     uint8_t bcc = uid_part[0] ^ uid_part[1] ^ uid_part[2] ^ uid_part[3];
     if (bcc != uid_part[4]) {
         ESP_LOGW(TAG, "BCC check failed: computed 0x%02x, received 0x%02x", bcc, uid_part[4]);
-        return PORTUNUS_ERR_CARD_READ;
+        return PORTUNUS_ERR_CREDENTIAL_READ;
     }
 
     /* Select: SEL + NVB(0x70 = 7 valid bytes) + 4 UID + BCC + CRC_A */
@@ -441,7 +441,7 @@ portunus_err_t mfrc522_init(void)
     return PORTUNUS_OK;
 }
 
-portunus_err_t mfrc522_read_card(credential_t *cred)
+portunus_err_t mfrc522_read_credential(credential_t *cred)
 {
     if (cred == NULL) {
         return PORTUNUS_ERR_INVALID_ARG;
@@ -491,7 +491,7 @@ uint8_t mfrc522_get_version(void)
     return reg_read(REG_VERSION);
 }
 
-void mfrc522_halt_card(void)
+void mfrc522_halt_credential(void)
 {
     uint8_t buf[4];
     buf[0] = PICC_HLTA;

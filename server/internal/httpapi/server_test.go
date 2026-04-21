@@ -133,7 +133,7 @@ func TestHeartbeat_InvalidJSON_400(t *testing.T) {
 func TestAccessRequest_AllowAll_Granted(t *testing.T) {
 	ts := newTestServer(t, []string{"door-001"}, service.AccessPolicy{AllowAll: true})
 
-	body := []byte(`{"module_id":"door-001","card_id":"AABBCCDD"}`)
+	body := []byte(`{"module_id":"door-001","credential_id":"AABBCCDD"}`)
 	resp, err := http.Post(ts.URL+"/v1/access_request", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("post: %v", err)
@@ -157,13 +157,13 @@ func TestAccessRequest_AllowAll_Granted(t *testing.T) {
 	}
 }
 
-func TestAccessRequest_CardNotAllowed_Denied(t *testing.T) {
+func TestAccessRequest_CredentialNotAllowed_Denied(t *testing.T) {
 	allowed := map[string]struct{}{"AABBCCDD": {}}
 	ts := newTestServer(t, []string{"door-001"}, service.AccessPolicy{
-		AllowedCardIDs: allowed,
+		AllowedCredentialIDs: allowed,
 	})
 
-	body := []byte(`{"module_id":"door-001","card_id":"UNKNOWN_CARD"}`)
+	body := []byte(`{"module_id":"door-001","credential_id":"UNKNOWN_CREDENTIAL"}`)
 	resp, err := http.Post(ts.URL+"/v1/access_request", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("post: %v", err)
@@ -180,17 +180,17 @@ func TestAccessRequest_CardNotAllowed_Denied(t *testing.T) {
 	}
 
 	if ar.Granted {
-		t.Error("expected granted=false for unknown card")
+		t.Error("expected granted=false for unknown credential")
 	}
-	if ar.Reason != "card_not_allowed" {
-		t.Errorf("expected reason=card_not_allowed, got %q", ar.Reason)
+	if ar.Reason != "credential_not_allowed" {
+		t.Errorf("expected reason=credential_not_allowed, got %q", ar.Reason)
 	}
 }
 
 func TestAccessRequest_UnknownModule_403(t *testing.T) {
 	ts := newTestServer(t, []string{"door-001"}, service.AccessPolicy{AllowAll: true})
 
-	body := []byte(`{"module_id":"rogue-device","card_id":"AABBCCDD"}`)
+	body := []byte(`{"module_id":"rogue-device","credential_id":"AABBCCDD"}`)
 	resp, err := http.Post(ts.URL+"/v1/access_request", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("post: %v", err)
@@ -202,7 +202,7 @@ func TestAccessRequest_UnknownModule_403(t *testing.T) {
 	}
 }
 
-func TestAccessRequest_MissingCardID_400(t *testing.T) {
+func TestAccessRequest_MissingCredentialID_400(t *testing.T) {
 	ts := newTestServer(t, []string{"door-001"}, service.AccessPolicy{})
 
 	body := []byte(`{"module_id":"door-001"}`)
