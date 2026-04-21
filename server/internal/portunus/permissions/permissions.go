@@ -37,12 +37,12 @@ const (
 	RoleAssignPermission = "role.assign_permissions"
 
 	// Member access management (used from PR 4 onward)
-	MemberProvision   = "member.provision"
-	MemberList        = "member.list"
-	MemberView        = "member.view"
-	MemberAssignRole  = "member.assign_role"
-	MemberDisable     = "member.disable"
-	MemberArchive     = "member.archive"
+	MemberProvision  = "member.provision"
+	MemberList       = "member.list"
+	MemberView       = "member.view"
+	MemberAssignRole = "member.assign_role"
+	MemberDisable    = "member.disable"
+	MemberArchive    = "member.archive"
 
 	// Module authorization management (used from PR 4 onward)
 	ModuleAuthGrant  = "module_auth.grant"

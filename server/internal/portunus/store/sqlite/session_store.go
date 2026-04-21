@@ -36,7 +36,7 @@ VALUES (?, ?, ?, ?);
 
 func (s *SessionStore) GetSession(ctx context.Context, sessionID string) (*store.SessionRecord, error) {
 	var (
-		id, adminUUID      string
+		id, adminUUID        string
 		createdMs, expiresMs int64
 	)
 	err := s.db.QueryRowContext(ctx, `

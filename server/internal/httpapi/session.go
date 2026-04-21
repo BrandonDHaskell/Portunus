@@ -107,4 +107,3 @@ func clearSessionCookie(w http.ResponseWriter) {
 		SameSite: http.SameSiteStrictMode,
 	})
 }
-

@@ -10,13 +10,13 @@ var ErrUsernameAlreadyExists = errors.New("username already exists")
 
 // AdminUserRecord represents a row in the admin_users table.
 type AdminUserRecord struct {
-	UUID          string
-	Username      string
-	PasswordHash  string
-	MustChangePW  bool
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	LastLoginAt   *time.Time
+	UUID         string
+	Username     string
+	PasswordHash string
+	MustChangePW bool
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	LastLoginAt  *time.Time
 }
 
 // AdminUserStore manages server operator accounts.

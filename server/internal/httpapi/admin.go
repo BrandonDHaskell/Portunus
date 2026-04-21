@@ -269,4 +269,3 @@ func (s *Server) handleAdminDeleteDoor(w http.ResponseWriter, r *http.Request) {
 	s.logger.Printf("admin: deleted door %q", doorID)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "door_id": doorID, "deleted": true})
 }
-

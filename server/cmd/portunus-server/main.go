@@ -27,7 +27,6 @@ import (
 	sqlitestore "github.com/BrandonDHaskell/Portunus/server/internal/portunus/store/sqlite"
 )
 
-
 func main() {
 	cfg := config.FromEnv()
 	logger := log.New(os.Stdout, "portunus-server ", log.LstdFlags|log.LUTC)
