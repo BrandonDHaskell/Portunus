@@ -42,9 +42,9 @@ func heartbeatResponseToProto(r types.HeartbeatResponse) *pb.HeartbeatResponse {
 
 func accessRequestFromProto(p *pb.AccessRequest) types.AccessRequest {
 	req := types.AccessRequest{
-		ModuleID:    p.GetModuleId(),
+		ModuleID:     p.GetModuleId(),
 		CredentialID: p.GetCredentialId(),
-		RequestedAt: p.GetRequestedAt(),
+		RequestedAt:  p.GetRequestedAt(),
 	}
 
 	if p.DoorClosed != nil {

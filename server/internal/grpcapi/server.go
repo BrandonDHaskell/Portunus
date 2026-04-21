@@ -95,9 +95,9 @@ func (s *Server) SendHeartbeat(ctx context.Context, req *pb.HeartbeatRequest) (*
 func (s *Server) RequestAccess(ctx context.Context, req *pb.AccessRequest) (*pb.AccessResponse, error) {
 	// Convert protobuf request → domain type.
 	domainReq := types.AccessRequest{
-		ModuleID:    req.GetModuleId(),
+		ModuleID:     req.GetModuleId(),
 		CredentialID: req.GetCredentialId(),
-		RequestedAt: req.GetRequestedAt(),
+		RequestedAt:  req.GetRequestedAt(),
 	}
 	if req.DoorClosed != nil {
 		dc := req.GetDoorClosed()

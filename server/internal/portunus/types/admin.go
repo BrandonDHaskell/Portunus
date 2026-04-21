@@ -31,8 +31,8 @@ type ListModulesResponse struct {
 // ── Credential admin types ──────────────────────────────────────────────────
 
 type RegisterCredentialRequest struct {
-	CredentialID string `json:"credential_id"`  // raw hex UID (e.g. "04:A3:2B:1C")
-	Tag          string `json:"tag,omitempty"`  // human-readable label
+	CredentialID string `json:"credential_id"` // raw hex UID (e.g. "04:A3:2B:1C")
+	Tag          string `json:"tag,omitempty"` // human-readable label
 }
 
 type CredentialInfo struct {

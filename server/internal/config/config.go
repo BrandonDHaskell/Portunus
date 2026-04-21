@@ -15,8 +15,8 @@ type Config struct {
 	Env    string // "dev" | "prod"
 	DBPath string // e.g. "./data/portunus.db"
 
-	KnownModules   []string
-	AllowAll       bool
+	KnownModules         []string
+	AllowAll             bool
 	AllowedCredentialIDs []string
 
 	// Heartbeat retention
@@ -110,17 +110,17 @@ func FromEnv() Config {
 		Env:      env,
 		DBPath:   dbPath,
 
-		KnownModules:   knownModules,
-		AllowAll:       allowAll,
+		KnownModules:         knownModules,
+		AllowAll:             allowAll,
 		AllowedCredentialIDs: allowedCredentials,
 
 		HeartbeatRetentionDays: retentionDays,
 		PruneIntervalHours:     pruneInterval,
 
-		TLSCertFile:    tlsCert,
-		TLSKeyFile:     tlsKey,
-		HMACSecret:     hmacSecret,
-		AdminAPIKey:    adminAPIKey,
+		TLSCertFile:          tlsCert,
+		TLSKeyFile:           tlsKey,
+		HMACSecret:           hmacSecret,
+		AdminAPIKey:          adminAPIKey,
 		CredentialHashSecret: credentialHashSecret,
 	}
 }

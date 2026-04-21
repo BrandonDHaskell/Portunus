@@ -26,8 +26,8 @@ var (
 )
 
 type AdminService struct {
-	moduleStore        store.ModuleAdminStore
-	credentialStore    store.CredentialStore
+	moduleStore          store.ModuleAdminStore
+	credentialStore      store.CredentialStore
 	credentialHashSecret []byte
 }
 
