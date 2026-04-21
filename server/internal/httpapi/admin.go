@@ -1,11 +1,9 @@
 package httpapi
 
 import (
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store"
@@ -270,39 +268,4 @@ func (s *Server) handleAdminDeleteDoor(w http.ResponseWriter, r *http.Request) {
 
 	s.logger.Printf("admin: deleted door %q", doorID)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "door_id": doorID, "deleted": true})
-}
-
-// ── Admin auth middleware ────────────────────────────────────────────────────
-
-// adminAuthMiddleware protects /admin/v1/* routes with a Bearer token check.
-// The token must match the server's PORTUNUS_ADMIN_API_KEY env var.
-func adminAuthMiddleware(apiKey string, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/admin/") {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		auth := r.Header.Get("Authorization")
-		if auth == "" {
-			writeError(w, http.StatusUnauthorized, "missing_auth",
-				"Authorization header is required for admin endpoints")
-			return
-		}
-
-		const prefix = "Bearer "
-		if !strings.HasPrefix(auth, prefix) {
-			writeError(w, http.StatusUnauthorized, "invalid_auth",
-				"Authorization header must use Bearer scheme")
-			return
-		}
-
-		token := strings.TrimSpace(auth[len(prefix):])
-		if subtle.ConstantTimeCompare([]byte(token), []byte(apiKey)) != 1 {
-			writeError(w, http.StatusForbidden, "forbidden", "invalid admin API key")
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
 }

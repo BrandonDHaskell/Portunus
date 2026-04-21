@@ -37,12 +37,6 @@ type Config struct {
 	// Set to the same value as CONFIG_PORTUNUS_HMAC_SECRET in the firmware.
 	HMACSecret string
 
-	// Admin API authentication
-	// When non-empty, all /admin/v1/* requests must include an
-	// Authorization: Bearer <key> header matching this value.
-	// Generate with: openssl rand -hex 32
-	AdminAPIKey string
-
 	// Credential hash secret for keyed HMAC-SHA256 credential ID hashing.
 	// When set, credential IDs are hashed with HMAC-SHA256(secret, credentialID)
 	// instead of bare SHA-256, preventing rainbow-table attacks on a stolen database.
@@ -64,9 +58,6 @@ func (c Config) Validate() error {
 	}
 	if c.HMACSecret == "" {
 		errs = append(errs, errors.New("prod requires HMAC auth: set PORTUNUS_HMAC_SECRET"))
-	}
-	if c.AdminAPIKey == "" {
-		errs = append(errs, errors.New("prod requires an admin API key: set PORTUNUS_ADMIN_API_KEY"))
 	}
 	if c.AllowAll {
 		errs = append(errs, errors.New("prod forbids PORTUNUS_ALLOW_ALL=true"))
@@ -100,7 +91,6 @@ func FromEnv() Config {
 	tlsCert := strings.TrimSpace(os.Getenv("PORTUNUS_TLS_CERT_FILE"))
 	tlsKey := strings.TrimSpace(os.Getenv("PORTUNUS_TLS_KEY_FILE"))
 	hmacSecret := os.Getenv("PORTUNUS_HMAC_SECRET")
-	adminAPIKey := strings.TrimSpace(os.Getenv("PORTUNUS_ADMIN_API_KEY"))
 	grpcAddr := strings.TrimSpace(os.Getenv("PORTUNUS_GRPC_ADDR"))
 	credentialHashSecret := os.Getenv("PORTUNUS_CREDENTIAL_HASH_SECRET")
 
@@ -120,7 +110,6 @@ func FromEnv() Config {
 		TLSCertFile:          tlsCert,
 		TLSKeyFile:           tlsKey,
 		HMACSecret:           hmacSecret,
-		AdminAPIKey:          adminAPIKey,
 		CredentialHashSecret: credentialHashSecret,
 	}
 }
