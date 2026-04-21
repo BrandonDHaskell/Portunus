@@ -433,10 +433,10 @@ const file_portunus_v1_portunus_proto_rawDesc = "" +
 	"\x05known\x18\x02 \x01(\bR\x05known\x12\x1b\n" +
 	"\tmodule_id\x18\x03 \x01(\tR\bmoduleId\x12\x1f\n" +
 	"\vserver_time\x18\x04 \x01(\tR\n" +
-	"serverTime\"\x9e\x01\n" +
+	"serverTime\"\xaa\x01\n" +
 	"\rAccessRequest\x12\x1b\n" +
-	"\tmodule_id\x18\x01 \x01(\tR\bmoduleId\x12\x17\n" +
-	"\acard_id\x18\x02 \x01(\tR\x06cardId\x12$\n" +
+	"\tmodule_id\x18\x01 \x01(\tR\bmoduleId\x12#\n" +
+	"\rcredential_id\x18\x02 \x01(\tR\fcredentialId\x12$\n" +
 	"\vdoor_closed\x18\x03 \x01(\bH\x00R\n" +
 	"doorClosed\x88\x01\x01\x12!\n" +
 	"\frequested_at\x18\x04 \x01(\tR\vrequestedAtB\x0e\n" +
