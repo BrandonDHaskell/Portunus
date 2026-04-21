@@ -27,6 +27,7 @@ import (
 	sqlitestore "github.com/BrandonDHaskell/Portunus/server/internal/portunus/store/sqlite"
 )
 
+
 func main() {
 	cfg := config.FromEnv()
 	logger := log.New(os.Stdout, "portunus-server ", log.LstdFlags|log.LUTC)
@@ -58,6 +59,9 @@ func main() {
 	accessEventStore := sqlitestore.NewAccessEventStore(dbConn, writer)
 	credentialStore := sqlitestore.NewCredentialStore(dbConn, writer)
 	moduleAdminStore := sqlitestore.NewModuleAdminStore(dbConn, writer)
+	adminUserStore := sqlitestore.NewAdminUserStore(dbConn, writer)
+	sessionStore := sqlitestore.NewSessionStore(dbConn, writer)
+	roleStore := sqlitestore.NewRoleStore(dbConn, writer)
 
 	// Stores (Memory for dev testing with no DB)
 	// deviceStore := memory.NewDeviceStore(cfg.KnownModules)
@@ -99,6 +103,14 @@ func main() {
 	// Admin service for module/credential/door management via REST API.
 	adminSvc := service.NewAdminService(moduleAdminStore, credentialStore, credentialHashSecret)
 
+	// Auth service: session-based admin authentication.
+	authSvc := service.NewAuthService(adminUserStore, sessionStore, roleStore, logger)
+	if err := authSvc.Bootstrap(ctx); err != nil {
+		logger.Fatalf("auth bootstrap error: %v", err)
+	}
+
+	tlsEnabled := cfg.TLSCertFile != "" && cfg.TLSKeyFile != ""
+
 	// HTTP
 	srv := httpapi.NewServer(httpapi.Dependencies{
 		Logger:           logger,
@@ -106,8 +118,9 @@ func main() {
 		HeartbeatService: heartbeatSvc,
 		AccessService:    accessSvc,
 		AdminService:     adminSvc,
+		AuthService:      authSvc,
 		HMACSecret:       cfg.HMACSecret,
-		AdminAPIKey:      cfg.AdminAPIKey,
+		TLSEnabled:       tlsEnabled,
 	})
 
 	go func() {
