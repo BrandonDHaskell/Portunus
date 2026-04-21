@@ -31,7 +31,7 @@ func hmacProjection(req interface{}) ([]byte, error) {
 	case *pb.HeartbeatRequest:
 		return []byte(fmt.Sprintf("heartbeat|%s|%d", m.ModuleId, m.Sequence)), nil
 	case *pb.AccessRequest:
-		return []byte(fmt.Sprintf("access|%s|%s", m.ModuleId, m.CardId)), nil
+		return []byte(fmt.Sprintf("access|%s|%s", m.ModuleId, m.CredentialId)), nil
 	default:
 		return nil, fmt.Errorf("unsupported request type %T", req)
 	}

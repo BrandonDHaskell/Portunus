@@ -23,9 +23,9 @@ extern "C" {
 #define PORTUNUS_ERR_SPI_INIT        (PORTUNUS_ERR_BASE_DRIVER + 0x01)  /**< SPI bus initialisation failed */
 #define PORTUNUS_ERR_SPI_TRANSFER    (PORTUNUS_ERR_BASE_DRIVER + 0x02)  /**< SPI read/write transfer failed */
 #define PORTUNUS_ERR_DEVICE_NOT_FOUND (PORTUNUS_ERR_BASE_DRIVER + 0x03) /**< Expected hardware not detected */
-#define PORTUNUS_ERR_CARD_READ       (PORTUNUS_ERR_BASE_DRIVER + 0x04)  /**< Failed to read card UID */
-#define PORTUNUS_ERR_CARD_COLLISION  (PORTUNUS_ERR_BASE_DRIVER + 0x05)  /**< Anti-collision failure (multiple cards) */
-#define PORTUNUS_ERR_NO_CARD         (PORTUNUS_ERR_BASE_DRIVER + 0x06)  /**< No card present in reader field */
+#define PORTUNUS_ERR_CREDENTIAL_READ      (PORTUNUS_ERR_BASE_DRIVER + 0x04)  /**< Failed to read credential UID */
+#define PORTUNUS_ERR_CREDENTIAL_COLLISION (PORTUNUS_ERR_BASE_DRIVER + 0x05)  /**< Anti-collision failure (multiple credentials) */
+#define PORTUNUS_ERR_NO_CREDENTIAL        (PORTUNUS_ERR_BASE_DRIVER + 0x06)  /**< No credential present in reader field */
 #define PORTUNUS_ERR_GPIO_INIT       (PORTUNUS_ERR_BASE_DRIVER + 0x07)  /**< GPIO configuration failed */
 
 /* ── Service errors (event bus, heartbeat, connectivity) ───────────────────── */

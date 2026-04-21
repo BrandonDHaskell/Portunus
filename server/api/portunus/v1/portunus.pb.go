@@ -241,15 +241,15 @@ func (x *HeartbeatResponse) GetServerTime() string {
 	return ""
 }
 
-// Sent by the access module when a card is presented to the reader.
+// Sent by the access module when a credential is presented to the reader.
 //
 // Server Go equivalent: types.AccessRequest
 type AccessRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Unique identifier for the access module (required).
 	ModuleId string `protobuf:"bytes,1,opt,name=module_id,json=moduleId,proto3" json:"module_id,omitempty"`
-	// Hex-encoded card UID, e.g. "04:A3:2B:1C" (required).
-	CardId string `protobuf:"bytes,2,opt,name=card_id,json=cardId,proto3" json:"card_id,omitempty"`
+	// Hex-encoded credential UID, e.g. "04:A3:2B:1C" (required).
+	CredentialId string `protobuf:"bytes,2,opt,name=credential_id,json=credentialId,proto3" json:"credential_id,omitempty"`
 	// Reed-switch state at the moment of the read.
 	DoorClosed *bool `protobuf:"varint,3,opt,name=door_closed,json=doorClosed,proto3,oneof" json:"door_closed,omitempty"`
 	// Device-local timestamp of the read (ISO 8601 / RFC 3339).
@@ -296,9 +296,9 @@ func (x *AccessRequest) GetModuleId() string {
 	return ""
 }
 
-func (x *AccessRequest) GetCardId() string {
+func (x *AccessRequest) GetCredentialId() string {
 	if x != nil {
-		return x.CardId
+		return x.CredentialId
 	}
 	return ""
 }
@@ -328,8 +328,8 @@ type AccessResponse struct {
 	Known bool `protobuf:"varint,2,opt,name=known,proto3" json:"known,omitempty"`
 	// The access decision: true = unlock, false = deny.
 	Granted bool `protobuf:"varint,3,opt,name=granted,proto3" json:"granted,omitempty"`
-	// Human-readable reason code: "allow_all", "card_allowed",
-	// "card_not_allowed", "unknown_module", "denied".
+	// Human-readable reason code: "allow_all", "credential_allowed",
+	// "credential_not_allowed", "unknown_module", "denied".
 	Reason string `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
 	// Echoed module_id.
 	ModuleId string `protobuf:"bytes,5,opt,name=module_id,json=moduleId,proto3" json:"module_id,omitempty"`

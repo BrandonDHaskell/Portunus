@@ -17,7 +17,7 @@ type Config struct {
 
 	KnownModules   []string
 	AllowAll       bool
-	AllowedCardIDs []string
+	AllowedCredentialIDs []string
 
 	// Heartbeat retention
 	HeartbeatRetentionDays int // 0 = keep forever
@@ -43,12 +43,12 @@ type Config struct {
 	// Generate with: openssl rand -hex 32
 	AdminAPIKey string
 
-	// Card hash secret for keyed HMAC-SHA256 card ID hashing.
-	// When set, card IDs are hashed with HMAC-SHA256(secret, cardID) instead
-	// of bare SHA-256, preventing rainbow-table attacks on a stolen database.
+	// Credential hash secret for keyed HMAC-SHA256 credential ID hashing.
+	// When set, credential IDs are hashed with HMAC-SHA256(secret, credentialID)
+	// instead of bare SHA-256, preventing rainbow-table attacks on a stolen database.
 	// Generate with: openssl rand -hex 32
 	// Required in prod mode.
-	CardHashSecret string
+	CredentialHashSecret string
 }
 
 // Validate returns an error if the config is unsafe for prod mode.
@@ -71,8 +71,8 @@ func (c Config) Validate() error {
 	if c.AllowAll {
 		errs = append(errs, errors.New("prod forbids PORTUNUS_ALLOW_ALL=true"))
 	}
-	if c.CardHashSecret == "" {
-		errs = append(errs, errors.New("prod requires a card hash secret: set PORTUNUS_CARD_HASH_SECRET"))
+	if c.CredentialHashSecret == "" {
+		errs = append(errs, errors.New("prod requires a credential hash secret: set PORTUNUS_CREDENTIAL_HASH_SECRET"))
 	}
 	return errors.Join(errs...)
 }
@@ -89,7 +89,7 @@ func FromEnv() Config {
 	dbPath := getenvDefault("PORTUNUS_DB_PATH", "./data/portunus.db")
 
 	knownModules := splitCSV(os.Getenv("PORTUNUS_KNOWN_MODULES"))
-	allowedCards := splitCSV(os.Getenv("PORTUNUS_ALLOWED_CARD_IDS"))
+	allowedCredentials := splitCSV(os.Getenv("PORTUNUS_ALLOWED_CREDENTIAL_IDS"))
 
 	allowAll := strings.EqualFold(os.Getenv("PORTUNUS_ALLOW_ALL"), "true") ||
 		os.Getenv("PORTUNUS_ALLOW_ALL") == "1"
@@ -102,7 +102,7 @@ func FromEnv() Config {
 	hmacSecret := os.Getenv("PORTUNUS_HMAC_SECRET")
 	adminAPIKey := strings.TrimSpace(os.Getenv("PORTUNUS_ADMIN_API_KEY"))
 	grpcAddr := strings.TrimSpace(os.Getenv("PORTUNUS_GRPC_ADDR"))
-	cardHashSecret := os.Getenv("PORTUNUS_CARD_HASH_SECRET")
+	credentialHashSecret := os.Getenv("PORTUNUS_CREDENTIAL_HASH_SECRET")
 
 	return Config{
 		HTTPAddr: addr,
@@ -112,7 +112,7 @@ func FromEnv() Config {
 
 		KnownModules:   knownModules,
 		AllowAll:       allowAll,
-		AllowedCardIDs: allowedCards,
+		AllowedCredentialIDs: allowedCredentials,
 
 		HeartbeatRetentionDays: retentionDays,
 		PruneIntervalHours:     pruneInterval,
@@ -121,7 +121,7 @@ func FromEnv() Config {
 		TLSKeyFile:     tlsKey,
 		HMACSecret:     hmacSecret,
 		AdminAPIKey:    adminAPIKey,
-		CardHashSecret: cardHashSecret,
+		CredentialHashSecret: credentialHashSecret,
 	}
 }
 

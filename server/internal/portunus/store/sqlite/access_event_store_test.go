@@ -67,7 +67,7 @@ func TestAccessEventStore_RecordEvent_ColumnsCorrect(t *testing.T) {
 		RequestedAt: &reqAt,
 		DoorClosed:  &closed,
 		Granted:     false,
-		Reason:      "card_not_allowed",
+		Reason:      "credential_not_allowed",
 		DecidedAt:   now.Add(2 * time.Millisecond),
 	})
 	if err != nil {
@@ -94,8 +94,8 @@ FROM access_events WHERE module_id = ?`, "door-001",
 	if granted != 0 {
 		t.Errorf("expected decision_granted=0, got %d", granted)
 	}
-	if reason != "card_not_allowed" {
-		t.Errorf("expected decision_reason=card_not_allowed, got %q", reason)
+	if reason != "credential_not_allowed" {
+		t.Errorf("expected decision_reason=credential_not_allowed, got %q", reason)
 	}
 	if receivedMs != now.UnixMilli() {
 		t.Errorf("expected received_at_ms=%d, got %d", now.UnixMilli(), receivedMs)
@@ -170,7 +170,7 @@ func TestAccessEventStore_RecordEvent_NullOptionalFields(t *testing.T) {
 
 	now := time.Date(2026, 2, 15, 12, 0, 0, 0, time.UTC)
 
-	// No RequestedAt, no DoorClosed, no CardIDHash.
+	// No RequestedAt, no DoorClosed, no CredentialHash.
 	err := as.RecordEvent(context.Background(), store.AccessEventRecord{
 		ModuleID:   "door-001",
 		ReceivedAt: now,
@@ -183,14 +183,14 @@ func TestAccessEventStore_RecordEvent_NullOptionalFields(t *testing.T) {
 	}
 
 	var (
-		requestedMs sql.NullInt64
-		doorClosed  sql.NullInt64
-		cardHash    []byte
+		requestedMs    sql.NullInt64
+		doorClosed     sql.NullInt64
+		credentialHash []byte
 	)
 	err = conn.QueryRowContext(context.Background(), `
-SELECT requested_at_ms, door_closed, card_id_hash
+SELECT requested_at_ms, door_closed, credential_hash
 FROM access_events WHERE module_id = ?`, "door-001",
-	).Scan(&requestedMs, &doorClosed, &cardHash)
+	).Scan(&requestedMs, &doorClosed, &credentialHash)
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -200,8 +200,8 @@ FROM access_events WHERE module_id = ?`, "door-001",
 	if doorClosed.Valid {
 		t.Error("expected door_closed to be NULL")
 	}
-	if cardHash != nil {
-		t.Error("expected card_id_hash to be NULL")
+	if credentialHash != nil {
+		t.Error("expected credential_hash to be NULL")
 	}
 }
 

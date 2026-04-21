@@ -11,52 +11,52 @@ import (
 )
 
 var (
-	ErrInvalidCardID = errors.New("card_id is required")
+	ErrInvalidCredentialID = errors.New("credential_id is required")
 )
 
 type AccessPolicy struct {
-	// AllowAll grants access to any card (dev/testing only).
+	// AllowAll grants access to any credential (dev/testing only).
 	AllowAll bool
-	// AllowedCardIDs is the legacy env-var allowlist (deprecated).
-	// When CardStore is set, this is ignored.
-	AllowedCardIDs map[string]struct{}
+	// AllowedCredentialIDs is the legacy env-var allowlist (deprecated).
+	// When CredentialStore is set, this is ignored.
+	AllowedCredentialIDs map[string]struct{}
 }
 
 type AccessService struct {
-	registry       *DeviceRegistry
-	policy         AccessPolicy
-	eventStore     store.AccessEventStore
-	cardStore      store.CardStore // nil = use legacy AllowedCardIDs map
-	cardHashSecret []byte
+	registry             *DeviceRegistry
+	policy               AccessPolicy
+	eventStore           store.AccessEventStore
+	credentialStore      store.CredentialStore // nil = use legacy AllowedCredentialIDs map
+	credentialHashSecret []byte
 }
 
 func NewAccessService(reg *DeviceRegistry, policy AccessPolicy, es store.AccessEventStore) *AccessService {
 	return &AccessService{registry: reg, policy: policy, eventStore: es}
 }
 
-// SetCardStore enables DB-backed card lookups, replacing the legacy
-// AllowedCardIDs map.  Call after NewAccessService, before serving traffic.
-func (s *AccessService) SetCardStore(cs store.CardStore) {
-	s.cardStore = cs
+// SetCredentialStore enables DB-backed credential lookups, replacing the legacy
+// AllowedCredentialIDs map. Call after NewAccessService, before serving traffic.
+func (s *AccessService) SetCredentialStore(cs store.CredentialStore) {
+	s.credentialStore = cs
 }
 
-// SetCardHashSecret sets the HMAC key used to hash card IDs.  Must match the
-// key used at registration time.  Call after NewAccessService, before serving traffic.
-func (s *AccessService) SetCardHashSecret(secret []byte) {
-	s.cardHashSecret = secret
+// SetCredentialHashSecret sets the HMAC key used to hash credential IDs. Must
+// match the key used at registration time. Call after NewAccessService, before serving traffic.
+func (s *AccessService) SetCredentialHashSecret(secret []byte) {
+	s.credentialHashSecret = secret
 }
 
 func (s *AccessService) Decide(ctx context.Context, req types.AccessRequest) (types.AccessResponse, error) {
 	now := time.Now().UTC()
 
 	moduleID := strings.TrimSpace(req.ModuleID)
-	cardID := strings.TrimSpace(req.CardID)
+	credentialID := strings.TrimSpace(req.CredentialID)
 
 	if moduleID == "" {
 		return types.AccessResponse{}, ErrInvalidModuleID
 	}
-	if cardID == "" {
-		return types.AccessResponse{}, ErrInvalidCardID
+	if credentialID == "" {
+		return types.AccessResponse{}, ErrInvalidCredentialID
 	}
 
 	known, err := s.registry.IsKnown(ctx, moduleID)
@@ -87,26 +87,26 @@ func (s *AccessService) Decide(ctx context.Context, req types.AccessRequest) (ty
 	if s.policy.AllowAll {
 		granted = true
 		reason = "allow_all"
-	} else if s.cardStore != nil {
-		// DB-backed card lookup (production path).
-		allowed, err := s.cardStore.IsCardAllowed(ctx, HashCardID(cardID, s.cardHashSecret))
+	} else if s.credentialStore != nil {
+		// DB-backed credential lookup (production path).
+		allowed, err := s.credentialStore.IsCredentialAllowed(ctx, HashCredentialID(credentialID, s.credentialHashSecret))
 		if err != nil {
-			s.recordEvent(ctx, req, false, "card_lookup_error", now)
+			s.recordEvent(ctx, req, false, "credential_lookup_error", now)
 			return types.AccessResponse{}, err
 		}
 		if allowed {
 			granted = true
-			reason = "card_allowed"
+			reason = "credential_allowed"
 		} else {
-			reason = "card_not_allowed"
+			reason = "credential_not_allowed"
 		}
 	} else {
 		// Legacy env-var allowlist fallback.
-		if _, ok := s.policy.AllowedCardIDs[cardID]; ok {
+		if _, ok := s.policy.AllowedCredentialIDs[credentialID]; ok {
 			granted = true
-			reason = "card_allowed"
+			reason = "credential_allowed"
 		} else {
-			reason = "card_not_allowed"
+			reason = "credential_not_allowed"
 		}
 	}
 
@@ -122,11 +122,9 @@ func (s *AccessService) Decide(ctx context.Context, req types.AccessRequest) (ty
 	}, nil
 }
 
-// recordEvent persists the access decision to the audit log.  Errors are
+// recordEvent persists the access decision to the audit log. Errors are
 // intentionally not returned to the caller — a failed audit write should
-// not prevent the device from receiving its access decision.  In a future
-// iteration this could be promoted to a hard failure if audit completeness
-// is a strict requirement.
+// not prevent the device from receiving its access decision.
 func (s *AccessService) recordEvent(
 	ctx context.Context,
 	req types.AccessRequest,
@@ -136,7 +134,7 @@ func (s *AccessService) recordEvent(
 ) {
 	rec := store.AccessEventRecord{
 		ModuleID:   strings.TrimSpace(req.ModuleID),
-		ReceivedAt: decidedAt, // close enough for v1; refine if needed
+		ReceivedAt: decidedAt,
 		DoorClosed: req.DoorClosed,
 		Granted:    granted,
 		Reason:     reason,
@@ -147,10 +145,9 @@ func (s *AccessService) recordEvent(
 		rec.RequestedAt = t
 	}
 
-	// Hash the card ID for the audit trail (same algorithm as card registration).
-	cardID := strings.TrimSpace(req.CardID)
-	if cardID != "" {
-		rec.CardIDHash = HashCardID(cardID, s.cardHashSecret)
+	credentialID := strings.TrimSpace(req.CredentialID)
+	if credentialID != "" {
+		rec.CredentialHash = HashCredentialID(credentialID, s.credentialHashSecret)
 	}
 
 	_ = s.eventStore.RecordEvent(ctx, rec)
@@ -163,12 +160,10 @@ func parseOptionalTimestamp(s string) *time.Time {
 	if s == "" {
 		return nil
 	}
-	// Try RFC3339 first (most likely from a well-behaved device).
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
 		u := t.UTC()
 		return &u
 	}
-	// Try RFC3339Nano as a fallback.
 	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
 		u := t.UTC()
 		return &u

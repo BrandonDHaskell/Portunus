@@ -31,8 +31,8 @@ func TestDecide_AllowAll_RecordsGrantEvent(t *testing.T) {
 	)
 
 	_, err := svc.Decide(context.Background(), types.AccessRequest{
-		ModuleID: "door-001",
-		CardID:   "AABBCCDD",
+		ModuleID:     "door-001",
+		CredentialID: "AABBCCDD",
 	})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
@@ -58,16 +58,16 @@ func TestDecide_AllowAll_RecordsGrantEvent(t *testing.T) {
 	}
 }
 
-func TestDecide_CardAllowed_RecordsGrantEvent(t *testing.T) {
+func TestDecide_CredentialAllowed_RecordsGrantEvent(t *testing.T) {
 	allowed := map[string]struct{}{"AABBCCDD": {}}
 	svc, es := newTestAccessService(
 		[]string{"door-001"},
-		service.AccessPolicy{AllowedCardIDs: allowed},
+		service.AccessPolicy{AllowedCredentialIDs: allowed},
 	)
 
 	_, err := svc.Decide(context.Background(), types.AccessRequest{
-		ModuleID: "door-001",
-		CardID:   "AABBCCDD",
+		ModuleID:     "door-001",
+		CredentialID: "AABBCCDD",
 	})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
@@ -78,23 +78,23 @@ func TestDecide_CardAllowed_RecordsGrantEvent(t *testing.T) {
 		t.Fatalf("expected 1 event, got %d", len(events))
 	}
 	if !events[0].Granted {
-		t.Error("expected granted=true for allowed card")
+		t.Error("expected granted=true for allowed credential")
 	}
-	if events[0].Reason != "card_allowed" {
-		t.Errorf("expected reason=card_allowed, got %q", events[0].Reason)
+	if events[0].Reason != "credential_allowed" {
+		t.Errorf("expected reason=credential_allowed, got %q", events[0].Reason)
 	}
 }
 
-func TestDecide_CardDenied_RecordsDenyEvent(t *testing.T) {
+func TestDecide_CredentialDenied_RecordsDenyEvent(t *testing.T) {
 	allowed := map[string]struct{}{"AABBCCDD": {}}
 	svc, es := newTestAccessService(
 		[]string{"door-001"},
-		service.AccessPolicy{AllowedCardIDs: allowed},
+		service.AccessPolicy{AllowedCredentialIDs: allowed},
 	)
 
 	_, err := svc.Decide(context.Background(), types.AccessRequest{
-		ModuleID: "door-001",
-		CardID:   "UNKNOWN_CARD",
+		ModuleID:     "door-001",
+		CredentialID: "UNKNOWN_CREDENTIAL",
 	})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
@@ -105,10 +105,10 @@ func TestDecide_CardDenied_RecordsDenyEvent(t *testing.T) {
 		t.Fatalf("expected 1 event, got %d", len(events))
 	}
 	if events[0].Granted {
-		t.Error("expected granted=false for denied card")
+		t.Error("expected granted=false for denied credential")
 	}
-	if events[0].Reason != "card_not_allowed" {
-		t.Errorf("expected reason=card_not_allowed, got %q", events[0].Reason)
+	if events[0].Reason != "credential_not_allowed" {
+		t.Errorf("expected reason=credential_not_allowed, got %q", events[0].Reason)
 	}
 }
 
@@ -119,8 +119,8 @@ func TestDecide_UnknownModule_RecordsDenyEvent(t *testing.T) {
 	)
 
 	resp, err := svc.Decide(context.Background(), types.AccessRequest{
-		ModuleID: "rogue-device",
-		CardID:   "AABBCCDD",
+		ModuleID:     "rogue-device",
+		CredentialID: "AABBCCDD",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -152,9 +152,9 @@ func TestDecide_DoorClosedPassedThrough(t *testing.T) {
 
 	closed := true
 	_, err := svc.Decide(context.Background(), types.AccessRequest{
-		ModuleID:   "door-001",
-		CardID:     "AABBCCDD",
-		DoorClosed: &closed,
+		ModuleID:     "door-001",
+		CredentialID: "AABBCCDD",
+		DoorClosed:   &closed,
 	})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
@@ -176,9 +176,9 @@ func TestDecide_RequestedAtParsed(t *testing.T) {
 	)
 
 	_, err := svc.Decide(context.Background(), types.AccessRequest{
-		ModuleID:    "door-001",
-		CardID:      "AABBCCDD",
-		RequestedAt: "2026-02-15T12:00:00Z",
+		ModuleID:     "door-001",
+		CredentialID: "AABBCCDD",
+		RequestedAt:  "2026-02-15T12:00:00Z",
 	})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
@@ -205,8 +205,8 @@ func TestDecide_MultipleDecisions_AllRecorded(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		_, _ = svc.Decide(ctx, types.AccessRequest{
-			ModuleID: "door-001",
-			CardID:   "AABBCCDD",
+			ModuleID:     "door-001",
+			CredentialID: "AABBCCDD",
 		})
 	}
 
@@ -222,7 +222,7 @@ func TestDecide_MissingModuleID_NoEventRecorded(t *testing.T) {
 	svc, es := newTestAccessService(nil, service.AccessPolicy{})
 
 	_, err := svc.Decide(context.Background(), types.AccessRequest{
-		CardID: "AABBCCDD",
+		CredentialID: "AABBCCDD",
 	})
 	if err == nil {
 		t.Fatal("expected error for missing module_id")
@@ -233,14 +233,14 @@ func TestDecide_MissingModuleID_NoEventRecorded(t *testing.T) {
 	}
 }
 
-func TestDecide_MissingCardID_NoEventRecorded(t *testing.T) {
+func TestDecide_MissingCredentialID_NoEventRecorded(t *testing.T) {
 	svc, es := newTestAccessService([]string{"door-001"}, service.AccessPolicy{})
 
 	_, err := svc.Decide(context.Background(), types.AccessRequest{
 		ModuleID: "door-001",
 	})
 	if err == nil {
-		t.Fatal("expected error for missing card_id")
+		t.Fatal("expected error for missing credential_id")
 	}
 
 	if len(es.Events()) != 0 {

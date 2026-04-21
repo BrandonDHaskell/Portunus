@@ -60,11 +60,11 @@ func NewServer(d Dependencies) *Server {
 		mux.HandleFunc("POST /admin/v1/modules/{module_id}/revoke", s.handleAdminRevokeModule)
 		mux.HandleFunc("DELETE /admin/v1/modules/{module_id}", s.handleAdminDeleteModule)
 
-		// Cards
-		mux.HandleFunc("GET /admin/v1/cards", s.handleAdminListCards)
-		mux.HandleFunc("POST /admin/v1/cards", s.handleAdminRegisterCard)
-		mux.HandleFunc("PATCH /admin/v1/cards/{card_hash}", s.handleAdminUpdateCardStatus)
-		mux.HandleFunc("DELETE /admin/v1/cards/{card_hash}", s.handleAdminDeleteCard)
+		// Credentials
+		mux.HandleFunc("GET /admin/v1/credentials", s.handleAdminListCredentials)
+		mux.HandleFunc("POST /admin/v1/credentials", s.handleAdminRegisterCredential)
+		mux.HandleFunc("PATCH /admin/v1/credentials/{credential_hash}", s.handleAdminUpdateCredentialStatus)
+		mux.HandleFunc("DELETE /admin/v1/credentials/{credential_hash}", s.handleAdminDeleteCredential)
 
 		// Doors
 		mux.HandleFunc("GET /admin/v1/doors", s.handleAdminListDoors)
@@ -184,8 +184,8 @@ func (s *Server) handleAccessRequest(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, service.ErrInvalidModuleID):
 			writeError(w, http.StatusBadRequest, "invalid_module_id", err.Error())
 			return
-		case errors.Is(err, service.ErrInvalidCardID):
-			writeError(w, http.StatusBadRequest, "invalid_card_id", err.Error())
+		case errors.Is(err, service.ErrInvalidCredentialID):
+			writeError(w, http.StatusBadRequest, "invalid_credential_id", err.Error())
 			return
 		default:
 			s.logger.Printf("access_request error: %v", err)

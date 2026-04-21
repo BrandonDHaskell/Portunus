@@ -49,10 +49,9 @@ func (s *AccessEventStore) RecordEvent(ctx context.Context, rec store.AccessEven
 		granted = 1
 	}
 
-	// card_id_hash is nil until card hashing is implemented (item 3).
-	var cardIDHash any
-	if len(rec.CardIDHash) == 32 {
-		cardIDHash = rec.CardIDHash
+	var credentialHash any
+	if len(rec.CredentialHash) == 32 {
+		credentialHash = rec.CredentialHash
 	}
 
 	return s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
@@ -69,11 +68,11 @@ SELECT door_id FROM modules WHERE module_id = ?;
 		if _, err := tx.ExecContext(ctx, `
 INSERT INTO access_events(
   module_id, door_id, received_at_ms, requested_at_ms, door_closed,
-  card_id_hash, decision_granted, decision_reason, decided_at_ms
+  credential_hash, decision_granted, decision_reason, decided_at_ms
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 `,
 			rec.ModuleID, doorID, receivedMs, requestedMs, doorClosed,
-			cardIDHash, granted, rec.Reason, decidedMs,
+			credentialHash, granted, rec.Reason, decidedMs,
 		); err != nil {
 			return fmt.Errorf("RecordEvent insert: %w", err)
 		}

@@ -74,7 +74,7 @@ const (
 type PortunusServiceClient interface {
 	// SendHeartbeat records a module health telemetry tick.
 	SendHeartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
-	// RequestAccess evaluates a card-read event and returns an access decision.
+	// RequestAccess evaluates a credential-read event and returns an access decision.
 	RequestAccess(ctx context.Context, in *AccessRequest, opts ...grpc.CallOption) (*AccessResponse, error)
 }
 
@@ -126,7 +126,7 @@ func (c *portunusServiceClient) RequestAccess(ctx context.Context, in *AccessReq
 type PortunusServiceServer interface {
 	// SendHeartbeat records a module health telemetry tick.
 	SendHeartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
-	// RequestAccess evaluates a card-read event and returns an access decision.
+	// RequestAccess evaluates a credential-read event and returns an access decision.
 	RequestAccess(context.Context, *AccessRequest) (*AccessResponse, error)
 	mustEmbedUnimplementedPortunusServiceServer()
 }

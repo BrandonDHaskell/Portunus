@@ -13,7 +13,7 @@
  * the FSM's internal queue.  This decouples the FSM's processing from
  * the event bus dispatcher task.
  *
- * The card-polling sub-task runs independently and publishes credential
+ * The credential-polling sub-task runs independently and publishes credential
  * events to the event bus (not directly to the FSM queue).  The FSM
  * receives those events via its event bus subscription like any other.
  *
@@ -82,7 +82,7 @@ portunus_err_t SystemFSM::init()
             ESP_LOGI(TAG, "Credential reader: OK");
         } else {
             m_caps.has_reader = false;
-            ESP_LOGW(TAG, "Credential reader init failed (0x%" PRIx32 ") — card polling disabled", (uint32_t)err);
+            ESP_LOGW(TAG, "Credential reader init failed (0x%" PRIx32 ") — credential polling disabled", (uint32_t)err);
         }
     } else {
         m_caps.has_reader = false;
@@ -174,21 +174,21 @@ portunus_err_t SystemFSM::start()
         return PORTUNUS_ERR_TASK_CREATE;
     }
 
-    /* ── Start card polling sub-task ────────────────────────────────────── */
+    /* ── Start credential polling sub-task ──────────────────────────────── */
     if (m_caps.has_reader) {
         ret = xTaskCreate(
-            card_poll_task_entry,
-            "card_poll",
+            credential_poll_task_entry,
+            "credential_poll",
             POLL_TASK_STACK,
             this,
             POLL_TASK_PRIORITY,
             &m_poll_task_handle
         );
         if (ret != pdPASS) {
-            ESP_LOGE(TAG, "Failed to create card polling task");
+            ESP_LOGE(TAG, "Failed to create credential polling task");
             m_caps.has_reader = false;
         } else {
-            ESP_LOGI(TAG, "Card polling task started (interval=%d ms)",
+            ESP_LOGI(TAG, "Credential polling task started (interval=%d ms)",
                      MFRC522_POLL_INTERVAL_MS);
         }
     }
@@ -238,10 +238,10 @@ void SystemFSM::fsm_task_entry(void *arg)
     fsm->run();
 }
 
-void SystemFSM::card_poll_task_entry(void *arg)
+void SystemFSM::credential_poll_task_entry(void *arg)
 {
     auto *fsm = static_cast<SystemFSM *>(arg);
-    fsm->poll_card();
+    fsm->poll_credential();
 }
 
 /* ── FSM main loop ────────────────────────────────────────────────────────── */
@@ -316,7 +316,7 @@ void SystemFSM::process_event(const portunus_event_t &event)
 
     case EVENT_ACCESS_GRANTED: {
         const event_access_decision_t *ad = &event.payload.access_decision;
-        ESP_LOGI(TAG, "ACCESS GRANTED — card=%s reason=%s", ad->card_id, ad->reason);
+        ESP_LOGI(TAG, "ACCESS GRANTED — credential=%s reason=%s", ad->credential_id, ad->reason);
 
         if (m_caps.has_access_point) {
             portunus_err_t err = m_access->unlock();
@@ -339,8 +339,8 @@ void SystemFSM::process_event(const portunus_event_t &event)
 
     case EVENT_ACCESS_DENIED: {
         const event_access_decision_t *ad = &event.payload.access_decision;
-        ESP_LOGW(TAG, "ACCESS DENIED — card=%s reason=%s known=%d",
-                 ad->card_id, ad->reason, ad->known);
+        ESP_LOGW(TAG, "ACCESS DENIED — credential=%s reason=%s known=%d",
+                 ad->credential_id, ad->reason, ad->known);
 
         if (m_caps.has_feedback) {
             m_feedback->indicate(feedback_type_t::ACCESS_DENIED);
@@ -425,9 +425,9 @@ void SystemFSM::check_unlock_timer()
     }
 }
 
-/* ── Card polling sub-task ────────────────────────────────────────────────── */
+/* ── Credential polling sub-task ──────────────────────────────────────────── */
 
-void SystemFSM::poll_card()
+void SystemFSM::poll_credential()
 {
     const TickType_t poll_interval  = pdMS_TO_TICKS(MFRC522_POLL_INTERVAL_MS);
     const TickType_t reread_delay   = pdMS_TO_TICKS(CARD_REREAD_DELAY_MS);
@@ -446,13 +446,13 @@ void SystemFSM::poll_card()
 
             event_bus_publish(&event);
 
-            /* Halt the card to prevent re-reads while held against reader. */
+            /* Halt the credential to prevent re-reads while held against reader. */
             m_reader->halt();
 
             vTaskDelay(reread_delay);
             continue;
         }
-        /* PORTUNUS_ERR_NO_CARD is expected — no card present, continue. */
+        /* PORTUNUS_ERR_NO_CREDENTIAL is expected — no credential present, continue. */
 
         vTaskDelay(poll_interval);
     }

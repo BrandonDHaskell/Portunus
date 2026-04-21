@@ -28,7 +28,7 @@ func sign(req interface{}, secret string) string {
 	case *pb.HeartbeatRequest:
 		proj = fmt.Sprintf("heartbeat|%s|%d", m.ModuleId, m.Sequence)
 	case *pb.AccessRequest:
-		proj = fmt.Sprintf("access|%s|%s", m.ModuleId, m.CardId)
+		proj = fmt.Sprintf("access|%s|%s", m.ModuleId, m.CredentialId)
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(proj))
@@ -84,7 +84,7 @@ func TestHMACInterceptor_ValidHeartbeat_Passes(t *testing.T) {
 
 func TestHMACInterceptor_ValidAccessRequest_Passes(t *testing.T) {
 	interceptor := grpcapi.HMACInterceptor(testHMACSecret)
-	req := &pb.AccessRequest{ModuleId: "door-001", CardId: "AABBCCDD"}
+	req := &pb.AccessRequest{ModuleId: "door-001", CredentialId: "AABBCCDD"}
 
 	ctx := metadata.NewIncomingContext(context.Background(),
 		metadata.Pairs(hmacSigHeader, sign(req, testHMACSecret)))

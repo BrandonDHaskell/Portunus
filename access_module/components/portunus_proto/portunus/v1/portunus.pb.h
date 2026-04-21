@@ -51,14 +51,14 @@ typedef struct _portunus_v1_HeartbeatResponse {
     char server_time[40];
 } portunus_v1_HeartbeatResponse;
 
-/* Sent by the access module when a card is presented to the reader.
+/* Sent by the access module when a credential is presented to the reader.
 
  Server Go equivalent: types.AccessRequest */
 typedef struct _portunus_v1_AccessRequest {
     /* Unique identifier for the access module (required). */
     char module_id[33];
-    /* Hex-encoded card UID, e.g. "04:A3:2B:1C" (required). */
-    char card_id[30];
+    /* Hex-encoded credential UID, e.g. "04:A3:2B:1C" (required). */
+    char credential_id[30];
     /* Reed-switch state at the moment of the read. */
     bool has_door_closed;
     bool door_closed;
@@ -77,8 +77,8 @@ typedef struct _portunus_v1_AccessResponse {
     bool known;
     /* The access decision: true = unlock, false = deny. */
     bool granted;
-    /* Human-readable reason code: "allow_all", "card_allowed",
- "card_not_allowed", "unknown_module", "denied". */
+    /* Human-readable reason code: "allow_all", "credential_allowed",
+ "credential_not_allowed", "unknown_module", "denied". */
     char reason[33];
     /* Echoed module_id. */
     char module_id[33];
@@ -115,7 +115,7 @@ extern "C" {
 #define portunus_v1_HeartbeatResponse_module_id_tag 3
 #define portunus_v1_HeartbeatResponse_server_time_tag 4
 #define portunus_v1_AccessRequest_module_id_tag  1
-#define portunus_v1_AccessRequest_card_id_tag    2
+#define portunus_v1_AccessRequest_credential_id_tag 2
 #define portunus_v1_AccessRequest_door_closed_tag 3
 #define portunus_v1_AccessRequest_requested_at_tag 4
 #define portunus_v1_AccessResponse_ok_tag        1
@@ -148,7 +148,7 @@ X(a, STATIC,   SINGULAR, STRING,   server_time,       4)
 
 #define portunus_v1_AccessRequest_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, STRING,   module_id,         1) \
-X(a, STATIC,   SINGULAR, STRING,   card_id,           2) \
+X(a, STATIC,   SINGULAR, STRING,   credential_id,     2) \
 X(a, STATIC,   OPTIONAL, BOOL,     door_closed,       3) \
 X(a, STATIC,   SINGULAR, STRING,   requested_at,      4)
 #define portunus_v1_AccessRequest_CALLBACK NULL

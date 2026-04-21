@@ -43,7 +43,7 @@ func heartbeatResponseToProto(r types.HeartbeatResponse) *pb.HeartbeatResponse {
 func accessRequestFromProto(p *pb.AccessRequest) types.AccessRequest {
 	req := types.AccessRequest{
 		ModuleID:    p.GetModuleId(),
-		CardID:      p.GetCardId(),
+		CredentialID: p.GetCredentialId(),
 		RequestedAt: p.GetRequestedAt(),
 	}
 

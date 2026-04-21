@@ -34,8 +34,8 @@ func newAdminTestServer(t *testing.T) *httptest.Server {
 
 	adminSvc := service.NewAdminService(
 		sqlitestore.NewModuleAdminStore(conn, writer),
-		sqlitestore.NewCardStore(conn, writer),
-		nil, // no card-hash secret
+		sqlitestore.NewCredentialStore(conn, writer),
+		nil,
 	)
 
 	srv := httpapi.NewServer(httpapi.Dependencies{
@@ -194,30 +194,30 @@ func TestAdminModules_RevokeNotFound_404(t *testing.T) {
 	}
 }
 
-// ── card lifecycle ────────────────────────────────────────────────────────────
+// ── credential lifecycle ──────────────────────────────────────────────────────
 
-func TestAdminCards_RegisterUpdateDelete(t *testing.T) {
+func TestAdminCredentials_RegisterUpdateDelete(t *testing.T) {
 	ts := newAdminTestServer(t)
 	base := ts.URL
 
 	// Register
-	resp := do(t, adminReq(t, http.MethodPost, base+"/admin/v1/cards",
-		map[string]string{"card_id": "AABBCCDD", "tag": "test-card"}))
+	resp := do(t, adminReq(t, http.MethodPost, base+"/admin/v1/credentials",
+		map[string]string{"credential_id": "AABBCCDD", "tag": "test-credential"}))
 	var regBody map[string]any
 	json.NewDecoder(resp.Body).Decode(&regBody)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("register card: expected 201, got %d", resp.StatusCode)
+		t.Fatalf("register credential: expected 201, got %d", resp.StatusCode)
 	}
 
-	cardInfo, _ := regBody["card"].(map[string]any)
-	cardHash, _ := cardInfo["card_id_hash"].(string)
-	if cardHash == "" {
-		t.Fatal("expected non-empty card_id_hash in response")
+	credInfo, _ := regBody["credential"].(map[string]any)
+	credHash, _ := credInfo["credential_hash"].(string)
+	if credHash == "" {
+		t.Fatal("expected non-empty credential_hash in response")
 	}
 
 	// Update status
-	resp = do(t, adminReq(t, http.MethodPatch, base+"/admin/v1/cards/"+cardHash,
+	resp = do(t, adminReq(t, http.MethodPatch, base+"/admin/v1/credentials/"+credHash,
 		map[string]string{"status": "disabled"}))
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -225,35 +225,35 @@ func TestAdminCards_RegisterUpdateDelete(t *testing.T) {
 	}
 
 	// Delete
-	resp = do(t, adminReq(t, http.MethodDelete, base+"/admin/v1/cards/"+cardHash, nil))
+	resp = do(t, adminReq(t, http.MethodDelete, base+"/admin/v1/credentials/"+credHash, nil))
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("delete card: expected 200, got %d", resp.StatusCode)
+		t.Fatalf("delete credential: expected 200, got %d", resp.StatusCode)
 	}
 }
 
-func TestAdminCards_DuplicateRegister_409(t *testing.T) {
+func TestAdminCredentials_DuplicateRegister_409(t *testing.T) {
 	ts := newAdminTestServer(t)
-	body := map[string]string{"card_id": "AABBCCDD"}
+	body := map[string]string{"credential_id": "AABBCCDD"}
 
-	resp := do(t, adminReq(t, http.MethodPost, ts.URL+"/admin/v1/cards", body))
+	resp := do(t, adminReq(t, http.MethodPost, ts.URL+"/admin/v1/credentials", body))
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("first register: expected 201, got %d", resp.StatusCode)
 	}
 
-	resp = do(t, adminReq(t, http.MethodPost, ts.URL+"/admin/v1/cards", body))
+	resp = do(t, adminReq(t, http.MethodPost, ts.URL+"/admin/v1/credentials", body))
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusConflict {
 		t.Errorf("duplicate: expected 409, got %d", resp.StatusCode)
 	}
 }
 
-func TestAdminCards_DeleteNotFound_404(t *testing.T) {
+func TestAdminCredentials_DeleteNotFound_404(t *testing.T) {
 	ts := newAdminTestServer(t)
 	// Valid 64-char hex that doesn't exist in the DB.
 	hashHex := "deadbeef00000000000000000000000000000000000000000000000000000000"
-	resp := do(t, adminReq(t, http.MethodDelete, ts.URL+"/admin/v1/cards/"+hashHex, nil))
+	resp := do(t, adminReq(t, http.MethodDelete, ts.URL+"/admin/v1/credentials/"+hashHex, nil))
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", resp.StatusCode)
