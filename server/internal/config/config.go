@@ -23,6 +23,9 @@ type Config struct {
 	HeartbeatRetentionDays int // 0 = keep forever
 	PruneIntervalHours     int // how often the pruner runs (default 6)
 
+	// Expiry worker
+	ExpiryWorkerIntervalMinutes int // how often member expiry sweeps run (default 60)
+
 	// TLS
 	// When TLSCertFile and TLSKeyFile are both set, the server starts in
 	// HTTPS mode using ListenAndServeTLS.  Leave both empty to use plain
@@ -87,6 +90,7 @@ func FromEnv() Config {
 
 	retentionDays := getenvInt("PORTUNUS_HEARTBEAT_RETENTION_DAYS", 30)
 	pruneInterval := getenvInt("PORTUNUS_PRUNE_INTERVAL_HOURS", 6)
+	expiryInterval := getenvInt("PORTUNUS_EXPIRY_WORKER_INTERVAL_MINUTES", 60)
 
 	tlsCert := strings.TrimSpace(os.Getenv("PORTUNUS_TLS_CERT_FILE"))
 	tlsKey := strings.TrimSpace(os.Getenv("PORTUNUS_TLS_KEY_FILE"))
@@ -104,8 +108,9 @@ func FromEnv() Config {
 		AllowAll:             allowAll,
 		AllowedCredentialIDs: allowedCredentials,
 
-		HeartbeatRetentionDays: retentionDays,
-		PruneIntervalHours:     pruneInterval,
+		HeartbeatRetentionDays:      retentionDays,
+		PruneIntervalHours:          pruneInterval,
+		ExpiryWorkerIntervalMinutes: expiryInterval,
 
 		TLSCertFile:          tlsCert,
 		TLSKeyFile:           tlsKey,

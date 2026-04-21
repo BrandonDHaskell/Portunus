@@ -50,8 +50,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	PortunusService_SendHeartbeat_FullMethodName = "/portunus.v1.PortunusService/SendHeartbeat"
-	PortunusService_RequestAccess_FullMethodName = "/portunus.v1.PortunusService/RequestAccess"
+	PortunusService_SendHeartbeat_FullMethodName       = "/portunus.v1.PortunusService/SendHeartbeat"
+	PortunusService_RequestAccess_FullMethodName       = "/portunus.v1.PortunusService/RequestAccess"
+	PortunusService_ProvisionCredential_FullMethodName = "/portunus.v1.PortunusService/ProvisionCredential"
 )
 
 // PortunusServiceClient is the client API for PortunusService service.
@@ -76,6 +77,9 @@ type PortunusServiceClient interface {
 	SendHeartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
 	// RequestAccess evaluates a credential-read event and returns an access decision.
 	RequestAccess(ctx context.Context, in *AccessRequest, opts ...grpc.CallOption) (*AccessResponse, error)
+	// ProvisionCredential processes a two-scan provisioning flow from a
+	// PROVISIONING_CONSOLE firmware variant.
+	ProvisionCredential(ctx context.Context, in *ProvisionCredentialRequest, opts ...grpc.CallOption) (*ProvisionCredentialResponse, error)
 }
 
 type portunusServiceClient struct {
@@ -106,6 +110,16 @@ func (c *portunusServiceClient) RequestAccess(ctx context.Context, in *AccessReq
 	return out, nil
 }
 
+func (c *portunusServiceClient) ProvisionCredential(ctx context.Context, in *ProvisionCredentialRequest, opts ...grpc.CallOption) (*ProvisionCredentialResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProvisionCredentialResponse)
+	err := c.cc.Invoke(ctx, PortunusService_ProvisionCredential_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PortunusServiceServer is the server API for PortunusService service.
 // All implementations must embed UnimplementedPortunusServiceServer
 // for forward compatibility.
@@ -128,6 +142,9 @@ type PortunusServiceServer interface {
 	SendHeartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
 	// RequestAccess evaluates a credential-read event and returns an access decision.
 	RequestAccess(context.Context, *AccessRequest) (*AccessResponse, error)
+	// ProvisionCredential processes a two-scan provisioning flow from a
+	// PROVISIONING_CONSOLE firmware variant.
+	ProvisionCredential(context.Context, *ProvisionCredentialRequest) (*ProvisionCredentialResponse, error)
 	mustEmbedUnimplementedPortunusServiceServer()
 }
 
@@ -143,6 +160,9 @@ func (UnimplementedPortunusServiceServer) SendHeartbeat(context.Context, *Heartb
 }
 func (UnimplementedPortunusServiceServer) RequestAccess(context.Context, *AccessRequest) (*AccessResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RequestAccess not implemented")
+}
+func (UnimplementedPortunusServiceServer) ProvisionCredential(context.Context, *ProvisionCredentialRequest) (*ProvisionCredentialResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ProvisionCredential not implemented")
 }
 func (UnimplementedPortunusServiceServer) mustEmbedUnimplementedPortunusServiceServer() {}
 func (UnimplementedPortunusServiceServer) testEmbeddedByValue()                         {}
@@ -201,6 +221,24 @@ func _PortunusService_RequestAccess_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PortunusService_ProvisionCredential_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProvisionCredentialRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PortunusServiceServer).ProvisionCredential(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PortunusService_ProvisionCredential_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PortunusServiceServer).ProvisionCredential(ctx, req.(*ProvisionCredentialRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PortunusService_ServiceDesc is the grpc.ServiceDesc for PortunusService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -215,6 +253,10 @@ var PortunusService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RequestAccess",
 			Handler:    _PortunusService_RequestAccess_Handler,
+		},
+		{
+			MethodName: "ProvisionCredential",
+			Handler:    _PortunusService_ProvisionCredential_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
