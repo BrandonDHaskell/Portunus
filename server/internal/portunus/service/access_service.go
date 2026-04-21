@@ -23,13 +23,13 @@ type AccessPolicy struct {
 }
 
 type AccessService struct {
-	registry               *DeviceRegistry
-	policy                 AccessPolicy
-	eventStore             store.AccessEventStore
-	credentialStore        store.CredentialStore // nil = use legacy AllowedCredentialIDs map
-	memberAccessStore      store.MemberAccessStore
-	moduleAuthStore        store.ModuleAuthorizationStore
-	credentialHashSecret   []byte
+	registry             *DeviceRegistry
+	policy               AccessPolicy
+	eventStore           store.AccessEventStore
+	credentialStore      store.CredentialStore // nil = use legacy AllowedCredentialIDs map
+	memberAccessStore    store.MemberAccessStore
+	moduleAuthStore      store.ModuleAuthorizationStore
+	credentialHashSecret []byte
 }
 
 func NewAccessService(reg *DeviceRegistry, policy AccessPolicy, es store.AccessEventStore) *AccessService {

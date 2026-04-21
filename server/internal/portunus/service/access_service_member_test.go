@@ -16,8 +16,8 @@ import (
 	"github.com/BrandonDHaskell/Portunus/server/internal/db"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store"
-	sqlitestore "github.com/BrandonDHaskell/Portunus/server/internal/portunus/store/sqlite"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store/memory"
+	sqlitestore "github.com/BrandonDHaskell/Portunus/server/internal/portunus/store/sqlite"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/types"
 )
 

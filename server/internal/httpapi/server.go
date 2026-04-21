@@ -15,14 +15,14 @@ import (
 )
 
 type Dependencies struct {
-	Logger                *log.Logger
-	Addr                  string
-	HeartbeatService      *service.HeartbeatService
-	AccessService         *service.AccessService
-	AdminService          *service.AdminService
-	AuthService           *service.AuthService
-	MemberAccessService   *service.MemberAccessService
-	ModuleAuthService     *service.ModuleAuthorizationService
+	Logger              *log.Logger
+	Addr                string
+	HeartbeatService    *service.HeartbeatService
+	AccessService       *service.AccessService
+	AdminService        *service.AdminService
+	AuthService         *service.AuthService
+	MemberAccessService *service.MemberAccessService
+	ModuleAuthService   *service.ModuleAuthorizationService
 	// HMACSecret is the pre-shared key for X-Portunus-Sig verification.
 	// Leave empty to disable HMAC enforcement (not recommended for production).
 	HMACSecret string

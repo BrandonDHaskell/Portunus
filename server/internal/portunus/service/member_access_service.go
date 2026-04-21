@@ -13,12 +13,12 @@ import (
 )
 
 var (
-	ErrMemberNotFound             = errors.New("member not found")
-	ErrMemberUUIDRequired         = errors.New("member_uuid is required")
-	ErrRoleIDRequired             = errors.New("role_id is required")
-	ErrCredentialHashRequired     = errors.New("credential_hash is required")
-	ErrDuplicateCredentialActive  = errors.New("credential already assigned to an active member")
-	ErrDuplicateCredentialPending = errors.New("credential already attached to a pending_authorization member")
+	ErrMemberNotFound              = errors.New("member not found")
+	ErrMemberUUIDRequired          = errors.New("member_uuid is required")
+	ErrRoleIDRequired              = errors.New("role_id is required")
+	ErrCredentialHashRequired      = errors.New("credential_hash is required")
+	ErrDuplicateCredentialActive   = errors.New("credential already assigned to an active member")
+	ErrDuplicateCredentialPending  = errors.New("credential already attached to a pending_authorization member")
 	ErrDuplicateCredentialInactive = errors.New("credential already assigned to an expired or archived member")
 )
 

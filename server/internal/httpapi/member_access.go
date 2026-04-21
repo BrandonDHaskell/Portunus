@@ -222,13 +222,13 @@ func (s *Server) handleAdminArchiveMember(w http.ResponseWriter, r *http.Request
 
 func memberRecordToInfo(rec *store.MemberAccessRecord) types.MemberInfo {
 	info := types.MemberInfo{
-		UUID:               rec.UUID,
-		RoleID:             rec.RoleID,
-		Status:             string(rec.Status),
-		Enabled:            rec.Enabled,
-		ProvisioningStatus: string(rec.ProvisioningStatus),
-		CreatedAt:          rec.CreatedAt.Format(time.RFC3339),
-		CreatedByUUID:      rec.CreatedByUUID,
+		UUID:                rec.UUID,
+		RoleID:              rec.RoleID,
+		Status:              string(rec.Status),
+		Enabled:             rec.Enabled,
+		ProvisioningStatus:  string(rec.ProvisioningStatus),
+		CreatedAt:           rec.CreatedAt.Format(time.RFC3339),
+		CreatedByUUID:       rec.CreatedByUUID,
 		InactivityLimitDays: rec.InactivityLimitDays,
 	}
 	// Expose only an 8-byte (16 hex char) prefix of the hash — enough to

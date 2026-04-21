@@ -3,10 +3,10 @@ package types
 // ── Member provisioning types ────────────────────────────────────────────────
 
 type ProvisionMemberRequest struct {
-	RoleID              string  `json:"role_id"`
-	CreatedByUUID       string  `json:"created_by_uuid,omitempty"`
-	ExpiresAt           string  `json:"expires_at,omitempty"`           // RFC 3339; omit for no hard deadline
-	InactivityLimitDays *int    `json:"inactivity_limit_days,omitempty"` // nil = no inactivity policy
+	RoleID              string `json:"role_id"`
+	CreatedByUUID       string `json:"created_by_uuid,omitempty"`
+	ExpiresAt           string `json:"expires_at,omitempty"`            // RFC 3339; omit for no hard deadline
+	InactivityLimitDays *int   `json:"inactivity_limit_days,omitempty"` // nil = no inactivity policy
 }
 
 type AttachCredentialRequest struct {
@@ -19,19 +19,19 @@ type AssignRoleRequest struct {
 
 // MemberInfo is the JSON representation of a member_access row.
 type MemberInfo struct {
-	UUID                string  `json:"uuid"`
-	RoleID              string  `json:"role_id"`
-	CredentialHash      string  `json:"credential_hash,omitempty"` // hex prefix — full hash not exposed
-	Status              string  `json:"status"`
-	Enabled             bool    `json:"enabled"`
-	ExpiresAt           string  `json:"expires_at,omitempty"`
-	InactivityLimitDays *int    `json:"inactivity_limit_days,omitempty"`
-	LastAccessAt        string  `json:"last_access_at,omitempty"`
-	ProvisioningStatus  string  `json:"provisioning_status"`
-	CreatedAt           string  `json:"created_at"`
-	CreatedByUUID       string  `json:"created_by_uuid,omitempty"`
-	ArchivedAt          string  `json:"archived_at,omitempty"`
-	ArchivedByUUID      string  `json:"archived_by_uuid,omitempty"`
+	UUID                string `json:"uuid"`
+	RoleID              string `json:"role_id"`
+	CredentialHash      string `json:"credential_hash,omitempty"` // hex prefix — full hash not exposed
+	Status              string `json:"status"`
+	Enabled             bool   `json:"enabled"`
+	ExpiresAt           string `json:"expires_at,omitempty"`
+	InactivityLimitDays *int   `json:"inactivity_limit_days,omitempty"`
+	LastAccessAt        string `json:"last_access_at,omitempty"`
+	ProvisioningStatus  string `json:"provisioning_status"`
+	CreatedAt           string `json:"created_at"`
+	CreatedByUUID       string `json:"created_by_uuid,omitempty"`
+	ArchivedAt          string `json:"archived_at,omitempty"`
+	ArchivedByUUID      string `json:"archived_by_uuid,omitempty"`
 }
 
 type ListMembersResponse struct {
@@ -49,7 +49,7 @@ type ListPendingAuthorizationsResponse struct {
 type GrantAuthorizationRequest struct {
 	MemberUUID      string `json:"member_uuid"`
 	GrantedByUUID   string `json:"granted_by_uuid,omitempty"`
-	ExpiresAt       string `json:"expires_at,omitempty"` // RFC 3339; omit for no expiry
+	ExpiresAt       string `json:"expires_at,omitempty"`       // RFC 3339; omit for no expiry
 	TimeRestriction string `json:"time_restriction,omitempty"` // JSON policy; omit for none
 }
 
