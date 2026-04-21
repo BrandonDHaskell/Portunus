@@ -120,12 +120,12 @@ FROM module_authorizations`
 
 func scanModuleAuthRow(row rowScanner) (*store.ModuleAuthorizationRecord, error) {
 	var (
-		id                                int64
-		memberUUID, moduleID              string
-		grantedMs                         int64
-		grantedBy                         string
-		expiresMs, revokedMs              sql.NullInt64
-		revokedBy, timeRestriction        string
+		id                         int64
+		memberUUID, moduleID       string
+		grantedMs                  int64
+		grantedBy                  string
+		expiresMs, revokedMs       sql.NullInt64
+		revokedBy, timeRestriction string
 	)
 	err := row.Scan(
 		&id, &memberUUID, &moduleID,
