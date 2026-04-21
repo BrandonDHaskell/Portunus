@@ -177,7 +177,7 @@ extern const pb_msgdesc_t portunus_v1_AccessResponse_msg;
 
 /* Maximum encoded size of messages (where known) */
 #define PORTUNUS_V1_PORTUNUS_V1_PORTUNUS_PB_H_MAX_SIZE portunus_v1_HeartbeatRequest_size
-/* portunus_v1_AccessRequest_size depends on runtime parameters */
+#define portunus_v1_AccessRequest_size           108
 #define portunus_v1_AccessResponse_size          115
 #define portunus_v1_HeartbeatRequest_size        142
 #define portunus_v1_HeartbeatResponse_size       79

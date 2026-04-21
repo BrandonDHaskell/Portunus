@@ -58,7 +58,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check for proto drift
-        run: task proto:check
+        run: task proto:check IDF_PYTHON=python3
 
   firmware:
     name: Firmware
