@@ -19,13 +19,13 @@ var (
 
 // AdminUserInfo is the view type for admin user management pages.
 type AdminUserInfo struct {
-	UUID        string
-	Username    string
-	RoleID      string
-	Enabled     bool
+	UUID         string
+	Username     string
+	RoleID       string
+	Enabled      bool
 	MustChangePW bool
-	CreatedAt   string
-	LastLoginAt string
+	CreatedAt    string
+	LastLoginAt  string
 }
 
 // AdminUserService manages server operator accounts (create, list, edit,
@@ -78,12 +78,12 @@ func (s *AdminUserService) CreateUser(ctx context.Context, username, password, r
 	}
 
 	return &AdminUserInfo{
-		UUID:        uuid,
-		Username:    username,
-		RoleID:      roleID,
-		Enabled:     true,
+		UUID:         uuid,
+		Username:     username,
+		RoleID:       roleID,
+		Enabled:      true,
 		MustChangePW: true,
-		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
 	}, nil
 }
 
@@ -151,12 +151,12 @@ func (s *AdminUserService) AssignRole(ctx context.Context, uuid, roleID string) 
 
 func adminUserRecordToInfo(r *store.AdminUserRecord) AdminUserInfo {
 	info := AdminUserInfo{
-		UUID:        r.UUID,
-		Username:    r.Username,
-		RoleID:      r.RoleID,
-		Enabled:     r.Enabled,
+		UUID:         r.UUID,
+		Username:     r.Username,
+		RoleID:       r.RoleID,
+		Enabled:      r.Enabled,
 		MustChangePW: r.MustChangePW,
-		CreatedAt:   r.CreatedAt.Format(time.RFC3339),
+		CreatedAt:    r.CreatedAt.Format(time.RFC3339),
 	}
 	if r.LastLoginAt != nil {
 		info.LastLoginAt = r.LastLoginAt.Format(time.RFC3339)
