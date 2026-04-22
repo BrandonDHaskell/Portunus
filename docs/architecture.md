@@ -2,7 +2,7 @@
 
 System architecture for the Portunus door access control system.
 
-**Last updated:** March 2026
+**Last updated:** April 2026
 
 ---
 
@@ -16,10 +16,10 @@ Portunus is a LAN-first door access control system with two primary components: 
          ┌─────────────────────┼─────────────────────────┐
          │                     │                         │
     ┌────┴─────┐         ┌─────┴──────┐          ┌───────┴───────┐
-    │  Access  │  proto  │  Portunus  │   JSON   │   Admin CLI   │
+    │  Access  │  proto  │  Portunus  │   JSON   │  Admin Web UI │
     │  Module  │◄───────►│   Server   │◄────────►│   / curl      │
     │  (ESP32) │  + TLS  │   (Go)     │  + TLS   │               │
-    └────┬─────┘  + HMAC └─────┬──────┘  + Bearer└───────────────┘
+    └────┬─────┘  + HMAC └─────┬──────┘  + Session└──────────────┘
          │                     │
     ┌────┴─────┐         ┌─────┴──────┐
     │ Hardware │         │  SQLite DB │
@@ -36,6 +36,17 @@ The access module reads RFID cards, sends access requests to the server, and act
 
 ## Access module (firmware)
 
+### Module variants
+
+The firmware supports two build-time variants, selected via Kconfig (`PORTUNUS_MODULE_TYPE`):
+
+| Variant | Kconfig | FSM | Hardware |
+|---|---|---|---|
+| ACCESS_POINT | `CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT` | `SystemFSM` | RFID reader, door strike, reed switch, LED |
+| PROVISIONING_CONSOLE | `CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE` | `ProvisioningFSM` | RFID reader, LED (no door strike or reed switch) |
+
+`main.cpp` branches on `CONFIG_PORTUNUS_MODULE_TYPE_*` at compile time and instantiates the appropriate FSM. All other layers (interfaces, drivers, services) are shared between both variants. The rest of this section describes the shared architecture; variant-specific behavior is called out where it differs.
+
 ### Layered architecture
 
 The firmware follows a domain-driven layering strategy designed to separate hardware concerns from business logic. Dependencies flow strictly downward — no layer imports from a layer above it.
@@ -44,37 +55,44 @@ The firmware follows a domain-driven layering strategy designed to separate hard
 ┌───────────────────────────────────────────────────────────────────┐
 │                        main.cpp                                   │
 │              Composition root — constructs concrete modules,      │
-│              injects them into the FSM, starts services           │
+│              selects FSM variant, injects dependencies,           │
+│              starts services                                      │
 └───────────────────────┬───────────────────────────────────────────┘
                         │ constructs & injects
                         ▼
-┌───────────────────────────────────────────────────────────────────┐
-│                      System FSM  (core/)                          │
-│  Top-level decision maker. Owns card polling, unlock timing,      │
-│  reed switch monitoring, feedback coordination.                   │
-│  Programs against interfaces only — never imports a driver.       │
-└──────┬──────────────┬──────────────┬──────────────┬───────────────┘
-       │              │              │              │
-       ▼              ▼              ▼              ▼
-  ICredential    IAccessPoint    IFeedback      event_bus
-    Reader                                     (services/)
-  (interfaces/)  (interfaces/)  (interfaces/)
-       │              │              │
-       ▼              ▼              ▼
-  ReaderMfrc522  AccessPointGpio  FeedbackLed
-  (drivers/)     (drivers/)       (drivers/)
-       │              │              │
-       ▼              ▼              ▼
-  mfrc522_hal    door_strike      led_hal
-  (SPI)          reed_switch      (GPIO)
+┌──────────────────────────────────┐  ┌──────────────────────────────┐
+│   SystemFSM  (core/system_fsm/)  │  │ ProvisioningFSM              │
+│   ACCESS_POINT variant           │  │ (core/provisioning_fsm/)     │
+│   Owns card polling, unlock      │  │ PROVISIONING_CONSOLE variant │
+│   timing, reed switch, feedback. │  │ Two-scan enrollment flow.    │
+└──────┬──────────────┬────────────┘  └──────┬──────────────────────┘
+       │              │                      │
+       ▼              ▼                      ▼
+  ICredential    IAccessPoint           ICredential
+    Reader        (AP only)               Reader
+  IFeedback      event_bus             IFeedback
+  (interfaces/)  (services/)           event_bus
+       │              │                      │
+       ▼              ▼                      ▼
+  ReaderMfrc522  AccessPointGpio        ReaderMfrc522
+  FeedbackLed    (drivers/)             FeedbackLed
+  (drivers/)                            (drivers/)
+       │              │                      │
+       ▼              ▼                      ▼
+  mfrc522_hal    door_strike            mfrc522_hal
+  (SPI)          reed_switch            (SPI)
                  (GPIO)
 ```
 
 ### Layer responsibilities
 
-**Application (main.cpp)** — The composition root. Initializes platform services (NVS, WiFi, event bus), constructs concrete module instances, injects them into the FSM as interface pointers, and starts independent services. After startup, `app_main` returns and FreeRTOS tasks take over.
+**Application (main.cpp)** — The composition root. Initializes platform services (NVS, WiFi, event bus), constructs concrete module instances, and starts independent services. At compile time it branches on `CONFIG_PORTUNUS_MODULE_TYPE_*` to instantiate either `SystemFSM` (ACCESS_POINT) or `ProvisioningFSM` (PROVISIONING_CONSOLE). After startup, `app_main` returns and FreeRTOS tasks take over.
 
-**Core (system_fsm/)** — The central state machine. Transitions through `BOOT → INITIALIZING → OPERATIONAL → ERROR`. In the operational state it runs two FreeRTOS tasks: the FSM main loop (event processing, reed switch polling, unlock timer management) and a card polling sub-task. The FSM programs against `ICredentialReader`, `IAccessPoint`, and `IFeedback` — it has no knowledge of SPI registers, GPIO pins, or HTTP endpoints.
+**Core (system_fsm/ and provisioning_fsm/)** — The firmware has two FSM implementations, one per variant.
+
+- *SystemFSM* (ACCESS_POINT) — Transitions through `BOOT → INITIALIZING → OPERATIONAL → ERROR`. In the operational state it runs two FreeRTOS tasks: the FSM main loop (event processing, reed switch polling, unlock timer management) and a card polling sub-task. Programs against `ICredentialReader`, `IAccessPoint`, and `IFeedback`.
+
+- *ProvisioningFSM* (PROVISIONING_CONSOLE) — Implements a two-scan credential enrollment flow: `IDLE → AWAITING_CREDENTIAL → SENDING → IDLE`. Scan 1 (operator presence) advances state. Scan 2 causes the new credential's UID to be SHA-256 hashed on-device via mbedTLS; the hash is bundled into an `EVENT_PROVISION_REQUEST` and published to the event bus for `server_comm` to forward. Programs against `ICredentialReader` and `IFeedback` — no door-strike hardware is needed or used.
 
 **Interfaces (portunus_interfaces/)** — Pure virtual C++ classes defining the contracts between the FSM and hardware. `ICredentialReader` exposes `read()` and `halt()`. `IAccessPoint` exposes `unlock()`, `lock()`, and `is_open()`. `IFeedback` exposes `indicate(feedback_type_t)`. Any pointer may be `nullptr` to indicate absent hardware — the FSM sets the corresponding capability flag to false and adapts.
 
@@ -92,14 +110,20 @@ The event bus uses a single dispatcher queue (MVP topology). A dedicated FreeRTO
 
 Event types are statically defined in `event_types.h`, grouped by subsystem:
 
-| Group | Events | Published by | Consumed by |
-|---|---|---|---|
-| System | `BOOT_COMPLETE` | FSM | — |
-| Credential | `CREDENTIAL_READ`, `CREDENTIAL_READ_ERROR` | Card poll task | FSM, server_comm |
-| Heartbeat | `HEARTBEAT` | Heartbeat service | server_comm |
-| Access | `ACCESS_GRANTED`, `ACCESS_DENIED` | server_comm | FSM |
-| Door state | `DOOR_OPENED`, `DOOR_CLOSED` | FSM | — |
-| FSM | `UNLOCK_TIMEOUT` | FSM | — |
+| Group | Events | Published by | Consumed by | Variant |
+|---|---|---|---|---|
+| System | `BOOT_COMPLETE` | FSM | — | Both |
+| Credential | `CREDENTIAL_READ`, `CREDENTIAL_READ_ERROR` | Card poll task | SystemFSM, server_comm¹ | Both |
+| Heartbeat | `HEARTBEAT` | Heartbeat service | server_comm | Both |
+| Access | `ACCESS_GRANTED`, `ACCESS_DENIED` | server_comm | SystemFSM | AP only |
+| Door state | `DOOR_OPENED`, `DOOR_CLOSED` | SystemFSM | — | AP only |
+| FSM | `UNLOCK_TIMEOUT` | SystemFSM | — | AP only |
+| Provisioning | `EVENT_PROVISION_REQUEST` | ProvisioningFSM | server_comm | PC only |
+| Provisioning | `EVENT_PROVISION_SUCCESS`, `EVENT_PROVISION_FAILED` | server_comm | ProvisioningFSM | PC only |
+
+¹ In ACCESS_POINT, `server_comm` subscribes to `CREDENTIAL_READ` to forward access requests. In PROVISIONING_CONSOLE, `server_comm` subscribes to `EVENT_PROVISION_REQUEST` instead; `ProvisioningFSM` consumes `CREDENTIAL_READ` internally to drive its two-scan state machine.
+
+*AP = ACCESS_POINT variant. PC = PROVISIONING_CONSOLE variant.*
 
 Events are fixed-size structs (`portunus_event_t`) copied into the queue by value — no heap allocation. The event envelope contains an ID and a union of typed payloads.
 
@@ -136,18 +160,66 @@ Card in field
 
 If the network is unavailable when a card is tapped, `server_comm` publishes `EVENT_ACCESS_DENIED` with reason `no_network` so the FSM always clears the CARD_READ feedback and shows an error indication.
 
+### Provisioning flow (PROVISIONING_CONSOLE variant — credential enrollment)
+
+```
+Scan 1: operator places any credential
+     │
+     ▼
+[card_poll task]  mfrc522 → read() → credential_t
+     │
+     ▼ EVENT_CREDENTIAL_READ (event bus)
+     │
+     └──► [ProvisioningFSM]  indicate(PROVISIONING_AWAITING) → LED slow pulse
+                                   │  start PORTUNUS_PROVISION_TIMEOUT_MS timer
+                                   │
+                   (timeout) ──────┘ → IDLE
+                                   │
+                    Scan 2: new credential placed within timeout
+                                   │
+                                   ▼
+[card_poll task]  mfrc522 → read() → credential_t
+                                   │
+                          EVENT_CREDENTIAL_READ (event bus)
+                                   │
+                                   └──► [ProvisioningFSM]
+                                            SHA-256(uid) on-device via mbedTLS
+                                            publish EVENT_PROVISION_REQUEST
+                                                │
+                                                ▼
+                                         [server_comm]
+                                            encode ProvisionCredentialRequest (nanopb)
+                                            POST /v1/provision_credential
+                                                │
+                                                ▼
+                                         [Portunus Server]
+                                            (endpoint pending implementation)
+                                                │
+                                                ▼
+                                         decode response
+                                                │
+                                  ┌─────────────┴─────────────┐
+                          EVENT_PROVISION_SUCCESS        EVENT_PROVISION_FAILED
+                                  │                           │
+                        [ProvisioningFSM]            [ProvisioningFSM]
+                         indicate(SUCCESS/DUPLICATE/  indicate(UNAUTHORIZED/
+                         ...)  → return to IDLE        COMM_ERROR)  → IDLE
+```
+
+The operator credential (scan 1) is discarded after advancing state — it serves only as a physical presence confirmation. Only the enrolling credential (scan 2) is hashed and sent.
+
 ### FreeRTOS task map
 
-| Task | Priority | Stack | Responsibility |
-|---|---|---|---|
-| `evt_dispatch` | 5 | 4 KB | Event bus dispatcher — invokes subscriber callbacks |
-| `fsm` | 5 | 4 KB | FSM main loop — event processing, reed switch polling, unlock timer |
-| `card_poll` | 4 | 4 KB | MFRC522 polling — SPI reads, publishes credential events |
-| `led_pattern` | 3 | 2 KB | LED blink patterns — non-blocking, preemptive |
-| `heartbeat` | 3 | 2 KB | Periodic heartbeat event generation |
-| `server_comm` | 2 | 6–10 KB | HTTP/gRPC I/O — blocking network calls on a dedicated stack |
+| Task | Priority | Stack | Responsibility | Variant |
+|---|---|---|---|---|
+| `evt_dispatch` | 5 | 4 KB | Event bus dispatcher — invokes subscriber callbacks | Both |
+| `fsm` | 5 | 4 KB | FSM main loop — SystemFSM (AP): event processing, reed switch polling, unlock timer; ProvisioningFSM (PC): two-scan state machine | Both |
+| `card_poll` | 4 | 4 KB | MFRC522 polling — SPI reads, publishes `CREDENTIAL_READ` events | Both |
+| `led_pattern` | 3 | 2 KB | LED blink patterns — non-blocking, preemptive | Both |
+| `heartbeat` | 3 | 2 KB | Periodic heartbeat event generation | Both |
+| `server_comm` | 2 | 6–10 KB | HTTP/gRPC I/O — blocking network calls on a dedicated stack | Both |
 
-The `server_comm` task uses a larger stack (10 KB) when gRPC is enabled to accommodate the nghttp2 HTTP/2 session state.
+The `server_comm` task uses a larger stack (10 KB) when gRPC is enabled to accommodate the nghttp2 HTTP/2 session state. In PROVISIONING_CONSOLE, `server_comm` handles `EVENT_PROVISION_REQUEST` events instead of `CREDENTIAL_READ` events; the `fsm` and `card_poll` tasks run with the same priorities and stacks but drive the ProvisioningFSM two-scan flow.
 
 ---
 
@@ -184,10 +256,16 @@ The server follows a conventional Go layered architecture: transport → service
         │   Service layer     │
         │                     │
         │ HeartbeatService    │    records telemetry, checks device registry
-        │ AccessService       │    evaluates card against policy, records audit event
-        │ AdminService        │    CRUD for modules, cards, doors
+        │ AccessService       │    evaluates credential against policy, records audit event
+        │ AdminService        │    CRUD for modules, credentials, doors
+        │ AuthService         │    session-based admin authentication
+        │ AdminUserService    │    admin user accounts and role assignment
+        │ RoleService         │    role and permission management
+        │ MemberAccessService │    member lifecycle (provision, disable, archive)
+        │ ModuleAuthService   │    per-member per-module authorization grants
         │ DeviceRegistry      │    IsKnown() / NoteSeen() for module identity
         │ HeartbeatPruner     │    background goroutine, retention-based cleanup
+        │ ExpiryWorker        │    background goroutine, member expiry sweeps
         └─────────┬───────────┘
                   │ store interfaces
                   ▼
@@ -197,8 +275,13 @@ The server follows a conventional Go layered architecture: transport → service
         │ HeartbeatStore      │    UpsertHeartbeat, PruneOlderThan
         │ DeviceStore         │    IsKnown, MarkSeen
         │ AccessEventStore    │    RecordEvent (append-only audit log)
-        │ CardStore           │    RegisterCard, IsCardAllowed, SetCardStatus
+        │ CredentialStore     │    RegisterCredential, IsCredentialAllowed, SetStatus
         │ ModuleAdminStore    │    CommissionModule, RevokeModule, door CRUD
+        │ AdminUserStore      │    admin user account records
+        │ SessionStore        │    active session persistence
+        │ RoleStore           │    roles and permission sets
+        │ MemberAccessStore   │    member lifecycle state and credential links
+        │ ModuleAuthStore     │    per-member per-module authorization records
         └─────────┬───────────┘
                   │ sql.DB
                   ▼
@@ -213,7 +296,7 @@ The server follows a conventional Go layered architecture: transport → service
 
 The server exposes two concurrent transport interfaces, both delegating to the same service layer:
 
-**HTTP (httpapi/)** — Handles device endpoints (`POST /v1/heartbeat`, `POST /v1/access_request`) and admin endpoints (`/admin/v1/*`). Device endpoints accept both JSON and protobuf (`application/x-protobuf`) request bodies. Admin endpoints are JSON-only. The middleware chain applies logging → admin Bearer auth → HMAC signature verification → routing.
+**HTTP (httpapi/)** — Handles device endpoints (`POST /v1/heartbeat`, `POST /v1/access_request`) and admin endpoints (`/admin/v1/*`). An admin web UI is served at `/admin/ui/`. Device endpoints accept both JSON and protobuf (`application/x-protobuf`) request bodies. Admin API endpoints are JSON-only. The middleware chain applies logging → session resolution → HMAC signature verification (device paths only) → routing.
 
 **gRPC (grpcapi/)** — Implements `PortunusService` with `SendHeartbeat` and `RequestAccess` RPCs. Runs on a separate port and co-exists with the HTTP server. Uses interceptors for logging and HMAC verification. Enabled by setting `PORTUNUS_GRPC_ADDR`.
 
@@ -223,9 +306,15 @@ Both transports convert protobuf/JSON requests into domain types (`types.Heartbe
 
 **HeartbeatService** — Validates the module ID, checks the device registry, upserts the heartbeat record, and returns a response indicating whether the module is known. Every heartbeat updates `last_seen_at` on the module record regardless of known status (so the server can track unknown devices trying to connect).
 
-**AccessService** — The access decision engine. Validates module ID and card ID, checks module registration via `DeviceRegistry.IsKnown()`, then evaluates the card against the active policy. The policy lookup sequence is: (1) `AllowAll` flag (dev/testing bypass), (2) `CardStore.IsCardAllowed()` with SHA-256 hash lookup (production path), (3) legacy `AllowedCardIDs` env-var map (fallback). Every decision — granted or denied — is recorded in the access event audit log.
+**AccessService** — The access decision engine. Validates module ID and credential ID, checks module registration via `DeviceRegistry.IsKnown()`, then evaluates the credential against the active policy. The policy lookup sequence is: (1) `AllowAll` flag (dev/testing bypass), (2) `MemberAccessStore` + `ModuleAuthorizationStore` path — look up the member by hashed credential, verify active status, verify an active module authorization (production path), (3) `CredentialStore` legacy DB lookup, (4) legacy `AllowedCredentialIDs` env-var map (deprecated fallback). Every decision is recorded in the access event audit log.
 
-**AdminService** — CRUD operations for modules (commission, revoke, delete), cards (register, set status, delete), and doors (register, delete). Card IDs are SHA-256 hashed before storage — the raw card UID is never persisted.
+**AdminService** — CRUD operations for modules (commission, revoke, delete), credentials (register, set status, delete), and doors (register, delete). Credential IDs are hashed with keyed HMAC-SHA256 before storage — the raw credential UID is never persisted.
+
+**AuthService / AdminUserService / RoleService** — Session-based admin authentication. `AuthService` handles login, logout, and session validation via a session cookie. `AdminUserService` manages admin user accounts and their role assignments. `RoleService` manages roles and the permission sets attached to them.
+
+**MemberAccessService** — Member lifecycle management. Handles provisioning new members (assigning a role and optional expiry), attaching a credential hash, disabling, and archiving. Interacts with the `ExpiryWorker` for time-based expiry.
+
+**ModuleAuthorizationService** — Manages per-member per-module authorization grants. An authorization records which member is allowed on which module, who granted it, an optional expiry, and an optional time-restriction policy. Revocation records `revoked_at` and the revoking admin's UUID.
 
 **DeviceRegistry** — Thin wrapper around `DeviceStore` that defines the "known" predicate: a module is known if it is commissioned, enabled, and not revoked. Unknown modules still get their heartbeats and access attempts recorded (for observability), but access is always denied.
 
@@ -271,7 +360,8 @@ Both transports encode identical protobuf messages. The server can run both list
 | RPC | Request | Response | Purpose |
 |---|---|---|---|
 | `SendHeartbeat` | `HeartbeatRequest` (module_id, firmware_version, uptime, rssi, ip, free_heap, sequence) | `HeartbeatResponse` (ok, known, module_id, server_time) | Periodic health telemetry |
-| `RequestAccess` | `AccessRequest` (module_id, card_id, door_closed, requested_at) | `AccessResponse` (ok, known, granted, reason, module_id, server_time) | Card tap → access decision |
+| `RequestAccess` | `AccessRequest` (module_id, credential_id, door_closed, requested_at) | `AccessResponse` (ok, known, granted, reason, module_id, server_time) | Credential tap → access decision |
+| `ProvisionCredential` | `ProvisionCredentialRequest` (module_id, credential_hash, operator_uuid, role_id) | `ProvisionCredentialResponse` (ok, reason, member_uuid) | Two-scan enrollment → member creation (server-side endpoint pending) |
 
 ---
 
@@ -298,13 +388,13 @@ Both transports encode identical protobuf messages. The server can run both list
                           │         *────1│ access_event_id  │
                           └───────────────│ module_id (FK)   │
                                           │ door_id (FK)     │
-                   ┌──────────┐           │ card_id_hash(FK) │
-                   │  cards   │     *────1│ decision_granted │
-                   │          │───────────│ decision_reason  │
-                   │ card_hash│           │ decided_at_ms    │
-                   │ tag      │           └──────────────────┘
-                   │ status   │
-                   └──────────┘
+                   ┌─────────────┐         │ cred_hash(FK)    │
+                   │ credentials │   *────1│ decision_granted │
+                   │             │─────────│ decision_reason  │
+                   │ cred_hash   │         │ decided_at_ms    │
+                   │ tag         │         └──────────────────┘
+                   │ status      │
+                   └─────────────┘
 ```
 
 **doors** — Physical door locations. A door can have zero or more modules installed.
@@ -313,9 +403,9 @@ Both transports encode identical protobuf messages. The server can run both list
 
 **module_heartbeats** — Append-only telemetry log. Each row records a single heartbeat with the module's reported health data. Subject to retention-based pruning.
 
-**cards** — RFID card registrations. Card IDs are stored as SHA-256 hashes (32 bytes) — the raw card UID is never persisted. Each card has a status (`active`, `disabled`, `lost`) and an optional human-readable tag.
+**credentials** — RFID credential registrations. Credential IDs are stored as keyed HMAC-SHA256 hashes (32 bytes) — the raw credential UID is never persisted. Each credential has a status (`active`, `disabled`, `lost`) and an optional human-readable tag.
 
-**access_events** — Append-only audit log. Every access decision — granted or denied — is recorded with the module ID, card hash, decision reason, and timestamps. This is the "who/what/when" trail.
+**access_events** — Append-only audit log. Every access decision — granted or denied — is recorded with the module ID, credential hash, decision reason, and timestamps. This is the "who/what/when" trail.
 
 ### SQLite configuration
 
@@ -345,13 +435,13 @@ TLS protects the transport; HMAC authenticates each message. Every outgoing requ
 
 The HMAC is computed over the raw protobuf-encoded body (not the HTTP headers or URL). On the server side, the request body is re-marshalled from the parsed protobuf message and the expected HMAC is computed for comparison using constant-time comparison to prevent timing attacks.
 
-### Card ID protection
+### Credential ID protection
 
-Raw RFID card UIDs are never stored on the server. When a card is registered via the admin API, the raw UID is SHA-256 hashed before insertion into the `cards` table. When an access request arrives, the server hashes the incoming card ID and compares against stored hashes. This means a database breach does not directly expose card UIDs.
+Raw RFID credential UIDs are never stored on the server. When a credential is registered via the admin API, the raw UID is hashed with keyed HMAC-SHA256 (secret: `PORTUNUS_CREDENTIAL_HASH_SECRET`) before insertion into the `credentials` table. When an access request arrives, the server hashes the incoming credential ID and compares against stored hashes. The keyed HMAC prevents offline rainbow-table attacks against a stolen database. In the PROVISIONING_CONSOLE variant, the on-device SHA-256 hash is sent instead of the raw UID — the server re-hashes with the keyed secret on receipt.
 
 ### Admin API authentication
 
-Admin endpoints (`/admin/v1/*`) are protected by Bearer token authentication. Every request must include an `Authorization: Bearer <key>` header matching the server's `PORTUNUS_ADMIN_API_KEY`. Admin requests bypass HMAC verification (they originate from curl or browser, not from ESP32 firmware).
+Admin endpoints (`/admin/v1/*`) are protected by session-based authentication. Administrators log in via `POST /admin/v1/login` (username + password) and receive a `portunus_session` cookie. All subsequent admin requests must include that cookie. Sessions are invalidated by explicit logout or server-enforced expiry. Admin requests bypass HMAC verification (they originate from browsers or curl, not from ESP32 firmware).
 
 ### Firmware secrets
 
@@ -374,7 +464,11 @@ The HMAC pre-shared key and WiFi credentials are stored in the firmware's flash 
 | Protobuf as wire format | Strongly-typed contract, compact binary encoding (important for ESP32 memory), code generation for both Go and C (Nanopb). |
 | Dual transport (HTTP + gRPC) | HTTP/1.1 is simpler to debug and works with curl. gRPC provides bidirectional streaming for future features. Both share the same protobuf messages. |
 | HMAC over request body | Application-level authentication independent of TLS. Verifies that the message came from an enrolled device, not just any TLS client. |
-| SHA-256 card hashing | Protects card UIDs at rest. A database breach does not expose raw card IDs that could be cloned. |
+| Keyed HMAC-SHA256 credential hashing | Protects credential UIDs at rest with a server-side secret. Unlike bare SHA-256, keyed hashing prevents offline rainbow-table attacks on a stolen database. Secret set via `PORTUNUS_CREDENTIAL_HASH_SECRET`; required in prod. |
+| On-device hashing in PROVISIONING_CONSOLE | The ProvisioningFSM hashes the raw credential UID on-device (SHA-256 via mbedTLS) before publishing `EVENT_PROVISION_REQUEST`. The raw UID never leaves the ESP32, even over an encrypted channel. |
+| Two firmware variants, shared layers | ACCESS_POINT and PROVISIONING_CONSOLE select different FSMs at compile time via Kconfig but share all drivers, interfaces, and services. Adding a new variant only requires a new core FSM — no changes to hardware or transport layers. |
+| Member + module authorization model | Access decisions use a two-table check: member status (active, enabled) and a per-module authorization record. This allows fine-grained access control (member X can use door A but not door B) without duplicating credential registrations. |
+| Session-based admin authentication | Admin API and UI use a session cookie obtained via `POST /admin/v1/login`. The single-key Bearer token model did not support per-user identity, audit attribution (who archived this member), or role-based permission enforcement. |
 | Forward-only migrations | Server binary rollbacks remain compatible with newer database schemas. Older code ignores columns and tables it doesn't know about. |
 | Server-side access decisions | The ESP32 never decides access locally — it always asks the server. This centralizes policy, simplifies the firmware, and ensures the audit trail is complete. Offline behavior is a planned future enhancement. |
 | WiFi as service, not module | WiFi is platform-intrinsic on ESP32. A service is sufficient unless alternative transports (Ethernet, cellular) are introduced, at which point it could be promoted to a full module. |
