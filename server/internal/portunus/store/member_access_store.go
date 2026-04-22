@@ -93,4 +93,16 @@ type MemberAccessStore interface {
 	// ArchiveMember transitions a member to archived status and records who
 	// performed the action and when.
 	ArchiveMember(ctx context.Context, uuid, archivedByUUID string) error
+
+	// ExpireByHardDeadline sets status = 'expired' for all active records
+	// where expires_at_ms is non-null and <= cutoff. Returns the number of rows
+	// transitioned.
+	ExpireByHardDeadline(ctx context.Context, cutoff time.Time) (int, error)
+
+	// ExpireByInactivity sets status = 'expired' for active records where
+	// inactivity_limit_days is non-null and
+	// (last_access_at_ms + inactivity_limit_days*86400000) <= cutoffMs, or
+	// (last_access_at_ms IS NULL and created_at_ms + inactivity_limit_days*86400000) <= cutoffMs.
+	// Returns the number of rows transitioned.
+	ExpireByInactivity(ctx context.Context, now time.Time) (int, error)
 }

@@ -37,3 +37,19 @@ portunus.v1.AccessRequest.requested_at               max_size:40
 portunus.v1.AccessResponse.reason                    max_size:33
 portunus.v1.AccessResponse.module_id                 max_size:33
 portunus.v1.AccessResponse.server_time               max_size:40
+
+# ── ProvisionCredentialRequest ──────────────────────────────────────────
+#   operator_uuid – UUID "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" = 36 + NUL
+#   module_id     – same as other messages
+#   credential_hash – SHA-256 raw bytes = 32
+#   role_id       – same headroom as module_id
+portunus.v1.ProvisionCredentialRequest.operator_uuid   max_size:37
+portunus.v1.ProvisionCredentialRequest.module_id       max_size:33
+portunus.v1.ProvisionCredentialRequest.credential_hash max_size:32
+portunus.v1.ProvisionCredentialRequest.role_id         max_size:33
+
+# ── ProvisionCredentialResponse ─────────────────────────────────────────
+#   member_uuid – UUID = 36 + NUL
+#   detail      – human-readable error/status string; 64 chars with headroom
+portunus.v1.ProvisionCredentialResponse.member_uuid    max_size:37
+portunus.v1.ProvisionCredentialResponse.detail         max_size:64

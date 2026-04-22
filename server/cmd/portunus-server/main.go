@@ -61,6 +61,8 @@ func main() {
 	adminUserStore := sqlitestore.NewAdminUserStore(dbConn, writer)
 	sessionStore := sqlitestore.NewSessionStore(dbConn, writer)
 	roleStore := sqlitestore.NewRoleStore(dbConn, writer)
+	memberAccessStore := sqlitestore.NewMemberAccessStore(dbConn, writer)
+	moduleAuthStore := sqlitestore.NewModuleAuthorizationStore(dbConn, writer)
 
 	// Stores (Memory for dev testing with no DB)
 	// deviceStore := memory.NewDeviceStore(cfg.KnownModules)
@@ -99,6 +101,21 @@ func main() {
 	}
 	accessSvc.SetCredentialHashSecret(credentialHashSecret)
 
+	// Member access + module authorization services (PR 4).
+	memberAccessSvc := service.NewMemberAccessService(memberAccessStore, roleStore)
+	moduleAuthSvc := service.NewModuleAuthorizationService(moduleAuthStore)
+
+	// Enable member_access + module_authorizations path in the access service.
+	accessSvc.SetMemberAccessStore(memberAccessStore)
+	accessSvc.SetModuleAuthStore(moduleAuthStore)
+
+	// Expiry worker: transitions member records to 'expired' on a scheduled interval.
+	expiryWorker := service.NewExpiryWorker(memberAccessStore, service.ExpiryWorkerConfig{
+		IntervalMinutes: cfg.ExpiryWorkerIntervalMinutes,
+	}, logger)
+	expiryWorker.Start(ctx)
+	defer expiryWorker.Stop()
+
 	// Admin service for module/credential/door management via REST API.
 	adminSvc := service.NewAdminService(moduleAdminStore, credentialStore, credentialHashSecret)
 
@@ -112,14 +129,16 @@ func main() {
 
 	// HTTP
 	srv := httpapi.NewServer(httpapi.Dependencies{
-		Logger:           logger,
-		Addr:             cfg.HTTPAddr,
-		HeartbeatService: heartbeatSvc,
-		AccessService:    accessSvc,
-		AdminService:     adminSvc,
-		AuthService:      authSvc,
-		HMACSecret:       cfg.HMACSecret,
-		TLSEnabled:       tlsEnabled,
+		Logger:              logger,
+		Addr:                cfg.HTTPAddr,
+		HeartbeatService:    heartbeatSvc,
+		AccessService:       accessSvc,
+		AdminService:        adminSvc,
+		AuthService:         authSvc,
+		MemberAccessService: memberAccessSvc,
+		ModuleAuthService:   moduleAuthSvc,
+		HMACSecret:          cfg.HMACSecret,
+		TLSEnabled:          tlsEnabled,
 	})
 
 	go func() {

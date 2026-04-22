@@ -52,6 +52,73 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Status codes for ProvisionCredentialResponse.
+type ProvisionStatus int32
+
+const (
+	ProvisionStatus_PROVISION_STATUS_UNSPECIFIED ProvisionStatus = 0
+	ProvisionStatus_PROVISION_STATUS_SUCCESS     ProvisionStatus = 1
+	// credential_hash is already assigned to an active member.
+	ProvisionStatus_PROVISION_STATUS_DUPLICATE_ACTIVE ProvisionStatus = 2
+	// credential_hash exists but belongs to an expired or archived member.
+	ProvisionStatus_PROVISION_STATUS_DUPLICATE_INACTIVE ProvisionStatus = 3
+	// credential_hash is attached to a pending_authorization record.
+	ProvisionStatus_PROVISION_STATUS_DUPLICATE_PENDING ProvisionStatus = 4
+	// Operator does not have provisioning permission.
+	ProvisionStatus_PROVISION_STATUS_UNAUTHORIZED ProvisionStatus = 5
+	// role_id does not exist on the server.
+	ProvisionStatus_PROVISION_STATUS_INVALID_ROLE ProvisionStatus = 6
+)
+
+// Enum value maps for ProvisionStatus.
+var (
+	ProvisionStatus_name = map[int32]string{
+		0: "PROVISION_STATUS_UNSPECIFIED",
+		1: "PROVISION_STATUS_SUCCESS",
+		2: "PROVISION_STATUS_DUPLICATE_ACTIVE",
+		3: "PROVISION_STATUS_DUPLICATE_INACTIVE",
+		4: "PROVISION_STATUS_DUPLICATE_PENDING",
+		5: "PROVISION_STATUS_UNAUTHORIZED",
+		6: "PROVISION_STATUS_INVALID_ROLE",
+	}
+	ProvisionStatus_value = map[string]int32{
+		"PROVISION_STATUS_UNSPECIFIED":        0,
+		"PROVISION_STATUS_SUCCESS":            1,
+		"PROVISION_STATUS_DUPLICATE_ACTIVE":   2,
+		"PROVISION_STATUS_DUPLICATE_INACTIVE": 3,
+		"PROVISION_STATUS_DUPLICATE_PENDING":  4,
+		"PROVISION_STATUS_UNAUTHORIZED":       5,
+		"PROVISION_STATUS_INVALID_ROLE":       6,
+	}
+)
+
+func (x ProvisionStatus) Enum() *ProvisionStatus {
+	p := new(ProvisionStatus)
+	*p = x
+	return p
+}
+
+func (x ProvisionStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ProvisionStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_portunus_v1_portunus_proto_enumTypes[0].Descriptor()
+}
+
+func (ProvisionStatus) Type() protoreflect.EnumType {
+	return &file_portunus_v1_portunus_proto_enumTypes[0]
+}
+
+func (x ProvisionStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ProvisionStatus.Descriptor instead.
+func (ProvisionStatus) EnumDescriptor() ([]byte, []int) {
+	return file_portunus_v1_portunus_proto_rawDescGZIP(), []int{0}
+}
+
 // Sent by the access module at a regular interval to report health
 // telemetry and confirm connectivity.
 //
@@ -411,6 +478,147 @@ func (x *AccessResponse) GetServerTime() string {
 	return ""
 }
 
+// Sent by a provisioning console after a successful two-scan flow.
+// The raw credential never leaves the device; only SHA-256(raw) is sent.
+//
+// Server Go equivalent: types.ProvisionCredentialRequest
+type ProvisionCredentialRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// UUID of the operator performing the provisioning (from scan 1).
+	OperatorUuid string `protobuf:"bytes,1,opt,name=operator_uuid,json=operatorUuid,proto3" json:"operator_uuid,omitempty"`
+	// Module ID of the provisioning console.
+	ModuleId string `protobuf:"bytes,2,opt,name=module_id,json=moduleId,proto3" json:"module_id,omitempty"`
+	// SHA-256 of the raw credential (computed on-device via mbedTLS).
+	CredentialHash []byte `protobuf:"bytes,3,opt,name=credential_hash,json=credentialHash,proto3" json:"credential_hash,omitempty"`
+	// Role ID to assign to the new member.  Must already exist on the server.
+	RoleId        string `protobuf:"bytes,4,opt,name=role_id,json=roleId,proto3" json:"role_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProvisionCredentialRequest) Reset() {
+	*x = ProvisionCredentialRequest{}
+	mi := &file_portunus_v1_portunus_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProvisionCredentialRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProvisionCredentialRequest) ProtoMessage() {}
+
+func (x *ProvisionCredentialRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_portunus_v1_portunus_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProvisionCredentialRequest.ProtoReflect.Descriptor instead.
+func (*ProvisionCredentialRequest) Descriptor() ([]byte, []int) {
+	return file_portunus_v1_portunus_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ProvisionCredentialRequest) GetOperatorUuid() string {
+	if x != nil {
+		return x.OperatorUuid
+	}
+	return ""
+}
+
+func (x *ProvisionCredentialRequest) GetModuleId() string {
+	if x != nil {
+		return x.ModuleId
+	}
+	return ""
+}
+
+func (x *ProvisionCredentialRequest) GetCredentialHash() []byte {
+	if x != nil {
+		return x.CredentialHash
+	}
+	return nil
+}
+
+func (x *ProvisionCredentialRequest) GetRoleId() string {
+	if x != nil {
+		return x.RoleId
+	}
+	return ""
+}
+
+// Returned by the server after processing a provisioning request.
+//
+// Server Go equivalent: types.ProvisionCredentialResponse
+type ProvisionCredentialResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// UUID assigned to the new member record.  Non-empty on SUCCESS only.
+	MemberUuid string          `protobuf:"bytes,1,opt,name=member_uuid,json=memberUuid,proto3" json:"member_uuid,omitempty"`
+	Status     ProvisionStatus `protobuf:"varint,2,opt,name=status,proto3,enum=portunus.v1.ProvisionStatus" json:"status,omitempty"`
+	// Human-readable detail for duplicate/error cases (operator display).
+	Detail        string `protobuf:"bytes,3,opt,name=detail,proto3" json:"detail,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProvisionCredentialResponse) Reset() {
+	*x = ProvisionCredentialResponse{}
+	mi := &file_portunus_v1_portunus_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProvisionCredentialResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProvisionCredentialResponse) ProtoMessage() {}
+
+func (x *ProvisionCredentialResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_portunus_v1_portunus_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProvisionCredentialResponse.ProtoReflect.Descriptor instead.
+func (*ProvisionCredentialResponse) Descriptor() ([]byte, []int) {
+	return file_portunus_v1_portunus_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ProvisionCredentialResponse) GetMemberUuid() string {
+	if x != nil {
+		return x.MemberUuid
+	}
+	return ""
+}
+
+func (x *ProvisionCredentialResponse) GetStatus() ProvisionStatus {
+	if x != nil {
+		return x.Status
+	}
+	return ProvisionStatus_PROVISION_STATUS_UNSPECIFIED
+}
+
+func (x *ProvisionCredentialResponse) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
 var File_portunus_v1_portunus_proto protoreflect.FileDescriptor
 
 const file_portunus_v1_portunus_proto_rawDesc = "" +
@@ -448,10 +656,29 @@ const file_portunus_v1_portunus_proto_rawDesc = "" +
 	"\x06reason\x18\x04 \x01(\tR\x06reason\x12\x1b\n" +
 	"\tmodule_id\x18\x05 \x01(\tR\bmoduleId\x12\x1f\n" +
 	"\vserver_time\x18\x06 \x01(\tR\n" +
-	"serverTime2\xab\x01\n" +
+	"serverTime\"\xa0\x01\n" +
+	"\x1aProvisionCredentialRequest\x12#\n" +
+	"\roperator_uuid\x18\x01 \x01(\tR\foperatorUuid\x12\x1b\n" +
+	"\tmodule_id\x18\x02 \x01(\tR\bmoduleId\x12'\n" +
+	"\x0fcredential_hash\x18\x03 \x01(\fR\x0ecredentialHash\x12\x17\n" +
+	"\arole_id\x18\x04 \x01(\tR\x06roleId\"\x8c\x01\n" +
+	"\x1bProvisionCredentialResponse\x12\x1f\n" +
+	"\vmember_uuid\x18\x01 \x01(\tR\n" +
+	"memberUuid\x124\n" +
+	"\x06status\x18\x02 \x01(\x0e2\x1c.portunus.v1.ProvisionStatusR\x06status\x12\x16\n" +
+	"\x06detail\x18\x03 \x01(\tR\x06detail*\x8f\x02\n" +
+	"\x0fProvisionStatus\x12 \n" +
+	"\x1cPROVISION_STATUS_UNSPECIFIED\x10\x00\x12\x1c\n" +
+	"\x18PROVISION_STATUS_SUCCESS\x10\x01\x12%\n" +
+	"!PROVISION_STATUS_DUPLICATE_ACTIVE\x10\x02\x12'\n" +
+	"#PROVISION_STATUS_DUPLICATE_INACTIVE\x10\x03\x12&\n" +
+	"\"PROVISION_STATUS_DUPLICATE_PENDING\x10\x04\x12!\n" +
+	"\x1dPROVISION_STATUS_UNAUTHORIZED\x10\x05\x12!\n" +
+	"\x1dPROVISION_STATUS_INVALID_ROLE\x10\x062\x95\x02\n" +
 	"\x0fPortunusService\x12N\n" +
 	"\rSendHeartbeat\x12\x1d.portunus.v1.HeartbeatRequest\x1a\x1e.portunus.v1.HeartbeatResponse\x12H\n" +
-	"\rRequestAccess\x12\x1a.portunus.v1.AccessRequest\x1a\x1b.portunus.v1.AccessResponseB;Z9github.com/BrandonDHaskell/Portunus/server/api/portunusv1b\x06proto3"
+	"\rRequestAccess\x12\x1a.portunus.v1.AccessRequest\x1a\x1b.portunus.v1.AccessResponse\x12h\n" +
+	"\x13ProvisionCredential\x12'.portunus.v1.ProvisionCredentialRequest\x1a(.portunus.v1.ProvisionCredentialResponseB;Z9github.com/BrandonDHaskell/Portunus/server/api/portunusv1b\x06proto3"
 
 var (
 	file_portunus_v1_portunus_proto_rawDescOnce sync.Once
@@ -465,23 +692,30 @@ func file_portunus_v1_portunus_proto_rawDescGZIP() []byte {
 	return file_portunus_v1_portunus_proto_rawDescData
 }
 
-var file_portunus_v1_portunus_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_portunus_v1_portunus_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_portunus_v1_portunus_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_portunus_v1_portunus_proto_goTypes = []any{
-	(*HeartbeatRequest)(nil),  // 0: portunus.v1.HeartbeatRequest
-	(*HeartbeatResponse)(nil), // 1: portunus.v1.HeartbeatResponse
-	(*AccessRequest)(nil),     // 2: portunus.v1.AccessRequest
-	(*AccessResponse)(nil),    // 3: portunus.v1.AccessResponse
+	(ProvisionStatus)(0),                // 0: portunus.v1.ProvisionStatus
+	(*HeartbeatRequest)(nil),            // 1: portunus.v1.HeartbeatRequest
+	(*HeartbeatResponse)(nil),           // 2: portunus.v1.HeartbeatResponse
+	(*AccessRequest)(nil),               // 3: portunus.v1.AccessRequest
+	(*AccessResponse)(nil),              // 4: portunus.v1.AccessResponse
+	(*ProvisionCredentialRequest)(nil),  // 5: portunus.v1.ProvisionCredentialRequest
+	(*ProvisionCredentialResponse)(nil), // 6: portunus.v1.ProvisionCredentialResponse
 }
 var file_portunus_v1_portunus_proto_depIdxs = []int32{
-	0, // 0: portunus.v1.PortunusService.SendHeartbeat:input_type -> portunus.v1.HeartbeatRequest
-	2, // 1: portunus.v1.PortunusService.RequestAccess:input_type -> portunus.v1.AccessRequest
-	1, // 2: portunus.v1.PortunusService.SendHeartbeat:output_type -> portunus.v1.HeartbeatResponse
-	3, // 3: portunus.v1.PortunusService.RequestAccess:output_type -> portunus.v1.AccessResponse
-	2, // [2:4] is the sub-list for method output_type
-	0, // [0:2] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	0, // 0: portunus.v1.ProvisionCredentialResponse.status:type_name -> portunus.v1.ProvisionStatus
+	1, // 1: portunus.v1.PortunusService.SendHeartbeat:input_type -> portunus.v1.HeartbeatRequest
+	3, // 2: portunus.v1.PortunusService.RequestAccess:input_type -> portunus.v1.AccessRequest
+	5, // 3: portunus.v1.PortunusService.ProvisionCredential:input_type -> portunus.v1.ProvisionCredentialRequest
+	2, // 4: portunus.v1.PortunusService.SendHeartbeat:output_type -> portunus.v1.HeartbeatResponse
+	4, // 5: portunus.v1.PortunusService.RequestAccess:output_type -> portunus.v1.AccessResponse
+	6, // 6: portunus.v1.PortunusService.ProvisionCredential:output_type -> portunus.v1.ProvisionCredentialResponse
+	4, // [4:7] is the sub-list for method output_type
+	1, // [1:4] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_portunus_v1_portunus_proto_init() }
@@ -496,13 +730,14 @@ func file_portunus_v1_portunus_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_portunus_v1_portunus_proto_rawDesc), len(file_portunus_v1_portunus_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   4,
+			NumEnums:      1,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_portunus_v1_portunus_proto_goTypes,
 		DependencyIndexes: file_portunus_v1_portunus_proto_depIdxs,
+		EnumInfos:         file_portunus_v1_portunus_proto_enumTypes,
 		MessageInfos:      file_portunus_v1_portunus_proto_msgTypes,
 	}.Build()
 	File_portunus_v1_portunus_proto = out.File

@@ -18,4 +18,12 @@ PB_BIND(portunus_v1_AccessRequest, portunus_v1_AccessRequest, AUTO)
 PB_BIND(portunus_v1_AccessResponse, portunus_v1_AccessResponse, AUTO)
 
 
+PB_BIND(portunus_v1_ProvisionCredentialRequest, portunus_v1_ProvisionCredentialRequest, AUTO)
+
+
+PB_BIND(portunus_v1_ProvisionCredentialResponse, portunus_v1_ProvisionCredentialResponse, AUTO)
+
+
+
+
 

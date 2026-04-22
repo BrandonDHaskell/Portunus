@@ -137,6 +137,57 @@ message AccessResponse {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
+// Provisioning (PROVISIONING_CONSOLE firmware variant)
+// ──────────────────────────────────────────────────────────────────────────
+
+// Sent by a provisioning console after a successful two-scan flow.
+// The raw credential never leaves the device; only SHA-256(raw) is sent.
+//
+// Server Go equivalent: types.ProvisionCredentialRequest
+message ProvisionCredentialRequest {
+  // UUID of the operator performing the provisioning (from scan 1).
+  string operator_uuid   = 1;
+
+  // Module ID of the provisioning console.
+  string module_id       = 2;
+
+  // SHA-256 of the raw credential (computed on-device via mbedTLS).
+  bytes  credential_hash = 3;
+
+  // Role ID to assign to the new member.  Must already exist on the server.
+  string role_id         = 4;
+}
+
+// Returned by the server after processing a provisioning request.
+//
+// Server Go equivalent: types.ProvisionCredentialResponse
+message ProvisionCredentialResponse {
+  // UUID assigned to the new member record.  Non-empty on SUCCESS only.
+  string member_uuid   = 1;
+
+  ProvisionStatus status = 2;
+
+  // Human-readable detail for duplicate/error cases (operator display).
+  string detail = 3;
+}
+
+// Status codes for ProvisionCredentialResponse.
+enum ProvisionStatus {
+  PROVISION_STATUS_UNSPECIFIED  = 0;
+  PROVISION_STATUS_SUCCESS      = 1;
+  // credential_hash is already assigned to an active member.
+  PROVISION_STATUS_DUPLICATE_ACTIVE   = 2;
+  // credential_hash exists but belongs to an expired or archived member.
+  PROVISION_STATUS_DUPLICATE_INACTIVE = 3;
+  // credential_hash is attached to a pending_authorization record.
+  PROVISION_STATUS_DUPLICATE_PENDING  = 4;
+  // Operator does not have provisioning permission.
+  PROVISION_STATUS_UNAUTHORIZED = 5;
+  // role_id does not exist on the server.
+  PROVISION_STATUS_INVALID_ROLE = 6;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
 // Service definition (gRPC)
 // ──────────────────────────────────────────────────────────────────────────
 
@@ -159,4 +210,8 @@ service PortunusService {
 
   // RequestAccess evaluates a credential-read event and returns an access decision.
   rpc RequestAccess(AccessRequest) returns (AccessResponse);
+
+  // ProvisionCredential processes a two-scan provisioning flow from a
+  // PROVISIONING_CONSOLE firmware variant.
+  rpc ProvisionCredential(ProvisionCredentialRequest) returns (ProvisionCredentialResponse);
 }

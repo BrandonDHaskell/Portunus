@@ -9,6 +9,23 @@
 #error Regenerate this file with the current version of nanopb generator.
 #endif
 
+/* Enum definitions */
+/* Status codes for ProvisionCredentialResponse. */
+typedef enum _portunus_v1_ProvisionStatus {
+    portunus_v1_ProvisionStatus_PROVISION_STATUS_UNSPECIFIED = 0,
+    portunus_v1_ProvisionStatus_PROVISION_STATUS_SUCCESS = 1,
+    /* credential_hash is already assigned to an active member. */
+    portunus_v1_ProvisionStatus_PROVISION_STATUS_DUPLICATE_ACTIVE = 2,
+    /* credential_hash exists but belongs to an expired or archived member. */
+    portunus_v1_ProvisionStatus_PROVISION_STATUS_DUPLICATE_INACTIVE = 3,
+    /* credential_hash is attached to a pending_authorization record. */
+    portunus_v1_ProvisionStatus_PROVISION_STATUS_DUPLICATE_PENDING = 4,
+    /* Operator does not have provisioning permission. */
+    portunus_v1_ProvisionStatus_PROVISION_STATUS_UNAUTHORIZED = 5,
+    /* role_id does not exist on the server. */
+    portunus_v1_ProvisionStatus_PROVISION_STATUS_INVALID_ROLE = 6
+} portunus_v1_ProvisionStatus;
+
 /* Struct definitions */
 /* Sent by the access module at a regular interval to report health
  telemetry and confirm connectivity.
@@ -86,20 +103,64 @@ typedef struct _portunus_v1_AccessResponse {
     char server_time[40];
 } portunus_v1_AccessResponse;
 
+typedef PB_BYTES_ARRAY_T(32) portunus_v1_ProvisionCredentialRequest_credential_hash_t;
+/* Sent by a provisioning console after a successful two-scan flow.
+ The raw credential never leaves the device; only SHA-256(raw) is sent.
+
+ Server Go equivalent: types.ProvisionCredentialRequest */
+typedef struct _portunus_v1_ProvisionCredentialRequest {
+    /* UUID of the operator performing the provisioning (from scan 1). */
+    char operator_uuid[37];
+    /* Module ID of the provisioning console. */
+    char module_id[33];
+    /* SHA-256 of the raw credential (computed on-device via mbedTLS). */
+    portunus_v1_ProvisionCredentialRequest_credential_hash_t credential_hash;
+    /* Role ID to assign to the new member.  Must already exist on the server. */
+    char role_id[33];
+} portunus_v1_ProvisionCredentialRequest;
+
+/* Returned by the server after processing a provisioning request.
+
+ Server Go equivalent: types.ProvisionCredentialResponse */
+typedef struct _portunus_v1_ProvisionCredentialResponse {
+    /* UUID assigned to the new member record.  Non-empty on SUCCESS only. */
+    char member_uuid[37];
+    portunus_v1_ProvisionStatus status;
+    /* Human-readable detail for duplicate/error cases (operator display). */
+    char detail[64];
+} portunus_v1_ProvisionCredentialResponse;
+
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* Helper constants for enums */
+#define _portunus_v1_ProvisionStatus_MIN portunus_v1_ProvisionStatus_PROVISION_STATUS_UNSPECIFIED
+#define _portunus_v1_ProvisionStatus_MAX portunus_v1_ProvisionStatus_PROVISION_STATUS_INVALID_ROLE
+#define _portunus_v1_ProvisionStatus_ARRAYSIZE ((portunus_v1_ProvisionStatus)(portunus_v1_ProvisionStatus_PROVISION_STATUS_INVALID_ROLE+1))
+
+
+
+
+
+
+#define portunus_v1_ProvisionCredentialResponse_status_ENUMTYPE portunus_v1_ProvisionStatus
+
 
 /* Initializer values for message structs */
 #define portunus_v1_HeartbeatRequest_init_default {"", "", 0, false, 0, false, 0, "", 0, 0}
 #define portunus_v1_HeartbeatResponse_init_default {0, 0, "", ""}
 #define portunus_v1_AccessRequest_init_default   {"", "", false, 0, ""}
 #define portunus_v1_AccessResponse_init_default  {0, 0, 0, "", "", ""}
+#define portunus_v1_ProvisionCredentialRequest_init_default {"", "", {0, {0}}, ""}
+#define portunus_v1_ProvisionCredentialResponse_init_default {"", _portunus_v1_ProvisionStatus_MIN, ""}
 #define portunus_v1_HeartbeatRequest_init_zero   {"", "", 0, false, 0, false, 0, "", 0, 0}
 #define portunus_v1_HeartbeatResponse_init_zero  {0, 0, "", ""}
 #define portunus_v1_AccessRequest_init_zero      {"", "", false, 0, ""}
 #define portunus_v1_AccessResponse_init_zero     {0, 0, 0, "", "", ""}
+#define portunus_v1_ProvisionCredentialRequest_init_zero {"", "", {0, {0}}, ""}
+#define portunus_v1_ProvisionCredentialResponse_init_zero {"", _portunus_v1_ProvisionStatus_MIN, ""}
 
 /* Field tags (for use in manual encoding/decoding) */
 #define portunus_v1_HeartbeatRequest_module_id_tag 1
@@ -124,6 +185,13 @@ extern "C" {
 #define portunus_v1_AccessResponse_reason_tag    4
 #define portunus_v1_AccessResponse_module_id_tag 5
 #define portunus_v1_AccessResponse_server_time_tag 6
+#define portunus_v1_ProvisionCredentialRequest_operator_uuid_tag 1
+#define portunus_v1_ProvisionCredentialRequest_module_id_tag 2
+#define portunus_v1_ProvisionCredentialRequest_credential_hash_tag 3
+#define portunus_v1_ProvisionCredentialRequest_role_id_tag 4
+#define portunus_v1_ProvisionCredentialResponse_member_uuid_tag 1
+#define portunus_v1_ProvisionCredentialResponse_status_tag 2
+#define portunus_v1_ProvisionCredentialResponse_detail_tag 3
 
 /* Struct field encoding specification for nanopb */
 #define portunus_v1_HeartbeatRequest_FIELDLIST(X, a) \
@@ -164,16 +232,35 @@ X(a, STATIC,   SINGULAR, STRING,   server_time,       6)
 #define portunus_v1_AccessResponse_CALLBACK NULL
 #define portunus_v1_AccessResponse_DEFAULT NULL
 
+#define portunus_v1_ProvisionCredentialRequest_FIELDLIST(X, a) \
+X(a, STATIC,   SINGULAR, STRING,   operator_uuid,     1) \
+X(a, STATIC,   SINGULAR, STRING,   module_id,         2) \
+X(a, STATIC,   SINGULAR, BYTES,    credential_hash,   3) \
+X(a, STATIC,   SINGULAR, STRING,   role_id,           4)
+#define portunus_v1_ProvisionCredentialRequest_CALLBACK NULL
+#define portunus_v1_ProvisionCredentialRequest_DEFAULT NULL
+
+#define portunus_v1_ProvisionCredentialResponse_FIELDLIST(X, a) \
+X(a, STATIC,   SINGULAR, STRING,   member_uuid,       1) \
+X(a, STATIC,   SINGULAR, UENUM,    status,            2) \
+X(a, STATIC,   SINGULAR, STRING,   detail,            3)
+#define portunus_v1_ProvisionCredentialResponse_CALLBACK NULL
+#define portunus_v1_ProvisionCredentialResponse_DEFAULT NULL
+
 extern const pb_msgdesc_t portunus_v1_HeartbeatRequest_msg;
 extern const pb_msgdesc_t portunus_v1_HeartbeatResponse_msg;
 extern const pb_msgdesc_t portunus_v1_AccessRequest_msg;
 extern const pb_msgdesc_t portunus_v1_AccessResponse_msg;
+extern const pb_msgdesc_t portunus_v1_ProvisionCredentialRequest_msg;
+extern const pb_msgdesc_t portunus_v1_ProvisionCredentialResponse_msg;
 
 /* Defines for backwards compatibility with code written before nanopb-0.4.0 */
 #define portunus_v1_HeartbeatRequest_fields &portunus_v1_HeartbeatRequest_msg
 #define portunus_v1_HeartbeatResponse_fields &portunus_v1_HeartbeatResponse_msg
 #define portunus_v1_AccessRequest_fields &portunus_v1_AccessRequest_msg
 #define portunus_v1_AccessResponse_fields &portunus_v1_AccessResponse_msg
+#define portunus_v1_ProvisionCredentialRequest_fields &portunus_v1_ProvisionCredentialRequest_msg
+#define portunus_v1_ProvisionCredentialResponse_fields &portunus_v1_ProvisionCredentialResponse_msg
 
 /* Maximum encoded size of messages (where known) */
 #define PORTUNUS_V1_PORTUNUS_V1_PORTUNUS_PB_H_MAX_SIZE portunus_v1_HeartbeatRequest_size
@@ -181,6 +268,8 @@ extern const pb_msgdesc_t portunus_v1_AccessResponse_msg;
 #define portunus_v1_AccessResponse_size          115
 #define portunus_v1_HeartbeatRequest_size        142
 #define portunus_v1_HeartbeatResponse_size       79
+#define portunus_v1_ProvisionCredentialRequest_size 140
+#define portunus_v1_ProvisionCredentialResponse_size 105
 
 #ifdef __cplusplus
 } /* extern "C" */

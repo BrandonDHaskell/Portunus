@@ -180,6 +180,51 @@ UPDATE member_access
 	})
 }
 
+func (s *MemberAccessStore) ExpireByHardDeadline(ctx context.Context, cutoff time.Time) (int, error) {
+	cutoffMs := cutoff.UTC().UnixMilli()
+	var count int
+	err := s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+UPDATE member_access
+   SET status = 'expired'
+ WHERE status = 'active'
+   AND expires_at_ms IS NOT NULL
+   AND expires_at_ms <= ?;
+`, cutoffMs)
+		if err != nil {
+			return fmt.Errorf("ExpireByHardDeadline: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		count = int(n)
+		return nil
+	})
+	return count, err
+}
+
+func (s *MemberAccessStore) ExpireByInactivity(ctx context.Context, now time.Time) (int, error) {
+	nowMs := now.UTC().UnixMilli()
+	var count int
+	err := s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		// Uses last_access_at_ms when present, falls back to created_at_ms.
+		res, err := tx.ExecContext(ctx, `
+UPDATE member_access
+   SET status = 'expired'
+ WHERE status = 'active'
+   AND inactivity_limit_days IS NOT NULL
+   AND (
+     COALESCE(last_access_at_ms, created_at_ms) + (inactivity_limit_days * 86400000)
+   ) <= ?;
+`, nowMs)
+		if err != nil {
+			return fmt.Errorf("ExpireByInactivity: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		count = int(n)
+		return nil
+	})
+	return count, err
+}
+
 // ── query helpers ─────────────────────────────────────────────────────────────
 
 const memberAccessSelectSQL = `

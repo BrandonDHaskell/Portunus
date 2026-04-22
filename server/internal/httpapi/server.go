@@ -15,12 +15,14 @@ import (
 )
 
 type Dependencies struct {
-	Logger           *log.Logger
-	Addr             string
-	HeartbeatService *service.HeartbeatService
-	AccessService    *service.AccessService
-	AdminService     *service.AdminService
-	AuthService      *service.AuthService
+	Logger              *log.Logger
+	Addr                string
+	HeartbeatService    *service.HeartbeatService
+	AccessService       *service.AccessService
+	AdminService        *service.AdminService
+	AuthService         *service.AuthService
+	MemberAccessService *service.MemberAccessService
+	ModuleAuthService   *service.ModuleAuthorizationService
 	// HMACSecret is the pre-shared key for X-Portunus-Sig verification.
 	// Leave empty to disable HMAC enforcement (not recommended for production).
 	HMACSecret string
@@ -29,27 +31,31 @@ type Dependencies struct {
 }
 
 type Server struct {
-	httpServer       *http.Server
-	logger           *log.Logger
-	mux              *http.ServeMux
-	heartbeatService *service.HeartbeatService
-	accessService    *service.AccessService
-	adminService     *service.AdminService
-	authService      *service.AuthService
-	tlsEnabled       bool
+	httpServer          *http.Server
+	logger              *log.Logger
+	mux                 *http.ServeMux
+	heartbeatService    *service.HeartbeatService
+	accessService       *service.AccessService
+	adminService        *service.AdminService
+	authService         *service.AuthService
+	memberAccessService *service.MemberAccessService
+	moduleAuthService   *service.ModuleAuthorizationService
+	tlsEnabled          bool
 }
 
 func NewServer(d Dependencies) *Server {
 	mux := http.NewServeMux()
 
 	s := &Server{
-		logger:           d.Logger,
-		mux:              mux,
-		heartbeatService: d.HeartbeatService,
-		accessService:    d.AccessService,
-		adminService:     d.AdminService,
-		authService:      d.AuthService,
-		tlsEnabled:       d.TLSEnabled,
+		logger:              d.Logger,
+		mux:                 mux,
+		heartbeatService:    d.HeartbeatService,
+		accessService:       d.AccessService,
+		adminService:        d.AdminService,
+		authService:         d.AuthService,
+		memberAccessService: d.MemberAccessService,
+		moduleAuthService:   d.ModuleAuthService,
+		tlsEnabled:          d.TLSEnabled,
 	}
 
 	// ── Device endpoints (ESP32 modules) ────────────────────────────────
@@ -96,6 +102,38 @@ func NewServer(d Dependencies) *Server {
 			requirePermission(permissions.DoorDelete, s.handleAdminDeleteDoor))
 
 		d.Logger.Printf("admin API: ENABLED (%d endpoints registered)", 15)
+	}
+
+	// ── Member access endpoints (session + permission required) ──────────
+	if d.MemberAccessService != nil {
+		mux.HandleFunc("GET /admin/v1/members",
+			requirePermission(permissions.MemberList, s.handleAdminListMembers))
+		mux.HandleFunc("GET /admin/v1/members/pending",
+			requirePermission(permissions.MemberList, s.handleAdminListPendingAuthorizations))
+		mux.HandleFunc("GET /admin/v1/members/{member_uuid}",
+			requirePermission(permissions.MemberView, s.handleAdminGetMember))
+		mux.HandleFunc("POST /admin/v1/members",
+			requirePermission(permissions.MemberProvision, s.handleAdminProvisionMember))
+		mux.HandleFunc("POST /admin/v1/members/{member_uuid}/credential",
+			requirePermission(permissions.MemberProvision, s.handleAdminAttachCredential))
+		mux.HandleFunc("PUT /admin/v1/members/{member_uuid}/role",
+			requirePermission(permissions.MemberAssignRole, s.handleAdminAssignRole))
+		mux.HandleFunc("POST /admin/v1/members/{member_uuid}/disable",
+			requirePermission(permissions.MemberDisable, s.handleAdminDisableMember))
+		mux.HandleFunc("POST /admin/v1/members/{member_uuid}/archive",
+			requirePermission(permissions.MemberArchive, s.handleAdminArchiveMember))
+	}
+
+	// ── Module authorization endpoints (session + permission required) ────
+	if d.ModuleAuthService != nil {
+		mux.HandleFunc("GET /admin/v1/modules/{module_id}/authorizations",
+			requirePermission(permissions.ModuleAuthList, s.handleAdminListAuthorizationsByModule))
+		mux.HandleFunc("POST /admin/v1/modules/{module_id}/authorizations",
+			requirePermission(permissions.ModuleAuthGrant, s.handleAdminGrantModuleAuthorization))
+		mux.HandleFunc("DELETE /admin/v1/modules/{module_id}/authorizations/{member_uuid}",
+			requirePermission(permissions.ModuleAuthRevoke, s.handleAdminRevokeModuleAuthorization))
+		mux.HandleFunc("GET /admin/v1/members/{member_uuid}/authorizations",
+			requirePermission(permissions.ModuleAuthList, s.handleAdminListAuthorizationsByMember))
 	}
 
 	// Build middleware chain: logging → HSTS (if TLS) → session → HMAC → mux
