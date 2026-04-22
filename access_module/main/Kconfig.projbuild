@@ -1,5 +1,58 @@
 menu "Portunus Configuration"
 
+    menu "Module Variant"
+        choice PORTUNUS_MODULE_TYPE
+            prompt "Firmware variant"
+            default PORTUNUS_MODULE_TYPE_ACCESS_POINT
+            help
+                Select the firmware variant built into this module.
+
+                ACCESS_POINT: Standard door-control module. Reads credentials,
+                checks them against the server, and controls a door strike.
+
+                PROVISIONING_CONSOLE: Two-scan credential enrollment console.
+                An operator scan followed by a new credential scan sends a
+                ProvisionCredentialRequest to the server. No door-strike
+                hardware required.
+
+            config PORTUNUS_MODULE_TYPE_ACCESS_POINT
+                bool "Access point (door control)"
+
+            config PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
+                bool "Provisioning console (credential enrollment)"
+        endchoice
+
+        menu "Provisioning Console Settings"
+            depends on PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
+
+            config PORTUNUS_PROVISION_TIMEOUT_MS
+                int "Awaiting-credential timeout (milliseconds)"
+                default 30000
+                range 5000 120000
+                help
+                    How long the console waits for the new credential after
+                    the operator scan before returning to idle and requiring
+                    the operator to scan again.
+
+            config PORTUNUS_OPERATOR_UUID
+                string "Operator UUID"
+                default ""
+                help
+                    UUID of the member_access record authorised to use this
+                    provisioning console. Must match a record that has the
+                    credential.provision_guest permission assigned on the server.
+                    Generate with: uuidgen
+
+            config PORTUNUS_DEFAULT_ROLE_ID
+                string "Default role ID for provisioned members"
+                default "guest"
+                help
+                    role_id sent in every ProvisionCredentialRequest. Must
+                    match an existing role on the Portunus server.
+                    Common values: "guest", "member".
+        endmenu
+    endmenu
+
     menu "Feature Toggles"
         config PORTUNUS_ENABLE_MFRC522
             bool "Enable MFRC522 RFID reader"

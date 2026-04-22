@@ -37,6 +37,13 @@ enum class feedback_type_t : uint8_t {
     SYSTEM_READY,       /**< Operational idle (continuous until replaced) */
     SYSTEM_ERROR,       /**< Error state (continuous until replaced) */
     CARD_READ,          /**< Card detected, awaiting server (held until replaced) */
+
+    /* Provisioning console states (PROVISIONING_CONSOLE firmware only) */
+    PROVISIONING_IDLE,          /**< Awaiting operator scan — double heartbeat pulse (continuous) */
+    PROVISIONING_AWAITING,      /**< Operator scan done, awaiting new credential — slow 50/50 pulse (continuous) */
+    PROVISIONING_SUCCESS,       /**< Provisioning succeeded — 5× rapid blinks (one-shot) */
+    PROVISIONING_DUPLICATE,     /**< Credential already exists — 2× medium blinks (one-shot) */
+    PROVISIONING_UNAUTHORIZED,  /**< Operator not authorised — long on + 3× rapid blinks (one-shot) */
 };
 
 /**

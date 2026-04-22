@@ -23,7 +23,12 @@
 #include "system_states.h"
 #include "timing_config.h"
 #include "event_bus.h"
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
 #include "system_fsm.h"
+#endif
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
+#include "provisioning_fsm.h"
+#endif
 
 /* Optional services (feature-gated) */
 #ifdef CONFIG_PORTUNUS_ENABLE_HEARTBEAT
@@ -156,7 +161,16 @@ extern "C" void app_main(void)
 #endif
 
     /* ── 5. Construct and initialise FSM ─────────────────────────────────── */
+
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
     static SystemFSM fsm(reader_ptr, access_ptr, feedback_ptr);
+    ESP_LOGI(TAG, "Variant: ACCESS_POINT");
+#else
+    /* Provisioning console: no door-strike hardware needed. */
+    (void)access_ptr;
+    static ProvisioningFSM fsm(reader_ptr, feedback_ptr);
+    ESP_LOGI(TAG, "Variant: PROVISIONING_CONSOLE");
+#endif
 
     if (fsm.init() != PORTUNUS_OK) {
         ESP_LOGE(TAG, "System halted: FSM init failure");
