@@ -9,6 +9,7 @@ import (
 
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/permissions"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
+	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/types"
 )
 
 //go:embed templates static
@@ -37,6 +38,21 @@ type UIPageData struct {
 	PermGroups []PermGroup
 	Form       map[string]string
 	MustChange bool
+
+	// Member management pages.
+	Members        []types.MemberInfo
+	Member         *types.MemberInfo
+	Authorizations []types.ModuleAuthorizationInfo
+	AccessEvents   []UIAccessEventInfo
+	Modules        []types.ModuleInfo
+}
+
+// UIAccessEventInfo is a display-ready view of a single access event.
+type UIAccessEventInfo struct {
+	ModuleID   string
+	ReceivedAt string
+	Granted    bool
+	Reason     string
 }
 
 // HasPerm returns true if the given permission is in Role.Permissions.

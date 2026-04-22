@@ -1,0 +1,40 @@
+{{define "title"}}Provision Member — Portunus Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h1>Provision Member</h1>
+  <a class="btn btn-secondary" href="/admin/ui/members">← Members</a>
+</div>
+<div class="card" style="max-width:520px">
+  <p class="hint" style="margin-top:0">
+    This creates a new member record with a server-generated UUID.
+    The UUID must be copied to the external membership system to link it to a person.
+    A physical credential can be attached after provisioning.
+  </p>
+  <form method="POST" action="/admin/ui/members">
+    <div class="form-group">
+      <label for="role_id">Role <span style="color:var(--red)">*</span></label>
+      <select id="role_id" name="role_id" required>
+        <option value="">— Select a role —</option>
+        {{range .Roles}}
+        <option value="{{.RoleID}}" {{if eq .RoleID $.Form.role_id}}selected{{end}}>{{.Name}}</option>
+        {{end}}
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="expires_at">Hard Expiry Date (optional)</label>
+      <input id="expires_at" name="expires_at" type="date" value="{{.Form.expires_at}}">
+      <p class="hint">Leave blank for no hard deadline. Member is transitioned to <em>expired</em> at midnight UTC on this date.</p>
+    </div>
+    <div class="form-group">
+      <label for="inactivity_limit_days">Inactivity Limit (days, optional)</label>
+      <input id="inactivity_limit_days" name="inactivity_limit_days" type="number" min="1"
+        value="{{.Form.inactivity_limit_days}}" placeholder="e.g. 90">
+      <p class="hint">Leave blank to disable inactivity-based expiry.</p>
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" type="submit">Provision Member</button>
+      <a class="btn btn-secondary" href="/admin/ui/members">Cancel</a>
+    </div>
+  </form>
+</div>
+{{end}}

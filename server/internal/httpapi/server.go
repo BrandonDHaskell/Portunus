@@ -161,6 +161,9 @@ func NewServer(d Dependencies) *Server {
 	if d.RoleService != nil {
 		s.uiRoleRoutes(mux)
 	}
+	if d.MemberAccessService != nil {
+		s.uiMemberRoutes(mux)
+	}
 
 	// Build middleware chain: logging → HSTS (if TLS) → session → HMAC → mux
 	var handler http.Handler = mux

@@ -12,6 +12,8 @@
   {{if .Session}}
   <a href="/admin/ui/users" {{if eq .ActivePage "users"}}class="active"{{end}}>Users</a>
   <a href="/admin/ui/roles" {{if eq .ActivePage "roles"}}class="active"{{end}}>Roles</a>
+  <a href="/admin/ui/members" {{if eq .ActivePage "members"}}class="active"{{end}}>Members</a>
+  <a href="/admin/ui/members/pending" {{if eq .ActivePage "pending"}}class="active"{{end}}>Pending</a>
   <span class="nav-user">{{.Session.Username}} ({{.Session.RoleID}}) &nbsp;
     <form method="POST" action="/admin/ui/logout" style="display:inline">
       <button class="btn btn-secondary btn-sm" type="submit">Sign out</button>

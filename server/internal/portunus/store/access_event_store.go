@@ -20,4 +20,7 @@ type AccessEventRecord struct {
 // AccessEventStore persists access decisions as an append-only audit log.
 type AccessEventStore interface {
 	RecordEvent(ctx context.Context, rec AccessEventRecord) error
+	// ListEventsByCredential returns the most recent events for the given
+	// credential hash, newest-first, capped at limit rows.
+	ListEventsByCredential(ctx context.Context, credentialHash []byte, limit int) ([]AccessEventRecord, error)
 }

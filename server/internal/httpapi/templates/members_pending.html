@@ -1,0 +1,47 @@
+{{define "title"}}Pending Authorizations — Portunus Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h1>Pending Authorizations</h1>
+  <a class="btn btn-secondary" href="/admin/ui/members">← All Members</a>
+</div>
+<p class="text-muted">Members provisioned via the physical console awaiting module authorization assignment. Ordered oldest-first (FIFO).</p>
+<table>
+  <thead>
+    <tr>
+      <th>UUID</th>
+      <th>Role</th>
+      <th>Credential</th>
+      <th>Created</th>
+      <th>Created By</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+  {{range .Members}}
+    <tr>
+      <td>
+        <div style="display:flex;align-items:center;gap:.5rem">
+          <span class="font-mono" style="font-size:.8rem">{{.UUID}}</span>
+          <button class="btn btn-secondary btn-sm"
+            onclick="navigator.clipboard.writeText('{{.UUID}}').then(()=>this.textContent='Copied!').catch(()=>{})"
+            title="Copy UUID to clipboard">Copy</button>
+        </div>
+      </td>
+      <td><span class="badge badge-blue">{{.RoleID}}</span></td>
+      <td class="font-mono text-muted" style="font-size:.8rem">
+        {{if .CredentialHash}}{{.CredentialHash}}{{else}}<em>not yet attached</em>{{end}}
+      </td>
+      <td class="text-muted" style="font-size:.85rem">{{.CreatedAt}}</td>
+      <td class="font-mono text-muted" style="font-size:.8rem">
+        {{if .CreatedByUUID}}{{.CreatedByUUID}}{{else}}<em>system</em>{{end}}
+      </td>
+      <td>
+        <a class="btn btn-primary btn-sm" href="/admin/ui/members/{{.UUID}}">Authorize →</a>
+      </td>
+    </tr>
+  {{else}}
+    <tr><td colspan="6" class="text-muted" style="text-align:center;padding:2rem">No pending authorizations.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}

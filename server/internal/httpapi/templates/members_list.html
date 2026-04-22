@@ -1,0 +1,61 @@
+{{define "title"}}Members — Portunus Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h1>Members</h1>
+  <div style="display:flex;gap:.5rem">
+    <a class="btn btn-secondary" href="/admin/ui/members/pending">Pending Queue</a>
+    <a class="btn btn-primary" href="/admin/ui/members/new">+ Provision Member</a>
+  </div>
+</div>
+<table>
+  <thead>
+    <tr>
+      <th>UUID</th>
+      <th>Role</th>
+      <th>Status</th>
+      <th>Provisioning</th>
+      <th>Credential</th>
+      <th>Created</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+  {{range .Members}}
+    <tr>
+      <td class="font-mono" style="font-size:.8rem">{{.UUID}}</td>
+      <td><span class="badge badge-blue">{{.RoleID}}</span></td>
+      <td>
+        {{if eq .Status "active"}}
+          {{if .Enabled}}<span class="badge badge-green">Active</span>
+          {{else}}<span class="badge badge-yellow">Disabled</span>{{end}}
+        {{else if eq .Status "expired"}}
+          <span class="badge badge-red">Expired</span>
+        {{else if eq .Status "archived"}}
+          <span class="badge">Archived</span>
+        {{else}}
+          <span class="badge">{{.Status}}</span>
+        {{end}}
+      </td>
+      <td>
+        {{if eq .ProvisioningStatus "pending_authorization"}}
+          <span class="badge badge-yellow">Pending</span>
+        {{else if eq .ProvisioningStatus "active"}}
+          <span class="badge badge-green">Active</span>
+        {{else}}
+          <span class="badge">{{.ProvisioningStatus}}</span>
+        {{end}}
+      </td>
+      <td class="font-mono text-muted" style="font-size:.8rem">
+        {{if .CredentialHash}}{{.CredentialHash}}{{else}}<em>none</em>{{end}}
+      </td>
+      <td class="text-muted" style="font-size:.85rem">{{.CreatedAt}}</td>
+      <td>
+        <a class="btn btn-secondary btn-sm" href="/admin/ui/members/{{.UUID}}">View</a>
+      </td>
+    </tr>
+  {{else}}
+    <tr><td colspan="7" class="text-muted" style="text-align:center;padding:2rem">No members found.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
