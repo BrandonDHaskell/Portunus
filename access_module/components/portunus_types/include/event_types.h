@@ -47,6 +47,11 @@ typedef enum {
 
     /* FSM command events: 0x05xx */
     EVENT_FSM_UNLOCK_TIMEOUT = 0x0500,/**< FSM unlock hold timer expired */
+
+    /* Provisioning events: 0x06xx (PROVISIONING_CONSOLE firmware only) */
+    EVENT_PROVISION_REQUEST = 0x0600, /**< FSM requests a provisioning call */
+    EVENT_PROVISION_SUCCESS,           /**< Server confirmed provisioning */
+    EVENT_PROVISION_FAILED,            /**< Server rejected provisioning */
 } portunus_event_id_t;
 
 /* ── Event payloads ────────────────────────────────────────────────────────── */
@@ -89,6 +94,44 @@ typedef struct {
     int64_t timestamp_ms;         /**< When the transition occurred */
 } event_door_state_t;
 
+/**
+ * @brief Result reason codes for EVENT_PROVISION_SUCCESS / EVENT_PROVISION_FAILED.
+ *
+ * Mirrors portunus_v1_ProvisionStatus without pulling in the nanopb header.
+ */
+typedef enum {
+    PROVISION_RESULT_SUCCESS            = 0,
+    PROVISION_RESULT_DUPLICATE_ACTIVE   = 1,
+    PROVISION_RESULT_DUPLICATE_INACTIVE = 2,
+    PROVISION_RESULT_DUPLICATE_PENDING  = 3,
+    PROVISION_RESULT_UNAUTHORIZED       = 4,
+    PROVISION_RESULT_INVALID_ROLE       = 5,
+    PROVISION_RESULT_COMM_ERROR         = 6,  /**< Transport / encode / decode failure */
+} provision_result_reason_t;
+
+/**
+ * @brief Payload for EVENT_PROVISION_REQUEST.
+ *
+ * Published by ProvisioningFSM when both scans complete.
+ * server_comm encodes this into a ProvisionCredentialRequest and sends it.
+ */
+typedef struct {
+    char    operator_uuid[37];    /**< Pre-configured operator UUID (from Kconfig) */
+    uint8_t credential_hash[32];  /**< SHA-256 of the new credential's raw UID bytes */
+    char    role_id[33];          /**< Role ID to assign to the new member */
+} event_provision_request_t;
+
+/**
+ * @brief Payload for EVENT_PROVISION_SUCCESS and EVENT_PROVISION_FAILED.
+ *
+ * Published by server_comm after the server responds to ProvisionCredentialRequest.
+ */
+typedef struct {
+    char                      member_uuid[37]; /**< Assigned UUID — non-empty on SUCCESS */
+    provision_result_reason_t reason;
+    char                      detail[64];      /**< Human-readable detail from server */
+} event_provision_result_t;
+
 /* ── Generic event envelope ────────────────────────────────────────────────── */
 
 /**
@@ -106,6 +149,8 @@ typedef struct {
         event_access_decision_t   access_decision;
         event_door_state_t        door_opened;
         event_door_state_t        door_closed;
+        event_provision_request_t provision_request;
+        event_provision_result_t  provision_result;
     } payload;
 } portunus_event_t;
 

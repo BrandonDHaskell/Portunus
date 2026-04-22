@@ -27,6 +27,11 @@
 #include <pb_encode.h>
 #include <pb_decode.h>
 
+/* Provisioning: SHA-256 via mbedTLS (always available when mbedtls is linked) */
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
+  #include "mbedtls/sha256.h"
+#endif
+
 /* TLS / HMAC */
 #if PORTUNUS_USE_TLS
   #if PORTUNUS_TLS_USE_CUSTOM_CA
@@ -89,6 +94,9 @@ static int s_idle_ticks = 0;
 /* Reusable URL buffers built once at init */
 static char s_heartbeat_url[URL_MAX_LEN];
 static char s_access_url[URL_MAX_LEN];
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
+static char s_provision_url[URL_MAX_LEN];
+#endif
 #endif /* !PORTUNUS_USE_GRPC */
 
 /* ── HMAC helper ───────────────────────────────────────────────────────────── */
@@ -134,7 +142,12 @@ static bool compute_hmac_hex(const uint8_t *data, size_t data_len,
 /* ── Forward declarations ──────────────────────────────────────────────────── */
 static void comm_task(void *arg);
 static void handle_heartbeat(const event_heartbeat_t *hb);
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
 static void handle_credential(const event_credential_read_t *cred);
+#endif
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
+static void handle_provision(const event_provision_request_t *req);
+#endif
 
 /* ── Helpers ───────────────────────────────────────────────────────────────── */
 
@@ -347,6 +360,15 @@ static void on_credential_event(const portunus_event_t *event, void *ctx)
     xQueueSend(s_comm_queue, event, 0);
 }
 
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
+static void on_provision_event(const portunus_event_t *event, void *ctx)
+{
+    (void)ctx;
+    if (s_comm_queue == NULL) { return; }
+    xQueueSend(s_comm_queue, event, 0);
+}
+#endif
+
 /* ── Event handlers (run on comm_task) ─────────────────────────────────────── */
 
 /**
@@ -538,6 +560,133 @@ static void handle_credential(const event_credential_read_t *cred)
     event_bus_publish(&decision);
 }
 
+/* ── Provisioning handler (PROVISIONING_CONSOLE only) ──────────────────────── */
+
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
+
+static void publish_provision_result(provision_result_reason_t reason,
+                                     const char *member_uuid,
+                                     const char *detail)
+{
+    portunus_event_t evt;
+    memset(&evt, 0, sizeof(evt));
+    evt.id = (reason == PROVISION_RESULT_SUCCESS)
+             ? EVENT_PROVISION_SUCCESS
+             : EVENT_PROVISION_FAILED;
+
+    if (member_uuid) {
+        strncpy(evt.payload.provision_result.member_uuid, member_uuid,
+                sizeof(evt.payload.provision_result.member_uuid) - 1);
+    }
+    evt.payload.provision_result.reason = reason;
+    if (detail) {
+        strncpy(evt.payload.provision_result.detail, detail,
+                sizeof(evt.payload.provision_result.detail) - 1);
+    }
+    event_bus_publish(&evt);
+}
+
+static void handle_provision(const event_provision_request_t *req)
+{
+    /* Build ProvisionCredentialRequest */
+    portunus_v1_ProvisionCredentialRequest pb_req =
+        portunus_v1_ProvisionCredentialRequest_init_zero;
+
+    strncpy(pb_req.operator_uuid, req->operator_uuid,
+            sizeof(pb_req.operator_uuid) - 1);
+    strncpy(pb_req.module_id, PORTUNUS_MODULE_ID,
+            sizeof(pb_req.module_id) - 1);
+    strncpy(pb_req.role_id, req->role_id,
+            sizeof(pb_req.role_id) - 1);
+
+    pb_req.credential_hash.size = 32;
+    memcpy(pb_req.credential_hash.bytes, req->credential_hash, 32);
+
+    /* Encode */
+    uint8_t req_buf[portunus_v1_ProvisionCredentialRequest_size];
+    pb_ostream_t ostream = pb_ostream_from_buffer(req_buf, sizeof(req_buf));
+    if (!pb_encode(&ostream, portunus_v1_ProvisionCredentialRequest_fields, &pb_req)) {
+        ESP_LOGE(TAG, "Provision encode failed: %s", PB_GET_ERROR(&ostream));
+        publish_provision_result(PROVISION_RESULT_COMM_ERROR, NULL, "encode_error");
+        return;
+    }
+
+    /* Send */
+    uint8_t resp_buf[portunus_v1_ProvisionCredentialResponse_size + 16];
+    int resp_len = 0;
+
+#if PORTUNUS_USE_GRPC
+    int grpc_status = 0;
+    portunus_err_t err = grpc_post_proto(
+        "/portunus.v1.PortunusService/ProvisionCredential",
+        req_buf, ostream.bytes_written,
+        resp_buf, sizeof(resp_buf),
+        &resp_len, &grpc_status);
+    if (err != PORTUNUS_OK) {
+        ESP_LOGW(TAG, "Provision gRPC failed: 0x%04x", (unsigned)err);
+        publish_provision_result(PROVISION_RESULT_COMM_ERROR, NULL, "grpc_error");
+        return;
+    }
+    if (grpc_status != GRPC_STATUS_OK) {
+        ESP_LOGW(TAG, "Provision gRPC status: %d", grpc_status);
+        publish_provision_result(PROVISION_RESULT_COMM_ERROR, NULL, "grpc_status_error");
+        return;
+    }
+#else
+    int http_status = 0;
+    portunus_err_t err = http_post_proto(s_provision_url,
+                                         req_buf, ostream.bytes_written,
+                                         resp_buf, sizeof(resp_buf),
+                                         &resp_len, &http_status);
+    if (err != PORTUNUS_OK) {
+        ESP_LOGW(TAG, "Provision HTTP failed: 0x%04x", (unsigned)err);
+        publish_provision_result(PROVISION_RESULT_COMM_ERROR, NULL, "http_error");
+        return;
+    }
+    if (http_status != 200) {
+        ESP_LOGW(TAG, "Provision server returned HTTP %d", http_status);
+        publish_provision_result(PROVISION_RESULT_COMM_ERROR, NULL, "http_status_error");
+        return;
+    }
+#endif
+
+    /* Decode response */
+    portunus_v1_ProvisionCredentialResponse pb_resp =
+        portunus_v1_ProvisionCredentialResponse_init_zero;
+    pb_istream_t istream = pb_istream_from_buffer(resp_buf, (size_t)resp_len);
+    if (!pb_decode(&istream, portunus_v1_ProvisionCredentialResponse_fields, &pb_resp)) {
+        ESP_LOGW(TAG, "Provision decode failed: %s", PB_GET_ERROR(&istream));
+        publish_provision_result(PROVISION_RESULT_COMM_ERROR, NULL, "decode_error");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Provision response — status=%d member_uuid=%s detail=%s",
+             pb_resp.status, pb_resp.member_uuid, pb_resp.detail);
+
+    /* Map proto status → internal reason code */
+    provision_result_reason_t reason;
+    switch (pb_resp.status) {
+    case portunus_v1_ProvisionStatus_PROVISION_STATUS_SUCCESS:
+        reason = PROVISION_RESULT_SUCCESS;           break;
+    case portunus_v1_ProvisionStatus_PROVISION_STATUS_DUPLICATE_ACTIVE:
+        reason = PROVISION_RESULT_DUPLICATE_ACTIVE;  break;
+    case portunus_v1_ProvisionStatus_PROVISION_STATUS_DUPLICATE_INACTIVE:
+        reason = PROVISION_RESULT_DUPLICATE_INACTIVE; break;
+    case portunus_v1_ProvisionStatus_PROVISION_STATUS_DUPLICATE_PENDING:
+        reason = PROVISION_RESULT_DUPLICATE_PENDING; break;
+    case portunus_v1_ProvisionStatus_PROVISION_STATUS_UNAUTHORIZED:
+        reason = PROVISION_RESULT_UNAUTHORIZED;      break;
+    case portunus_v1_ProvisionStatus_PROVISION_STATUS_INVALID_ROLE:
+        reason = PROVISION_RESULT_INVALID_ROLE;      break;
+    default:
+        reason = PROVISION_RESULT_COMM_ERROR;        break;
+    }
+
+    publish_provision_result(reason, pb_resp.member_uuid, pb_resp.detail);
+}
+
+#endif /* CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE */
+
 /* ── Task ──────────────────────────────────────────────────────────────────── */
 
 static void comm_task(void *arg)
@@ -586,9 +735,16 @@ static void comm_task(void *arg)
         case EVENT_HEARTBEAT:
             handle_heartbeat(&event.payload.heartbeat);
             break;
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
         case EVENT_CREDENTIAL_READ:
             handle_credential(&event.payload.credential_read);
             break;
+#endif
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
+        case EVENT_PROVISION_REQUEST:
+            handle_provision(&event.payload.provision_request);
+            break;
+#endif
         default:
             ESP_LOGW(TAG, "Unexpected event 0x%04x in comm queue",
                      (unsigned)event.id);
@@ -639,6 +795,11 @@ portunus_err_t server_comm_init(void)
     snprintf(s_access_url, sizeof(s_access_url),
              "https://%s:%d/v1/access_request",
              PORTUNUS_SERVER_HOST, PORTUNUS_TLS_SERVER_PORT);
+    #ifdef CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
+    snprintf(s_provision_url, sizeof(s_provision_url),
+             "https://%s:%d/v1/provision_credential",
+             PORTUNUS_SERVER_HOST, PORTUNUS_TLS_SERVER_PORT);
+    #endif
   #else
     snprintf(s_heartbeat_url, sizeof(s_heartbeat_url),
              "http://%s:%d/v1/heartbeat",
@@ -646,11 +807,20 @@ portunus_err_t server_comm_init(void)
     snprintf(s_access_url, sizeof(s_access_url),
              "http://%s:%d/v1/access_request",
              PORTUNUS_SERVER_HOST, PORTUNUS_SERVER_PORT);
+    #ifdef CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
+    snprintf(s_provision_url, sizeof(s_provision_url),
+             "http://%s:%d/v1/provision_credential",
+             PORTUNUS_SERVER_HOST, PORTUNUS_SERVER_PORT);
+    #endif
   #endif
 
     ESP_LOGI(TAG, "Transport: HTTP/1.1");
     ESP_LOGI(TAG, "Heartbeat URL: %s", s_heartbeat_url);
+    #ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
     ESP_LOGI(TAG, "Access URL:    %s", s_access_url);
+    #else
+    ESP_LOGI(TAG, "Provision URL: %s", s_provision_url);
+    #endif
 #endif /* PORTUNUS_USE_GRPC */
 
     /* Create internal queue */
@@ -668,10 +838,18 @@ portunus_err_t server_comm_init(void)
         ESP_LOGE(TAG, "Failed to subscribe to heartbeat events: 0x%04x", (unsigned)sub_err);
     }
 
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
     sub_err = event_bus_subscribe(EVENT_CREDENTIAL_READ, on_credential_event, NULL);
     if (sub_err != PORTUNUS_OK) {
         ESP_LOGE(TAG, "Failed to subscribe to credential events: 0x%04x", (unsigned)sub_err);
     }
+#endif
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
+    sub_err = event_bus_subscribe(EVENT_PROVISION_REQUEST, on_provision_event, NULL);
+    if (sub_err != PORTUNUS_OK) {
+        ESP_LOGE(TAG, "Failed to subscribe to provision events: 0x%04x", (unsigned)sub_err);
+    }
+#endif
 
     /* Start task */
     BaseType_t ret = xTaskCreate(

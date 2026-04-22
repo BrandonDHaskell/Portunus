@@ -42,6 +42,30 @@ static const int READY_CYCLE_TICKS = 60;
 /* SYSTEM_ERROR: rapid blink 200ms on/off = 4 ticks on + 4 ticks off */
 static const int ERROR_HALF_CYCLE_TICKS = 4;
 
+/* PROVISIONING_IDLE: double-blink every 4 s (distinguishable from SYSTEM_READY) */
+static const int PROV_IDLE_ON_TICKS    = 1;   /* 50ms pulse */
+static const int PROV_IDLE_GAP_TICKS   = 3;   /* 150ms gap between pulses */
+static const int PROV_IDLE_CYCLE_TICKS = 80;  /* 4 s total period */
+
+/* PROVISIONING_AWAITING: slow 50/50 pulse (1 s on / 1 s off) */
+static const int PROV_AWAIT_HALF_TICKS = 20;
+
+/* PROVISIONING_SUCCESS: 5× rapid blinks (one-shot) */
+static const int PROV_SUCCESS_ON    = 2;
+static const int PROV_SUCCESS_OFF   = 2;
+static const int PROV_SUCCESS_COUNT = 5;
+
+/* PROVISIONING_DUPLICATE: 2× medium blinks (one-shot) */
+static const int PROV_DUP_ON    = 4;
+static const int PROV_DUP_OFF   = 4;
+static const int PROV_DUP_COUNT = 2;
+
+/* PROVISIONING_UNAUTHORIZED: 500ms solid on + 3× rapid blinks (one-shot) */
+static const int PROV_UNAUTH_LONG_ON     = 10; /* 500ms */
+static const int PROV_UNAUTH_RAPID_ON    = 2;
+static const int PROV_UNAUTH_RAPID_OFF   = 2;
+static const int PROV_UNAUTH_RAPID_COUNT = 3;
+
 /* ── Task configuration ───────────────────────────────────────────────────── */
 
 static const int PATTERN_TASK_STACK = 2048;
@@ -177,6 +201,82 @@ void FeedbackLed::run_patterns()
                 led_on();
             }
             break;
+
+        case feedback_type_t::PROVISIONING_IDLE: {
+            /* Double-blink every 4 s: pulse–gap–pulse–long-off */
+            int pos = tick % PROV_IDLE_CYCLE_TICKS;
+            int second_pulse_start = PROV_IDLE_ON_TICKS + PROV_IDLE_GAP_TICKS;
+            if (pos == 0 || pos == second_pulse_start) {
+                led_on();
+            } else if (pos == PROV_IDLE_ON_TICKS ||
+                       pos == second_pulse_start + PROV_IDLE_ON_TICKS) {
+                led_off();
+            }
+            break;
+        }
+
+        case feedback_type_t::PROVISIONING_AWAITING: {
+            /* 1 s on / 1 s off slow pulse */
+            int pos = tick % (PROV_AWAIT_HALF_TICKS * 2);
+            if (pos == 0) {
+                led_on();
+            } else if (pos == PROV_AWAIT_HALF_TICKS) {
+                led_off();
+            }
+            break;
+        }
+
+        case feedback_type_t::PROVISIONING_SUCCESS: {
+            /* 5× rapid blinks then off (one-shot) */
+            int cycle = PROV_SUCCESS_ON + PROV_SUCCESS_OFF;
+            int total = cycle * PROV_SUCCESS_COUNT;
+            if (tick < total) {
+                int pos = tick % cycle;
+                if (pos == 0) led_on();
+                else if (pos == PROV_SUCCESS_ON) led_off();
+            } else {
+                led_off();
+                current = feedback_type_t::NONE;
+            }
+            break;
+        }
+
+        case feedback_type_t::PROVISIONING_DUPLICATE: {
+            /* 2× medium blinks then off (one-shot) */
+            int cycle = PROV_DUP_ON + PROV_DUP_OFF;
+            int total = cycle * PROV_DUP_COUNT;
+            if (tick < total) {
+                int pos = tick % cycle;
+                if (pos == 0) led_on();
+                else if (pos == PROV_DUP_ON) led_off();
+            } else {
+                led_off();
+                current = feedback_type_t::NONE;
+            }
+            break;
+        }
+
+        case feedback_type_t::PROVISIONING_UNAUTHORIZED: {
+            /* 500ms solid on, then 3× rapid blinks, then off (one-shot) */
+            if (tick == 0) {
+                led_on();
+            } else if (tick == PROV_UNAUTH_LONG_ON) {
+                led_off();
+            } else if (tick > PROV_UNAUTH_LONG_ON) {
+                int pos_in_rapid = tick - PROV_UNAUTH_LONG_ON;
+                int cycle  = PROV_UNAUTH_RAPID_ON + PROV_UNAUTH_RAPID_OFF;
+                int total  = cycle * PROV_UNAUTH_RAPID_COUNT;
+                if (pos_in_rapid < total) {
+                    int pos = pos_in_rapid % cycle;
+                    if (pos == 0) led_on();
+                    else if (pos == PROV_UNAUTH_RAPID_ON) led_off();
+                } else {
+                    led_off();
+                    current = feedback_type_t::NONE;
+                }
+            }
+            break;
+        }
         }
 
         tick++;
