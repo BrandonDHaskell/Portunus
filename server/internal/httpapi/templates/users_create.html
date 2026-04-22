@@ -1,0 +1,33 @@
+{{define "title"}}New Admin User — Portunus Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h1>New Admin User</h1>
+  <a class="btn btn-secondary" href="/admin/ui/users">← Back</a>
+</div>
+<div class="card" style="max-width:480px">
+  <form method="POST" action="/admin/ui/users">
+    <div class="form-group">
+      <label for="username">Username</label>
+      <input id="username" name="username" type="text" value="{{.Form.Username}}" autofocus required>
+    </div>
+    <div class="form-group">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="new-password" required>
+      <p class="hint">Minimum 12 characters. The user will be required to change it on first login.</p>
+    </div>
+    <div class="form-group">
+      <label for="role_id">Role</label>
+      <select id="role_id" name="role_id" required>
+        <option value="">— Select a role —</option>
+        {{range .Roles}}
+        <option value="{{.RoleID}}" {{if eq .RoleID $.Form.RoleID}}selected{{end}}>{{.Name}}</option>
+        {{end}}
+      </select>
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" type="submit">Create User</button>
+      <a class="btn btn-secondary" href="/admin/ui/users">Cancel</a>
+    </div>
+  </form>
+</div>
+{{end}}

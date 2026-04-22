@@ -125,6 +125,10 @@ func main() {
 		logger.Fatalf("auth bootstrap error: %v", err)
 	}
 
+	// Admin user and role management services (PR 5 — Admin UI).
+	adminUserSvc := service.NewAdminUserService(adminUserStore, roleStore)
+	roleSvc := service.NewRoleService(roleStore)
+
 	tlsEnabled := cfg.TLSCertFile != "" && cfg.TLSKeyFile != ""
 
 	// HTTP
@@ -135,6 +139,8 @@ func main() {
 		AccessService:       accessSvc,
 		AdminService:        adminSvc,
 		AuthService:         authSvc,
+		AdminUserService:    adminUserSvc,
+		RoleService:         roleSvc,
 		MemberAccessService: memberAccessSvc,
 		ModuleAuthService:   moduleAuthSvc,
 		HMACSecret:          cfg.HMACSecret,

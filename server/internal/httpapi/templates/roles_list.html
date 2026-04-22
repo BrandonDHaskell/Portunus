@@ -1,0 +1,47 @@
+{{define "title"}}Roles — Portunus Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h1>Roles</h1>
+  <a class="btn btn-primary" href="/admin/ui/roles/new">+ New Role</a>
+</div>
+<table>
+  <thead>
+    <tr>
+      <th>Role ID</th>
+      <th>Name</th>
+      <th>Description</th>
+      <th>Type</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+  {{range .Roles}}
+    <tr>
+      <td class="font-mono">{{.RoleID}}</td>
+      <td>{{.Name}}</td>
+      <td class="text-muted">{{if .Description}}{{.Description}}{{else}}—{{end}}</td>
+      <td>
+        {{if .IsSystem}}
+          <span class="badge badge-blue">System</span>
+        {{else}}
+          <span class="badge badge-gray">Custom</span>
+        {{end}}
+      </td>
+      <td>
+        <div class="actions">
+          <a class="btn btn-secondary btn-sm" href="/admin/ui/roles/{{.RoleID}}">Edit</a>
+          {{if not .IsSystem}}
+          <form method="POST" action="/admin/ui/roles/{{.RoleID}}/delete">
+            <button class="btn btn-danger btn-sm" type="submit"
+              onclick="return confirm('Delete role {{.RoleID}}? This cannot be undone.')">Delete</button>
+          </form>
+          {{end}}
+        </div>
+      </td>
+    </tr>
+  {{else}}
+    <tr><td colspan="5" class="text-muted" style="text-align:center;padding:2rem">No roles found.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}

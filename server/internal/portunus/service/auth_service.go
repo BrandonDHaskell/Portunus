@@ -21,6 +21,7 @@ const (
 
 var (
 	ErrInvalidCredentials   = errors.New("invalid username or password")
+	ErrAccountDisabled      = errors.New("account is disabled")
 	ErrPasswordChangeFailed = errors.New("password change failed")
 )
 
@@ -29,6 +30,7 @@ var (
 type AdminSession struct {
 	AdminUUID    string
 	Username     string
+	RoleID       string
 	MustChangePW bool
 	Permissions  map[string]struct{}
 }
@@ -84,7 +86,7 @@ func (s *AuthService) Bootstrap(ctx context.Context) error {
 		return fmt.Errorf("bootstrap: generate uuid: %w", err)
 	}
 
-	if err := s.users.CreateAdminUser(ctx, uuid, "admin", string(hash)); err != nil {
+	if err := s.users.CreateAdminUser(ctx, uuid, "admin", string(hash), "admin"); err != nil {
 		return fmt.Errorf("bootstrap: create admin user: %w", err)
 	}
 
@@ -106,6 +108,10 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (str
 			return "", ErrInvalidCredentials
 		}
 		return "", fmt.Errorf("login: %w", err)
+	}
+
+	if !user.Enabled {
+		return "", ErrAccountDisabled
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
@@ -150,7 +156,18 @@ func (s *AuthService) ResolveSession(ctx context.Context, sessionID string) (*Ad
 		return nil, fmt.Errorf("resolve session: load user: %w", err)
 	}
 
-	perms, err := s.roles.GetRolePermissions(ctx, "admin")
+	// Reject sessions for disabled accounts without invalidating the session
+	// token (the user should see "invalid credentials" rather than a hint).
+	if !user.Enabled {
+		return nil, store.ErrNotFound
+	}
+
+	roleID := user.RoleID
+	if roleID == "" {
+		roleID = "admin"
+	}
+
+	perms, err := s.roles.GetRolePermissions(ctx, roleID)
 	if err != nil {
 		return nil, fmt.Errorf("resolve session: load permissions: %w", err)
 	}
@@ -163,6 +180,7 @@ func (s *AuthService) ResolveSession(ctx context.Context, sessionID string) (*Ad
 	return &AdminSession{
 		AdminUUID:    user.UUID,
 		Username:     user.Username,
+		RoleID:       roleID,
 		MustChangePW: user.MustChangePW,
 		Permissions:  permSet,
 	}, nil

@@ -1,0 +1,56 @@
+{{define "title"}}Edit User — Portunus Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h1>Edit User: {{.User.Username}}</h1>
+  <a class="btn btn-secondary" href="/admin/ui/users">← Back</a>
+</div>
+
+<div class="card" style="max-width:480px">
+  <form method="POST" action="/admin/ui/users/{{.User.UUID}}/role">
+    <div class="form-group">
+      <label for="username">Username</label>
+      <input id="username" type="text" value="{{.User.Username}}" readonly>
+    </div>
+    <div class="form-group">
+      <label for="role_id">Role</label>
+      <select id="role_id" name="role_id" required>
+        {{range .Roles}}
+        <option value="{{.RoleID}}" {{if eq .RoleID $.User.RoleID}}selected{{end}}>{{.Name}}</option>
+        {{end}}
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Status</label>
+      <div style="margin-top:.25rem">
+        {{if .User.Enabled}}
+          <span class="badge badge-green">Active</span>
+        {{else}}
+          <span class="badge badge-red">Disabled</span>
+        {{end}}
+        {{if .User.MustChangePW}}<span class="badge badge-yellow">Password change required</span>{{end}}
+      </div>
+    </div>
+    <div class="form-group">
+      <label>UUID</label>
+      <input type="text" value="{{.User.UUID}}" readonly class="font-mono">
+    </div>
+    <div class="form-group">
+      <label>Created</label>
+      <input type="text" value="{{.User.CreatedAt}}" readonly>
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" type="submit">Save Role</button>
+      {{if .User.Enabled}}
+      <form method="POST" action="/admin/ui/users/{{.User.UUID}}/disable" style="display:inline">
+        <button class="btn btn-danger" type="submit"
+          onclick="return confirm('Disable this account?')">Disable Account</button>
+      </form>
+      {{else}}
+      <form method="POST" action="/admin/ui/users/{{.User.UUID}}/enable" style="display:inline">
+        <button class="btn btn-secondary" type="submit">Enable Account</button>
+      </form>
+      {{end}}
+    </div>
+  </form>
+</div>
+{{end}}

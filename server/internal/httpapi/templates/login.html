@@ -1,0 +1,20 @@
+{{define "title"}}Sign In — Portunus Admin{{end}}
+{{define "content"}}
+<div class="login-wrap" style="margin:-2rem -1rem">
+  <div class="login-card">
+    <h1>Portunus Admin</h1>
+    {{if .Flash}}<div class="flash {{.FlashType}}">{{.Flash}}</div>{{end}}
+    <form method="POST" action="/admin/ui/login">
+      <div class="form-group">
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" autocomplete="username" autofocus required>
+      </div>
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+      </div>
+      <button class="btn btn-primary" style="width:100%" type="submit">Sign in</button>
+    </form>
+  </div>
+</div>
+{{end}}

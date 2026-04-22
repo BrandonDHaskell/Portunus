@@ -85,6 +85,34 @@ FROM roles ORDER BY name;
 	return roles, rows.Err()
 }
 
+func (s *RoleStore) UpdateRole(ctx context.Context, roleID, name, description string, defaultExpiryDays, defaultInactivityDays *int) error {
+	now := time.Now().UTC().UnixMilli()
+	return s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		var isSystem int
+		err := tx.QueryRowContext(ctx, `SELECT is_system FROM roles WHERE role_id = ?;`, roleID).Scan(&isSystem)
+		if err == sql.ErrNoRows {
+			return store.ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("UpdateRole check: %w", err)
+		}
+		if isSystem == 1 {
+			return store.ErrRoleIsSystem
+		}
+		res, err := tx.ExecContext(ctx, `
+UPDATE roles SET name = ?, description = ?, default_expiry_days = ?, default_inactivity_days = ?, updated_at_ms = ?
+WHERE role_id = ?;
+`, name, description, defaultExpiryDays, defaultInactivityDays, now, roleID)
+		if err != nil {
+			return fmt.Errorf("UpdateRole: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return store.ErrNotFound
+		}
+		return nil
+	})
+}
+
 func (s *RoleStore) DeleteRole(ctx context.Context, roleID string) error {
 	return s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		var isSystem int

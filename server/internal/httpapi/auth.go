@@ -27,7 +27,7 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 
 	sessionID, err := s.authService.Login(r.Context(), body.Username, body.Password)
 	if err != nil {
-		if errors.Is(err, service.ErrInvalidCredentials) {
+		if errors.Is(err, service.ErrInvalidCredentials) || errors.Is(err, service.ErrAccountDisabled) {
 			writeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid username or password")
 			return
 		}
