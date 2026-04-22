@@ -103,19 +103,20 @@ typedef struct _portunus_v1_AccessResponse {
     char server_time[40];
 } portunus_v1_AccessResponse;
 
+typedef PB_BYTES_ARRAY_T(32) portunus_v1_ProvisionCredentialRequest_credential_hash_t;
 /* Sent by a provisioning console after a successful two-scan flow.
  The raw credential never leaves the device; only SHA-256(raw) is sent.
 
  Server Go equivalent: types.ProvisionCredentialRequest */
 typedef struct _portunus_v1_ProvisionCredentialRequest {
     /* UUID of the operator performing the provisioning (from scan 1). */
-    pb_callback_t operator_uuid;
+    char operator_uuid[37];
     /* Module ID of the provisioning console. */
-    pb_callback_t module_id;
+    char module_id[33];
     /* SHA-256 of the raw credential (computed on-device via mbedTLS). */
-    pb_callback_t credential_hash;
+    portunus_v1_ProvisionCredentialRequest_credential_hash_t credential_hash;
     /* Role ID to assign to the new member.  Must already exist on the server. */
-    pb_callback_t role_id;
+    char role_id[33];
 } portunus_v1_ProvisionCredentialRequest;
 
 /* Returned by the server after processing a provisioning request.
@@ -123,10 +124,10 @@ typedef struct _portunus_v1_ProvisionCredentialRequest {
  Server Go equivalent: types.ProvisionCredentialResponse */
 typedef struct _portunus_v1_ProvisionCredentialResponse {
     /* UUID assigned to the new member record.  Non-empty on SUCCESS only. */
-    pb_callback_t member_uuid;
+    char member_uuid[37];
     portunus_v1_ProvisionStatus status;
     /* Human-readable detail for duplicate/error cases (operator display). */
-    pb_callback_t detail;
+    char detail[64];
 } portunus_v1_ProvisionCredentialResponse;
 
 
@@ -152,14 +153,14 @@ extern "C" {
 #define portunus_v1_HeartbeatResponse_init_default {0, 0, "", ""}
 #define portunus_v1_AccessRequest_init_default   {"", "", false, 0, ""}
 #define portunus_v1_AccessResponse_init_default  {0, 0, 0, "", "", ""}
-#define portunus_v1_ProvisionCredentialRequest_init_default {{{NULL}, NULL}, {{NULL}, NULL}, {{NULL}, NULL}, {{NULL}, NULL}}
-#define portunus_v1_ProvisionCredentialResponse_init_default {{{NULL}, NULL}, _portunus_v1_ProvisionStatus_MIN, {{NULL}, NULL}}
+#define portunus_v1_ProvisionCredentialRequest_init_default {"", "", {0, {0}}, ""}
+#define portunus_v1_ProvisionCredentialResponse_init_default {"", _portunus_v1_ProvisionStatus_MIN, ""}
 #define portunus_v1_HeartbeatRequest_init_zero   {"", "", 0, false, 0, false, 0, "", 0, 0}
 #define portunus_v1_HeartbeatResponse_init_zero  {0, 0, "", ""}
 #define portunus_v1_AccessRequest_init_zero      {"", "", false, 0, ""}
 #define portunus_v1_AccessResponse_init_zero     {0, 0, 0, "", "", ""}
-#define portunus_v1_ProvisionCredentialRequest_init_zero {{{NULL}, NULL}, {{NULL}, NULL}, {{NULL}, NULL}, {{NULL}, NULL}}
-#define portunus_v1_ProvisionCredentialResponse_init_zero {{{NULL}, NULL}, _portunus_v1_ProvisionStatus_MIN, {{NULL}, NULL}}
+#define portunus_v1_ProvisionCredentialRequest_init_zero {"", "", {0, {0}}, ""}
+#define portunus_v1_ProvisionCredentialResponse_init_zero {"", _portunus_v1_ProvisionStatus_MIN, ""}
 
 /* Field tags (for use in manual encoding/decoding) */
 #define portunus_v1_HeartbeatRequest_module_id_tag 1
@@ -232,18 +233,18 @@ X(a, STATIC,   SINGULAR, STRING,   server_time,       6)
 #define portunus_v1_AccessResponse_DEFAULT NULL
 
 #define portunus_v1_ProvisionCredentialRequest_FIELDLIST(X, a) \
-X(a, CALLBACK, SINGULAR, STRING,   operator_uuid,     1) \
-X(a, CALLBACK, SINGULAR, STRING,   module_id,         2) \
-X(a, CALLBACK, SINGULAR, BYTES,    credential_hash,   3) \
-X(a, CALLBACK, SINGULAR, STRING,   role_id,           4)
-#define portunus_v1_ProvisionCredentialRequest_CALLBACK pb_default_field_callback
+X(a, STATIC,   SINGULAR, STRING,   operator_uuid,     1) \
+X(a, STATIC,   SINGULAR, STRING,   module_id,         2) \
+X(a, STATIC,   SINGULAR, BYTES,    credential_hash,   3) \
+X(a, STATIC,   SINGULAR, STRING,   role_id,           4)
+#define portunus_v1_ProvisionCredentialRequest_CALLBACK NULL
 #define portunus_v1_ProvisionCredentialRequest_DEFAULT NULL
 
 #define portunus_v1_ProvisionCredentialResponse_FIELDLIST(X, a) \
-X(a, CALLBACK, SINGULAR, STRING,   member_uuid,       1) \
+X(a, STATIC,   SINGULAR, STRING,   member_uuid,       1) \
 X(a, STATIC,   SINGULAR, UENUM,    status,            2) \
-X(a, CALLBACK, SINGULAR, STRING,   detail,            3)
-#define portunus_v1_ProvisionCredentialResponse_CALLBACK pb_default_field_callback
+X(a, STATIC,   SINGULAR, STRING,   detail,            3)
+#define portunus_v1_ProvisionCredentialResponse_CALLBACK NULL
 #define portunus_v1_ProvisionCredentialResponse_DEFAULT NULL
 
 extern const pb_msgdesc_t portunus_v1_HeartbeatRequest_msg;
@@ -262,13 +263,13 @@ extern const pb_msgdesc_t portunus_v1_ProvisionCredentialResponse_msg;
 #define portunus_v1_ProvisionCredentialResponse_fields &portunus_v1_ProvisionCredentialResponse_msg
 
 /* Maximum encoded size of messages (where known) */
-/* portunus_v1_ProvisionCredentialRequest_size depends on runtime parameters */
-/* portunus_v1_ProvisionCredentialResponse_size depends on runtime parameters */
 #define PORTUNUS_V1_PORTUNUS_V1_PORTUNUS_PB_H_MAX_SIZE portunus_v1_HeartbeatRequest_size
 #define portunus_v1_AccessRequest_size           108
 #define portunus_v1_AccessResponse_size          115
 #define portunus_v1_HeartbeatRequest_size        142
 #define portunus_v1_HeartbeatResponse_size       79
+#define portunus_v1_ProvisionCredentialRequest_size 140
+#define portunus_v1_ProvisionCredentialResponse_size 105
 
 #ifdef __cplusplus
 } /* extern "C" */
