@@ -19,6 +19,56 @@ func NewAccessEventStore(db *sql.DB, writer *dbpkg.Worker) *AccessEventStore {
 	return &AccessEventStore{db: db, writer: writer}
 }
 
+func (s *AccessEventStore) ListEventsByCredential(ctx context.Context, credentialHash []byte, limit int) ([]store.AccessEventRecord, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT module_id, received_at_ms, requested_at_ms, door_closed,
+       credential_hash, decision_granted, decision_reason, decided_at_ms
+FROM access_events
+WHERE credential_hash = ?
+ORDER BY received_at_ms DESC
+LIMIT ?;
+`, credentialHash, limit)
+	if err != nil {
+		return nil, fmt.Errorf("ListEventsByCredential query: %w", err)
+	}
+	defer rows.Close()
+
+	var out []store.AccessEventRecord
+	for rows.Next() {
+		var rec store.AccessEventRecord
+		var receivedMs, decidedMs int64
+		var requestedMs sql.NullInt64
+		var doorClosed sql.NullInt64
+		var granted int
+		var credHash []byte
+
+		if err := rows.Scan(
+			&rec.ModuleID, &receivedMs, &requestedMs, &doorClosed,
+			&credHash, &granted, &rec.Reason, &decidedMs,
+		); err != nil {
+			return nil, fmt.Errorf("ListEventsByCredential scan: %w", err)
+		}
+
+		rec.ReceivedAt = time.UnixMilli(receivedMs).UTC()
+		rec.DecidedAt = time.UnixMilli(decidedMs).UTC()
+		if requestedMs.Valid {
+			t := time.UnixMilli(requestedMs.Int64).UTC()
+			rec.RequestedAt = &t
+		}
+		if doorClosed.Valid {
+			b := doorClosed.Int64 != 0
+			rec.DoorClosed = &b
+		}
+		rec.Granted = granted != 0
+		rec.CredentialHash = credHash
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
 func (s *AccessEventStore) RecordEvent(ctx context.Context, rec store.AccessEventRecord) error {
 	if rec.ReceivedAt.IsZero() {
 		rec.ReceivedAt = time.Now().UTC()

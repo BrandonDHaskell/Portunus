@@ -1,0 +1,250 @@
+{{define "title"}}Member — Portunus Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h1>Member Detail</h1>
+  <a class="btn btn-secondary" href="/admin/ui/members">← Members</a>
+</div>
+
+{{with .Member}}
+<!-- ── Identity ──────────────────────────────────────────────────────────── -->
+<div class="card" style="margin-bottom:1.5rem">
+  <h2 style="margin-top:0">Identity</h2>
+  <div class="form-group">
+    <label>UUID</label>
+    <div style="display:flex;align-items:center;gap:.5rem">
+      <input type="text" class="font-mono" value="{{.UUID}}" readonly style="flex:1">
+      <button class="btn btn-secondary btn-sm"
+        onclick="navigator.clipboard.writeText('{{.UUID}}').then(()=>this.textContent='Copied!').catch(()=>{})"
+        title="Copy UUID to clipboard">Copy UUID</button>
+    </div>
+    <p class="hint">Share this UUID with the external membership system to link the physical credential to a person.</p>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+    <div class="form-group">
+      <label>Role</label>
+      <input type="text" value="{{.RoleID}}" readonly>
+    </div>
+    <div class="form-group">
+      <label>Status</label>
+      <div style="margin-top:.25rem">
+        {{if eq .Status "active"}}
+          {{if .Enabled}}<span class="badge badge-green">Active</span>
+          {{else}}<span class="badge badge-yellow">Disabled</span>{{end}}
+        {{else if eq .Status "expired"}}
+          <span class="badge badge-red">Expired</span>
+        {{else if eq .Status "archived"}}
+          <span class="badge">Archived</span>
+        {{else}}
+          <span class="badge">{{.Status}}</span>
+        {{end}}
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Provisioning Status</label>
+      <div style="margin-top:.25rem">
+        {{if eq .ProvisioningStatus "pending_authorization"}}
+          <span class="badge badge-yellow">Pending Authorization</span>
+        {{else if eq .ProvisioningStatus "active"}}
+          <span class="badge badge-green">Active</span>
+        {{else}}
+          <span class="badge">{{.ProvisioningStatus}}</span>
+        {{end}}
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Credential (hash prefix)</label>
+      <input type="text" class="font-mono" value="{{if .CredentialHash}}{{.CredentialHash}}{{else}}— none attached —{{end}}" readonly>
+    </div>
+    <div class="form-group">
+      <label>Expires</label>
+      <input type="text" value="{{if .ExpiresAt}}{{.ExpiresAt}}{{else}}— no expiry —{{end}}" readonly>
+    </div>
+    <div class="form-group">
+      <label>Inactivity Limit</label>
+      <input type="text" value="{{if .InactivityLimitDays}}{{derefInt .InactivityLimitDays}} days{{else}}— none —{{end}}" readonly>
+    </div>
+    <div class="form-group">
+      <label>Last Access</label>
+      <input type="text" value="{{if .LastAccessAt}}{{.LastAccessAt}}{{else}}Never{{end}}" readonly>
+    </div>
+    <div class="form-group">
+      <label>Created</label>
+      <input type="text" value="{{.CreatedAt}}" readonly>
+    </div>
+  </div>
+  {{if .ArchivedAt}}
+  <p class="hint">Archived {{.ArchivedAt}}{{if .ArchivedByUUID}} by {{.ArchivedByUUID}}{{end}}.</p>
+  {{end}}
+</div>
+
+<!-- ── Actions ───────────────────────────────────────────────────────────── -->
+{{if not (eq .Status "archived")}}
+<div class="card" style="margin-bottom:1.5rem">
+  <h2 style="margin-top:0">Actions</h2>
+  <div style="display:flex;flex-wrap:wrap;gap:.75rem;align-items:flex-start">
+
+    <!-- Attach credential -->
+    {{if not .CredentialHash}}
+    <form method="POST" action="/admin/ui/members/{{.UUID}}/credential" style="display:flex;gap:.5rem;align-items:flex-end">
+      <div class="form-group" style="margin:0">
+        <label for="credential_hash">Attach Credential Hash (64 hex chars)</label>
+        <input id="credential_hash" name="credential_hash" type="text" class="font-mono"
+          placeholder="sha256 hex…" maxlength="64" style="width:28rem">
+      </div>
+      <button class="btn btn-primary" type="submit">Attach</button>
+    </form>
+    {{end}}
+
+    <!-- Assign role -->
+    {{if $.Roles}}
+    <form method="POST" action="/admin/ui/members/{{.UUID}}/role" style="display:flex;gap:.5rem;align-items:flex-end">
+      <div class="form-group" style="margin:0">
+        <label for="role_id">Assign Role</label>
+        <select id="role_id" name="role_id" required>
+          {{range $.Roles}}
+          <option value="{{.RoleID}}" {{if eq .RoleID $.Member.RoleID}}selected{{end}}>{{.Name}}</option>
+          {{end}}
+        </select>
+      </div>
+      <button class="btn btn-secondary" type="submit">Save Role</button>
+    </form>
+    {{end}}
+
+    <!-- Enable / Disable -->
+    {{if .Enabled}}
+    <form method="POST" action="/admin/ui/members/{{.UUID}}/disable">
+      <button class="btn btn-danger" type="submit"
+        onclick="return confirm('Disable this member?')">Disable</button>
+    </form>
+    {{else}}
+    <form method="POST" action="/admin/ui/members/{{.UUID}}/enable">
+      <button class="btn btn-secondary" type="submit">Enable</button>
+    </form>
+    {{end}}
+
+    <!-- Archive -->
+    <form method="POST" action="/admin/ui/members/{{.UUID}}/archive">
+      <button class="btn btn-danger" type="submit"
+        onclick="return confirm('Archive this member? This cannot be easily undone.')">Archive</button>
+    </form>
+  </div>
+</div>
+{{end}}
+{{end}}{{/* end with .Member */}}
+
+<!-- ── Module Authorizations ─────────────────────────────────────────────── -->
+<div class="card" style="margin-bottom:1.5rem">
+  <h2 style="margin-top:0">Module Authorizations</h2>
+
+  {{if .Authorizations}}
+  <table style="margin-bottom:1rem">
+    <thead>
+      <tr>
+        <th>Module</th>
+        <th>Granted</th>
+        <th>Granted By</th>
+        <th>Expires</th>
+        <th>Status</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+    {{range .Authorizations}}
+      <tr>
+        <td class="font-mono">{{.ModuleID}}</td>
+        <td class="text-muted" style="font-size:.85rem">{{.GrantedAt}}</td>
+        <td class="font-mono text-muted" style="font-size:.8rem">
+          {{if .GrantedByUUID}}{{.GrantedByUUID}}{{else}}<em>system</em>{{end}}
+        </td>
+        <td class="text-muted" style="font-size:.85rem">
+          {{if .ExpiresAt}}{{.ExpiresAt}}{{else}}—{{end}}
+        </td>
+        <td>
+          {{if .RevokedAt}}
+            <span class="badge badge-red">Revoked</span>
+          {{else}}
+            <span class="badge badge-green">Active</span>
+          {{end}}
+        </td>
+        <td>
+          {{if not .RevokedAt}}
+          <form method="POST" action="/admin/ui/members/{{$.Member.UUID}}/authorizations/{{.ModuleID}}/revoke">
+            <button class="btn btn-danger btn-sm" type="submit"
+              onclick="return confirm('Revoke access to {{.ModuleID}}?')">Revoke</button>
+          </form>
+          {{end}}
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="text-muted">No module authorizations yet.</p>
+  {{end}}
+
+  <!-- Grant authorization form -->
+  {{if and $.Modules $.Member}}
+  {{if not (eq $.Member.Status "archived")}}
+  <details style="margin-top:1rem">
+    <summary class="btn btn-secondary" style="display:inline-block;cursor:pointer">+ Grant Authorization</summary>
+    <form method="POST" action="/admin/ui/members/{{$.Member.UUID}}/authorizations"
+          style="margin-top:1rem;display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap">
+      <div class="form-group" style="margin:0">
+        <label for="module_id">Module</label>
+        <select id="module_id" name="module_id" required>
+          <option value="">— Select module —</option>
+          {{range $.Modules}}
+          <option value="{{.ModuleID}}">{{if .DisplayName}}{{.DisplayName}} ({{.ModuleID}}){{else}}{{.ModuleID}}{{end}}</option>
+          {{end}}
+        </select>
+      </div>
+      <div class="form-group" style="margin:0">
+        <label for="auth_expires_at">Expires (optional)</label>
+        <input id="auth_expires_at" name="expires_at" type="date">
+      </div>
+      <button class="btn btn-primary" type="submit">Grant</button>
+    </form>
+  </details>
+  {{end}}
+  {{end}}
+</div>
+
+<!-- ── Access Event History ───────────────────────────────────────────────── -->
+<div class="card">
+  <h2 style="margin-top:0">Recent Access Events</h2>
+  {{if .AccessEvents}}
+  <table>
+    <thead>
+      <tr>
+        <th>Module</th>
+        <th>Time (UTC)</th>
+        <th>Result</th>
+        <th>Reason</th>
+      </tr>
+    </thead>
+    <tbody>
+    {{range .AccessEvents}}
+      <tr>
+        <td class="font-mono">{{.ModuleID}}</td>
+        <td class="text-muted" style="font-size:.85rem">{{.ReceivedAt}}</td>
+        <td>
+          {{if .Granted}}
+            <span class="badge badge-green">Granted</span>
+          {{else}}
+            <span class="badge badge-red">Denied</span>
+          {{end}}
+        </td>
+        <td class="text-muted" style="font-size:.85rem">{{.Reason}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else if .Member}}
+    {{if .Member.CredentialHash}}
+      <p class="text-muted">No access events recorded yet.</p>
+    {{else}}
+      <p class="text-muted">No credential attached — access events will appear here once a credential is enrolled.</p>
+    {{end}}
+  {{end}}
+</div>
+{{end}}

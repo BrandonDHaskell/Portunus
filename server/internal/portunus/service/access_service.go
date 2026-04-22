@@ -181,6 +181,12 @@ func (s *AccessService) recordEvent(
 	_ = s.eventStore.RecordEvent(ctx, rec)
 }
 
+// ListEventsByCredential returns recent access events for the given credential
+// hash, newest-first, capped at limit rows. Used by the member detail UI.
+func (s *AccessService) ListEventsByCredential(ctx context.Context, credentialHash []byte, limit int) ([]store.AccessEventRecord, error) {
+	return s.eventStore.ListEventsByCredential(ctx, credentialHash, limit)
+}
+
 // decideMemberAccess checks member_access + module_authorizations and returns
 // (granted, reason, memberUUID, error). memberUUID is non-empty only on grant.
 func (s *AccessService) decideMemberAccess(
