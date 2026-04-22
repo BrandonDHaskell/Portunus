@@ -21,6 +21,8 @@ type Dependencies struct {
 	AccessService       *service.AccessService
 	AdminService        *service.AdminService
 	AuthService         *service.AuthService
+	AdminUserService    *service.AdminUserService
+	RoleService         *service.RoleService
 	MemberAccessService *service.MemberAccessService
 	ModuleAuthService   *service.ModuleAuthorizationService
 	// HMACSecret is the pre-shared key for X-Portunus-Sig verification.
@@ -38,6 +40,8 @@ type Server struct {
 	accessService       *service.AccessService
 	adminService        *service.AdminService
 	authService         *service.AuthService
+	adminUserService    *service.AdminUserService
+	roleService         *service.RoleService
 	memberAccessService *service.MemberAccessService
 	moduleAuthService   *service.ModuleAuthorizationService
 	tlsEnabled          bool
@@ -53,6 +57,8 @@ func NewServer(d Dependencies) *Server {
 		accessService:       d.AccessService,
 		adminService:        d.AdminService,
 		authService:         d.AuthService,
+		adminUserService:    d.AdminUserService,
+		roleService:         d.RoleService,
 		memberAccessService: d.MemberAccessService,
 		moduleAuthService:   d.ModuleAuthService,
 		tlsEnabled:          d.TLSEnabled,
@@ -101,7 +107,7 @@ func NewServer(d Dependencies) *Server {
 		mux.HandleFunc("DELETE /admin/v1/doors/{door_id}",
 			requirePermission(permissions.DoorDelete, s.handleAdminDeleteDoor))
 
-		d.Logger.Printf("admin API: ENABLED (%d endpoints registered)", 15)
+		d.Logger.Printf("admin API: ENABLED")
 	}
 
 	// ── Member access endpoints (session + permission required) ──────────
@@ -134,6 +140,26 @@ func NewServer(d Dependencies) *Server {
 			requirePermission(permissions.ModuleAuthRevoke, s.handleAdminRevokeModuleAuthorization))
 		mux.HandleFunc("GET /admin/v1/members/{member_uuid}/authorizations",
 			requirePermission(permissions.ModuleAuthList, s.handleAdminListAuthorizationsByMember))
+	}
+
+	// ── Admin UI (HTML) ────────────────────────────────────────────────────
+	if d.AuthService != nil {
+		// Auth routes (no permission required — handled per-route).
+		mux.HandleFunc("GET /admin/ui/login", s.handleUILogin)
+		mux.HandleFunc("POST /admin/ui/login", s.handleUILogin)
+		mux.HandleFunc("POST /admin/ui/logout", requireUISession(s.handleUILogout))
+		mux.HandleFunc("GET /admin/ui/change-password", requireUISession(s.handleUIChangePassword))
+		mux.HandleFunc("POST /admin/ui/change-password", requireUISession(s.handleUIChangePassword))
+		mux.HandleFunc("GET /admin/ui/", s.handleUIDashboard)
+
+		// Static assets (no auth required).
+		mux.Handle("GET /admin/ui/static/", http.StripPrefix("/admin/ui/static/", staticHandler()))
+	}
+	if d.AdminUserService != nil {
+		s.uiUserRoutes(mux)
+	}
+	if d.RoleService != nil {
+		s.uiRoleRoutes(mux)
 	}
 
 	// Build middleware chain: logging → HSTS (if TLS) → session → HMAC → mux

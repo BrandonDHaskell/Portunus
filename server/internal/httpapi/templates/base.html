@@ -1,0 +1,28 @@
+{{define "base"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{block "title" .}}Portunus Admin{{end}}</title>
+<link rel="stylesheet" href="/admin/ui/static/style.css">
+</head>
+<body>
+<nav>
+  <a class="brand" href="/admin/ui/">Portunus</a>
+  {{if .Session}}
+  <a href="/admin/ui/users" {{if eq .ActivePage "users"}}class="active"{{end}}>Users</a>
+  <a href="/admin/ui/roles" {{if eq .ActivePage "roles"}}class="active"{{end}}>Roles</a>
+  <span class="nav-user">{{.Session.Username}} ({{.Session.RoleID}}) &nbsp;
+    <form method="POST" action="/admin/ui/logout" style="display:inline">
+      <button class="btn btn-secondary btn-sm" type="submit">Sign out</button>
+    </form>
+  </span>
+  {{end}}
+</nav>
+<main>
+  {{if .Flash}}<div class="flash {{.FlashType}}">{{.Flash}}</div>{{end}}
+  {{block "content" .}}{{end}}
+</main>
+<script src="/admin/ui/static/htmx.min.js"></script>
+</body>
+</html>{{end}}

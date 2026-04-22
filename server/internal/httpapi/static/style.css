@@ -1,0 +1,226 @@
+/* Portunus Admin UI — minimal classless-ish stylesheet */
+
+:root {
+  --bg: #f5f5f5;
+  --surface: #ffffff;
+  --border: #d0d0d0;
+  --text: #1a1a1a;
+  --text-muted: #666;
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --danger: #dc2626;
+  --danger-hover: #b91c1c;
+  --success-bg: #f0fdf4;
+  --success-border: #86efac;
+  --error-bg: #fef2f2;
+  --error-border: #fca5a5;
+  --warning-bg: #fffbeb;
+  --warning-border: #fcd34d;
+  --radius: 6px;
+  --shadow: 0 1px 3px rgba(0,0,0,.1);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* ── Nav ─────────────────────────────────────────────────────────────── */
+nav {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 1.5rem;
+  display: flex;
+  align-items: center;
+  height: 48px;
+  gap: 1.5rem;
+  box-shadow: var(--shadow);
+}
+
+nav .brand {
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--primary);
+  text-decoration: none;
+  margin-right: auto;
+}
+
+nav a {
+  color: var(--text-muted);
+  text-decoration: none;
+  padding: 0.25rem 0;
+  font-size: 13px;
+}
+nav a:hover { color: var(--text); }
+nav a.active { color: var(--primary); font-weight: 600; }
+
+nav .nav-user {
+  font-size: 12px;
+  color: var(--text-muted);
+  border-left: 1px solid var(--border);
+  padding-left: 1rem;
+}
+
+/* ── Layout ──────────────────────────────────────────────────────────── */
+main {
+  max-width: 960px;
+  margin: 2rem auto;
+  padding: 0 1rem;
+}
+
+/* ── Heading row with action button ─────────────────────────────────── */
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.25rem;
+}
+.page-header h1 { margin: 0; font-size: 20px; }
+
+/* ── Flash messages ──────────────────────────────────────────────────── */
+.flash {
+  padding: .75rem 1rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  margin-bottom: 1rem;
+  font-size: 13px;
+}
+.flash.success { background: var(--success-bg); border-color: var(--success-border); }
+.flash.error   { background: var(--error-bg);   border-color: var(--error-border); }
+.flash.warn    { background: var(--warning-bg);  border-color: var(--warning-border); }
+
+/* ── Card ────────────────────────────────────────────────────────────── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+/* ── Tables ──────────────────────────────────────────────────────────── */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+th, td { padding: .6rem .875rem; text-align: left; }
+th { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); background: var(--bg); border-bottom: 1px solid var(--border); }
+tr + tr td { border-top: 1px solid var(--border); }
+tr:hover td { background: #fafafa; }
+
+/* ── Forms ───────────────────────────────────────────────────────────── */
+.form-group { margin-bottom: 1rem; }
+.form-group label { display: block; font-size: 13px; font-weight: 600; margin-bottom: .35rem; }
+.form-group .hint { font-size: 12px; color: var(--text-muted); margin-top: .25rem; }
+
+input[type="text"],
+input[type="password"],
+select,
+textarea {
+  width: 100%;
+  padding: .5rem .75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--surface);
+  outline: none;
+  transition: border-color .15s;
+}
+input:focus, select:focus, textarea:focus { border-color: var(--primary); }
+input[readonly], input[disabled] { background: var(--bg); color: var(--text-muted); cursor: not-allowed; }
+
+/* ── Buttons ─────────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  padding: .45rem .9rem;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid transparent;
+  text-decoration: none;
+  transition: background .12s, border-color .12s;
+  white-space: nowrap;
+}
+.btn-primary { background: var(--primary); color: #fff; }
+.btn-primary:hover { background: var(--primary-hover); }
+.btn-secondary { background: var(--surface); border-color: var(--border); color: var(--text); }
+.btn-secondary:hover { background: var(--bg); }
+.btn-danger { background: var(--danger); color: #fff; }
+.btn-danger:hover { background: var(--danger-hover); }
+.btn-sm { padding: .3rem .6rem; font-size: 12px; }
+.btn[disabled] { opacity: .5; cursor: not-allowed; }
+
+/* ── Badge ───────────────────────────────────────────────────────────── */
+.badge {
+  display: inline-block;
+  padding: .15rem .5rem;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.badge-green  { background: #dcfce7; color: #166534; }
+.badge-gray   { background: #f3f4f6; color: #374151; }
+.badge-red    { background: #fee2e2; color: #991b1b; }
+.badge-blue   { background: #dbeafe; color: #1e40af; }
+.badge-yellow { background: #fef9c3; color: #854d0e; }
+
+/* ── Permission grid ─────────────────────────────────────────────────── */
+.perm-group { margin-bottom: 1.5rem; }
+.perm-group h3 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin: 0 0 .5rem; }
+.perm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: .35rem; }
+.perm-item { display: flex; align-items: center; gap: .5rem; padding: .4rem .6rem; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; transition: background .1s; }
+.perm-item:hover { background: var(--bg); }
+.perm-item input[type="checkbox"] { width: auto; margin: 0; cursor: pointer; }
+.perm-item .perm-name { font-size: 12px; font-family: monospace; color: var(--text); }
+
+/* ── Login page ──────────────────────────────────────────────────────── */
+.login-wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.login-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 2.5rem 2rem;
+  width: 100%;
+  max-width: 380px;
+}
+.login-card h1 { margin: 0 0 1.5rem; font-size: 18px; text-align: center; }
+
+/* ── Misc helpers ────────────────────────────────────────────────────── */
+.actions { display: flex; gap: .5rem; }
+.text-muted { color: var(--text-muted); }
+.text-danger { color: var(--danger); }
+.mt-1 { margin-top: .5rem; }
+.mt-2 { margin-top: 1rem; }
+.mb-0 { margin-bottom: 0; }
+.font-mono { font-family: monospace; }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 20ch; }
+
+/* HTMX in-flight indicator */
+.htmx-indicator { display: none; }
+.htmx-request .htmx-indicator { display: inline; }
+.htmx-request.htmx-indicator { display: inline; }

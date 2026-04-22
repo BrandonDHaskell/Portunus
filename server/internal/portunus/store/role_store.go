@@ -30,6 +30,10 @@ type RoleStore interface {
 	// ListRoles returns all roles ordered by name.
 	ListRoles(ctx context.Context) ([]RoleRecord, error)
 
+	// UpdateRole changes the mutable fields of a non-system role.
+	// Returns ErrRoleIsSystem if is_system = 1, ErrNotFound if the role does not exist.
+	UpdateRole(ctx context.Context, roleID, name, description string, defaultExpiryDays, defaultInactivityDays *int) error
+
 	// DeleteRole removes a role. Returns ErrRoleIsSystem if is_system = 1,
 	// ErrNotFound if the role does not exist.
 	DeleteRole(ctx context.Context, roleID string) error

@@ -1,0 +1,16 @@
+{{define "title"}}Dashboard — Portunus Admin{{end}}
+{{define "content"}}
+<div class="page-header"><h1>Dashboard</h1></div>
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:1rem">
+  <a class="card" href="/admin/ui/users" style="text-decoration:none;color:inherit">
+    <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted)">Admin Users</div>
+    <div style="font-size:28px;font-weight:700;margin:.25rem 0">{{.UserCount}}</div>
+    <div style="font-size:12px;color:var(--text-muted)">Manage users &amp; roles →</div>
+  </a>
+  <a class="card" href="/admin/ui/roles" style="text-decoration:none;color:inherit">
+    <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted)">Roles</div>
+    <div style="font-size:28px;font-weight:700;margin:.25rem 0">{{.RoleCount}}</div>
+    <div style="font-size:12px;color:var(--text-muted)">Manage roles &amp; permissions →</div>
+  </a>
+</div>
+{{end}}

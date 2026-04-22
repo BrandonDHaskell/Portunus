@@ -1,0 +1,71 @@
+{{define "title"}}Edit Role — Portunus Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h1>
+    {{.Role.Name}}
+    {{if .Role.IsSystem}}<span class="badge badge-blue" style="vertical-align:middle;font-size:12px">System</span>{{end}}
+  </h1>
+  <a class="btn btn-secondary" href="/admin/ui/roles">← Back</a>
+</div>
+
+{{if not .Role.IsSystem}}
+<div class="card" style="max-width:480px;margin-bottom:1.5rem">
+  <form method="POST" action="/admin/ui/roles/{{.Role.RoleID}}">
+    <div class="form-group">
+      <label>Role ID</label>
+      <input type="text" value="{{.Role.RoleID}}" readonly class="font-mono">
+    </div>
+    <div class="form-group">
+      <label for="name">Name</label>
+      <input id="name" name="name" type="text" value="{{.Role.Name}}" required>
+    </div>
+    <div class="form-group">
+      <label for="description">Description</label>
+      <input id="description" name="description" type="text" value="{{.Role.Description}}">
+    </div>
+    <div class="form-group">
+      <label for="default_expiry_days">Default Expiry (days)</label>
+      <input id="default_expiry_days" name="default_expiry_days" type="number" min="1"
+        value="{{if .Role.DefaultExpiryDays}}{{derefInt .Role.DefaultExpiryDays}}{{end}}"
+        placeholder="Leave blank for no default">
+    </div>
+    <div class="form-group">
+      <label for="default_inactivity_days">Default Inactivity Limit (days)</label>
+      <input id="default_inactivity_days" name="default_inactivity_days" type="number" min="1"
+        value="{{if .Role.DefaultInactivityDays}}{{derefInt .Role.DefaultInactivityDays}}{{end}}"
+        placeholder="Leave blank for no default">
+    </div>
+    <button class="btn btn-primary" type="submit">Save Changes</button>
+  </form>
+</div>
+{{end}}
+
+<div class="card">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+    <h2 style="margin:0;font-size:16px">Permissions</h2>
+    {{if .Role.IsSystem}}<span class="text-muted" style="font-size:12px">System roles cannot be edited.</span>{{end}}
+  </div>
+  <form method="POST" action="/admin/ui/roles/{{.Role.RoleID}}/permissions">
+    {{range .PermGroups}}
+    <div class="perm-group">
+      <h3>{{.Label}}</h3>
+      <div class="perm-grid">
+        {{range .Perms}}
+        <label class="perm-item">
+          <input type="checkbox" name="permission" value="{{.}}"
+            {{if $.HasPerm .}}checked{{end}}
+            {{if $.Role.IsSystem}}disabled{{end}}>
+          <span class="perm-name">{{.}}</span>
+        </label>
+        {{end}}
+      </div>
+    </div>
+    {{end}}
+    {{if not .Role.IsSystem}}
+    <div class="actions mt-2">
+      <button class="btn btn-primary" type="submit">Save Permissions</button>
+    </div>
+    {{end}}
+  </form>
+</div>
+{{end}}
