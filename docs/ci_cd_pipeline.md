@@ -2,7 +2,7 @@
 
 Local build, test, and deployment pipeline for the Portunus server and access module firmware.
 
-**Last updated:** March 2026
+**Last updated:** April 2026
 
 ---
 
@@ -82,6 +82,10 @@ The deployment tasks need to know the Pi's address. Create a `.env` file in the 
 DEPLOY_HOST=pi@192.168.1.100
 DEPLOY_DIR=/opt/portunus
 DEPLOY_SERVICE=portunus-server
+
+# Required by task firmware:build:prod — injected into sdkconfig at build time.
+# Must match PORTUNUS_HMAC_SECRET in /etc/portunus/portunus.env on the Pi.
+PORTUNUS_HMAC_SECRET=<your-64-char-hex-hmac-secret>
 ```
 
 ---
@@ -143,7 +147,9 @@ Produces `server/bin/portunus-server-linux-arm64`. Go's built-in cross-compilati
 task firmware:build:prod
 ```
 
-Produces the firmware binary in `access_module/build/`. The prod overlay applies minimal logging, strict TLS, and flash encryption settings.
+Produces the firmware binary in `access_module/build/`. The task reads `PORTUNUS_HMAC_SECRET` from `.env` and injects it into the sdkconfig at build time so the secret is never stored in a committed file. The prod overlay (`sdkconfig.defaults.prod`) applies minimal logging and strict TLS settings.
+
+**Module variant:** The firmware builds as one variant at a time — `ACCESS_POINT` or `PROVISIONING_CONSOLE` — set via `PORTUNUS_MODULE_TYPE` in the sdkconfig overlay. If your deployment uses both module types, build and flash each variant separately: build one, flash all devices of that type, then rebuild for the other type.
 
 For dev firmware:
 
@@ -298,7 +304,8 @@ task firmware:flash-monitor
 # 4. Verify in the serial monitor:
 #    - WiFi connects
 #    - Heartbeat OK with known=1
-#    - Card tap produces access granted/denied
+#    - ACCESS_POINT: credential tap produces access granted/denied
+#    - PROVISIONING_CONSOLE: two-scan flow produces a provision result
 ```
 
 ---
@@ -341,24 +348,26 @@ Three secrets must be coordinated between the server and firmware:
 
 | Secret | Server config | Firmware config | How to generate |
 |---|---|---|---|
-| HMAC pre-shared key | `PORTUNUS_HMAC_SECRET` env var | `CONFIG_PORTUNUS_HMAC_SECRET` in Kconfig | `openssl rand -hex 32` |
-| Admin API key | `PORTUNUS_ADMIN_API_KEY` env var | Not applicable (admin API is curl/browser only) | `openssl rand -hex 32` |
+| HMAC pre-shared key | `PORTUNUS_HMAC_SECRET` env var (and `.env` for build injection) | `CONFIG_PORTUNUS_HMAC_SECRET` — injected by `task firmware:build:prod` | `openssl rand -hex 32` |
+| Credential hash secret | `PORTUNUS_CREDENTIAL_HASH_SECRET` env var | Not applicable (server-side only) | `openssl rand -hex 32` |
 | TLS CA certificate | `ca.pem` used to sign `server.pem` | Embedded in firmware at `access_module/certs/ca_cert.pem` | `task certs:generate` |
+
+Admin authentication is now session-based (login/logout via the admin API or web UI). There is no shared admin API key to manage or rotate.
 
 ### Per-environment secrets
 
-Dev and prod should use **different** HMAC secrets. This prevents a dev-firmware ESP32 from accidentally authenticating against the production server (or vice versa).
-
-Maintain two secrets:
+Dev and prod should use **different** HMAC secrets and **different** credential hash secrets. Separate HMAC secrets prevent a dev-firmware ESP32 from accidentally authenticating against the production server. Separate credential hash secrets mean the same physical card registered in dev produces a different hash in the prod database.
 
 ```bash
-# Generate once, store securely
+# Generate once per environment, store securely
 openssl rand -hex 32   # → dev HMAC secret
 openssl rand -hex 32   # → prod HMAC secret
+openssl rand -hex 32   # → dev credential hash secret
+openssl rand -hex 32   # → prod credential hash secret
 ```
 
-- **Dev:** Set in the dev machine's server environment and in the dev sdkconfig overlay.
-- **Prod:** Set in `/etc/portunus/portunus.env` on the Pi and in the prod sdkconfig overlay.
+- **Dev:** Set `PORTUNUS_HMAC_SECRET` and `PORTUNUS_CREDENTIAL_HASH_SECRET` in the dev machine's server environment. `PORTUNUS_HMAC_SECRET` also goes in `.env` so `task firmware:build:dev` can inject it.
+- **Prod:** Set both secrets in `/etc/portunus/portunus.env` on the Pi. `PORTUNUS_HMAC_SECRET` also goes in the repo-root `.env` so `task firmware:build:prod` can inject it into the firmware.
 
 ### TLS certificates per environment
 
@@ -381,9 +390,9 @@ Since the cert generation script overwrites in place, you need to generate and d
 
 ---
 
-## New Taskfile targets
+## Taskfile reference
 
-The following targets need to be added to `Taskfile.yml` to support the pipeline. Add them under the existing server and CI sections.
+The following targets are defined in `Taskfile.yml`. The Taskfile loads `.env` automatically via `dotenv: ['.env']`, so any variable set there is available to all tasks.
 
 ### Cross-compilation
 
@@ -399,15 +408,6 @@ The following targets need to be added to `Taskfile.yml` to support the pipeline
 ```
 
 ### Deployment
-
-These targets use environment variables from a `.env` file or shell exports. Add the `dotenv` directive at the top level of the Taskfile if you want `.env` auto-loading:
-
-```yaml
-# Add near the top of Taskfile.yml, below 'version: "3"'
-dotenv: ['.env']
-```
-
-Then add the deployment targets:
 
 ```yaml
   deploy:server:
