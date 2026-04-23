@@ -19,6 +19,7 @@ type Dependencies struct {
 	Addr                string
 	HeartbeatService    *service.HeartbeatService
 	AccessService       *service.AccessService
+	ProvisionService    *service.ProvisionService
 	AdminService        *service.AdminService
 	AuthService         *service.AuthService
 	AdminUserService    *service.AdminUserService
@@ -38,6 +39,7 @@ type Server struct {
 	mux                 *http.ServeMux
 	heartbeatService    *service.HeartbeatService
 	accessService       *service.AccessService
+	provisionService    *service.ProvisionService
 	adminService        *service.AdminService
 	authService         *service.AuthService
 	adminUserService    *service.AdminUserService
@@ -55,6 +57,7 @@ func NewServer(d Dependencies) *Server {
 		mux:                 mux,
 		heartbeatService:    d.HeartbeatService,
 		accessService:       d.AccessService,
+		provisionService:    d.ProvisionService,
 		adminService:        d.AdminService,
 		authService:         d.AuthService,
 		adminUserService:    d.AdminUserService,
@@ -67,6 +70,9 @@ func NewServer(d Dependencies) *Server {
 	// ── Device endpoints (ESP32 modules) ────────────────────────────────
 	mux.HandleFunc("POST /v1/heartbeat", s.handleHeartbeat)
 	mux.HandleFunc("POST /v1/access_request", s.handleAccessRequest)
+	if d.ProvisionService != nil {
+		mux.HandleFunc("POST /v1/provision_credential", s.handleProvisionCredential)
+	}
 
 	// ── Admin auth endpoints (no permission guard — open to any caller) ─
 	if d.AuthService != nil {
@@ -298,6 +304,55 @@ func (s *Server) handleAccessRequest(w http.ResponseWriter, r *http.Request) {
 
 	if protoReq {
 		writeProto(w, http.StatusOK, accessResponseToProto(resp))
+	} else {
+		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
+func (s *Server) handleProvisionCredential(w http.ResponseWriter, r *http.Request) {
+	var req types.ProvisionCredentialRequest
+	protoReq := isProtobuf(r)
+
+	if protoReq {
+		var pbReq pb.ProvisionCredentialRequest
+		if err := readProto(r, &pbReq); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_proto", "invalid protobuf body")
+			return
+		}
+		req = provisionRequestFromProto(&pbReq)
+	} else {
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_json", "invalid JSON body")
+			return
+		}
+	}
+
+	resp, err := s.provisionService.Provision(r.Context(), req)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidModuleID):
+			writeError(w, http.StatusBadRequest, "invalid_module_id", err.Error())
+			return
+		case errors.Is(err, service.ErrProvisionCredentialHashRequired):
+			writeError(w, http.StatusBadRequest, "invalid_credential_hash", err.Error())
+			return
+		default:
+			s.logger.Printf("provision_credential error: %v", err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "unexpected server error")
+			return
+		}
+	}
+
+	if !resp.Known {
+		writeError(w, http.StatusForbidden, "unknown_module", "module is not registered")
+		return
+	}
+
+	if protoReq {
+		writeProto(w, http.StatusOK, provisionResponseToProto(resp))
 	} else {
 		writeJSON(w, http.StatusOK, resp)
 	}
