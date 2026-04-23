@@ -30,6 +30,7 @@ type Dependencies struct {
 	Logger           *log.Logger
 	HeartbeatService *service.HeartbeatService
 	AccessService    *service.AccessService
+	ProvisionService *service.ProvisionService
 }
 
 // Server implements pb.PortunusServiceServer.
@@ -39,6 +40,7 @@ type Server struct {
 	logger           *log.Logger
 	heartbeatService *service.HeartbeatService
 	accessService    *service.AccessService
+	provisionService *service.ProvisionService
 }
 
 // NewServer creates a gRPC server handler that delegates to the service layer.
@@ -47,6 +49,7 @@ func NewServer(d Dependencies) *Server {
 		logger:           d.Logger,
 		heartbeatService: d.HeartbeatService,
 		accessService:    d.AccessService,
+		provisionService: d.ProvisionService,
 	}
 }
 
@@ -126,4 +129,57 @@ func (s *Server) RequestAccess(ctx context.Context, req *pb.AccessRequest) (*pb.
 		ModuleId:   resp.ModuleID,
 		ServerTime: resp.ServerTime,
 	}, nil
+}
+
+// ─── Provision ──────────────────────────────────────────────────────────────
+
+func (s *Server) ProvisionCredential(ctx context.Context, req *pb.ProvisionCredentialRequest) (*pb.ProvisionCredentialResponse, error) {
+	domainReq := types.ProvisionCredentialRequest{
+		OperatorUUID:   req.GetOperatorUuid(),
+		ModuleID:       req.GetModuleId(),
+		CredentialHash: req.GetCredentialHash(),
+		RoleID:         req.GetRoleId(),
+	}
+
+	resp, err := s.provisionService.Provision(ctx, domainReq)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidModuleID):
+			return nil, status.Errorf(codes.InvalidArgument, "invalid module_id: %v", err)
+		case errors.Is(err, service.ErrProvisionCredentialHashRequired):
+			return nil, status.Errorf(codes.InvalidArgument, "invalid credential_hash: %v", err)
+		default:
+			s.logger.Printf("provision_credential gRPC error: %v", err)
+			return nil, status.Errorf(codes.Internal, "unexpected server error")
+		}
+	}
+
+	if !resp.Known {
+		return nil, status.Errorf(codes.NotFound, "unknown module")
+	}
+
+	return &pb.ProvisionCredentialResponse{
+		MemberUuid: resp.MemberUUID,
+		Status:     domainProvisionStatusToProto(resp.Status),
+		Detail:     resp.Detail,
+	}, nil
+}
+
+func domainProvisionStatusToProto(s types.ProvisionStatus) pb.ProvisionStatus {
+	switch s {
+	case types.ProvisionStatusSuccess:
+		return pb.ProvisionStatus_PROVISION_STATUS_SUCCESS
+	case types.ProvisionStatusDuplicateActive:
+		return pb.ProvisionStatus_PROVISION_STATUS_DUPLICATE_ACTIVE
+	case types.ProvisionStatusDuplicateInactive:
+		return pb.ProvisionStatus_PROVISION_STATUS_DUPLICATE_INACTIVE
+	case types.ProvisionStatusDuplicatePending:
+		return pb.ProvisionStatus_PROVISION_STATUS_DUPLICATE_PENDING
+	case types.ProvisionStatusUnauthorized:
+		return pb.ProvisionStatus_PROVISION_STATUS_UNAUTHORIZED
+	case types.ProvisionStatusInvalidRole:
+		return pb.ProvisionStatus_PROVISION_STATUS_INVALID_ROLE
+	default:
+		return pb.ProvisionStatus_PROVISION_STATUS_UNSPECIFIED
+	}
 }

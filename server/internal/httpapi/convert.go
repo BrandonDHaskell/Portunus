@@ -65,3 +65,41 @@ func accessResponseToProto(r types.AccessResponse) *pb.AccessResponse {
 		ServerTime: r.ServerTime,
 	}
 }
+
+// ── Provision ────────────────────────────────────────────────────────────────
+
+func provisionRequestFromProto(p *pb.ProvisionCredentialRequest) types.ProvisionCredentialRequest {
+	return types.ProvisionCredentialRequest{
+		OperatorUUID:   p.GetOperatorUuid(),
+		ModuleID:       p.GetModuleId(),
+		CredentialHash: p.GetCredentialHash(),
+		RoleID:         p.GetRoleId(),
+	}
+}
+
+func provisionResponseToProto(r types.ProvisionCredentialResponse) *pb.ProvisionCredentialResponse {
+	return &pb.ProvisionCredentialResponse{
+		MemberUuid: r.MemberUUID,
+		Status:     domainProvisionStatusToProto(r.Status),
+		Detail:     r.Detail,
+	}
+}
+
+func domainProvisionStatusToProto(s types.ProvisionStatus) pb.ProvisionStatus {
+	switch s {
+	case types.ProvisionStatusSuccess:
+		return pb.ProvisionStatus_PROVISION_STATUS_SUCCESS
+	case types.ProvisionStatusDuplicateActive:
+		return pb.ProvisionStatus_PROVISION_STATUS_DUPLICATE_ACTIVE
+	case types.ProvisionStatusDuplicateInactive:
+		return pb.ProvisionStatus_PROVISION_STATUS_DUPLICATE_INACTIVE
+	case types.ProvisionStatusDuplicatePending:
+		return pb.ProvisionStatus_PROVISION_STATUS_DUPLICATE_PENDING
+	case types.ProvisionStatusUnauthorized:
+		return pb.ProvisionStatus_PROVISION_STATUS_UNAUTHORIZED
+	case types.ProvisionStatusInvalidRole:
+		return pb.ProvisionStatus_PROVISION_STATUS_INVALID_ROLE
+	default:
+		return pb.ProvisionStatus_PROVISION_STATUS_UNSPECIFIED
+	}
+}

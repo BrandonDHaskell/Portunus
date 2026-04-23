@@ -116,6 +116,9 @@ func main() {
 	expiryWorker.Start(ctx)
 	defer expiryWorker.Stop()
 
+	// Provisioning service: handles device-initiated provisioning from PROVISIONING_CONSOLE modules.
+	provisionSvc := service.NewProvisionService(registry, memberAccessStore, roleStore, adminUserStore)
+
 	// Admin service for module/credential/door management via REST API.
 	adminSvc := service.NewAdminService(moduleAdminStore, credentialStore, credentialHashSecret)
 
@@ -137,6 +140,7 @@ func main() {
 		Addr:                cfg.HTTPAddr,
 		HeartbeatService:    heartbeatSvc,
 		AccessService:       accessSvc,
+		ProvisionService:    provisionSvc,
 		AdminService:        adminSvc,
 		AuthService:         authSvc,
 		AdminUserService:    adminUserSvc,
@@ -211,6 +215,7 @@ func main() {
 			Logger:           logger,
 			HeartbeatService: heartbeatSvc,
 			AccessService:    accessSvc,
+			ProvisionService: provisionSvc,
 		})
 		pb.RegisterPortunusServiceServer(grpcServer, grpcHandler)
 		reflection.Register(grpcServer)
