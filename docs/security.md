@@ -2,7 +2,7 @@
 
 Current security model, implemented controls, and known limitations for the Portunus snapshot in this repository.
 
-**Last updated:** March 2026
+**Last updated:** April 2026
 
 ---
 
@@ -10,7 +10,7 @@ Current security model, implemented controls, and known limitations for the Port
 
 Portunus is a LAN-first access-control system built around two main pieces:
 
-- an **ESP32 access module** that reads an RFID card, monitors door hardware, and sends requests to the server
+- an **ESP32 access module** that reads an RFID credential, monitors door hardware, and sends requests to the server
 - a **Go server** that decides whether access should be granted and records operational state in SQLite
 
 In the current codebase, Portunus uses a layered security model:
@@ -18,10 +18,10 @@ In the current codebase, Portunus uses a layered security model:
 1. **TLS** protects traffic in transit when enabled.
 2. **HMAC-SHA256 request signing** authenticates device-originated requests when configured.
 3. **Module registry checks** ensure only commissioned, enabled, non-revoked modules are treated as known.
-4. **Card policy checks** ensure only allowed cards are granted access.
-5. **Bearer-token auth** protects the admin API when configured.
+4. **Credential and member policy checks** ensure only authorized credentials are granted access. The production path checks member status, enrollment state, and per-module authorization; legacy paths fall back to a credential allowlist or an env-var allowlist.
+5. **Session-based admin auth** protects the admin API through cookie-backed server-side sessions.
 
-A key detail in the current implementation: several controls are **configuration-dependent**. In development, the server can run without TLS, without HMAC enforcement, and without admin API auth. In production-style deployments, those should all be enabled explicitly.
+A key detail in the current implementation: several controls are **configuration-dependent**. In development, the server can run without TLS, without HMAC enforcement, and without a credential hash secret. In production-style deployments, those should all be enabled explicitly.
 
 ---
 
@@ -37,9 +37,11 @@ A key detail in the current implementation: several controls are **configuration
 | Mozilla CA bundle fallback | Implemented | Firmware TLS configuration |
 | Skip-verify dev mode | Implemented | `CONFIG_PORTUNUS_TLS_SKIP_VERIFY` |
 | HMAC-SHA256 on device requests | Implemented, optional on server | HTTP middleware and gRPC interceptor |
-| Admin Bearer-token auth | Implemented, optional on server | HTTP admin middleware |
+| Admin session-cookie auth | Implemented | Login/logout/change-password endpoints; `portunus_session` cookie |
 | Module commissioning / enabled / revoked checks | Implemented | SQLite-backed `DeviceStore.IsKnown()` |
-| SHA-256 hashing of card IDs | Implemented | Card registration, access checks, audit events |
+| Keyed HMAC-SHA256 hashing of credential IDs | Implemented | Credential registration, access checks, audit events |
+| On-device credential hashing (PROVISIONING_CONSOLE) | Implemented | mbedTLS SHA-256 on ESP32 before transmission |
+| Member + module authorization access path | Implemented | Production access decision path since PR 4 |
 | Request body size limits | Implemented | HTTP API handlers |
 | Read-header timeout | Implemented | HTTP server |
 | Serialized SQLite writes | Implemented | DB worker |
@@ -60,7 +62,7 @@ The current codebase is aimed at resisting:
 - casual LAN misuse
 - unauthorized module impersonation without the shared secret
 - accidental or unauthorized admin API access when the admin key is set
-- casual database inspection of stored card data
+- casual database inspection of stored credential hash data
 
 It is **not** designed to fully resist:
 
@@ -209,50 +211,94 @@ Unknown modules are denied access, but the server still updates its last-seen ti
 
 ---
 
-## Card handling and privacy
+## Credential handling and privacy
 
-Portunus does **not** persist raw RFID card IDs in the database.
+Portunus does **not** persist raw RFID credential IDs in the database.
 
-### Registration flow
+### Hashing model
 
-When a card is registered through the admin API, the server:
+Credential IDs are hashed with **keyed HMAC-SHA256** using the server secret configured in `PORTUNUS_CREDENTIAL_HASH_SECRET`:
 
-1. receives the raw `card_id`
-2. computes `SHA-256(card_id)`
-3. stores the 32-byte hash in the `cards` table
+```
+credential_hash = HMAC-SHA256(PORTUNUS_CREDENTIAL_HASH_SECRET, credential_id)
+```
+
+This is an improvement over bare SHA-256: without the server secret, a stolen database cannot be attacked offline with pre-computed tables or brute force against known UID spaces.
+
+`PORTUNUS_CREDENTIAL_HASH_SECRET` is required in `prod` mode. Generate a suitable key with:
+
+```bash
+openssl rand -hex 32
+```
+
+### Admin registration flow
+
+When a credential is registered through the admin API, the server:
+
+1. receives the raw `credential_id`
+2. computes `HMAC-SHA256(secret, credential_id)`
+3. stores the 32-byte hash in the `credentials` table
 4. returns the hex form of that hash in the API response
+
+### PROVISIONING_CONSOLE enrollment flow
+
+When a credential is enrolled through a PROVISIONING_CONSOLE module, the firmware:
+
+1. reads the second credential scan
+2. computes `SHA-256(credential_id)` **on-device** using mbedTLS before transmitting
+3. sends the hash (not the raw ID) to `POST /v1/provision_credential`
+
+The server then re-hashes using HMAC-SHA256 to produce the stored hash. Raw credential IDs never leave the device.
 
 ### Access decision flow
 
-When an access request arrives, the server:
+When an access request arrives:
 
-1. extracts the raw card ID from the request
-2. computes `SHA-256(card_id)`
-3. checks whether that hash exists and is allowed in the `cards` table
+1. the server extracts the raw `credential_id` from the request
+2. computes `HMAC-SHA256(secret, credential_id)`
+3. checks the hash against the `credentials` table (legacy path) or `member_access` (production path)
 
 ### Audit trail
 
-The current access-event write path also stores the hashed card ID in `access_events.card_id_hash` when a card ID is present.
+The access-event write path stores the HMAC-SHA256 hash in `access_events.credential_hash` when a credential ID is present. Raw IDs are never written to audit records.
 
-### Limitation
+### Remaining limitation
 
-This is privacy-improving, but it is not equivalent to password hashing. RFID UIDs are small enough that a motivated attacker who obtains the database could attempt offline guessing. For the current Portunus threat model, the bigger practical risk remains card cloning rather than database cryptanalysis.
+Keyed HMAC prevents offline dictionary attacks against a stolen database, but RFID UID cloning at the physical layer is still a risk. The server cannot distinguish a cloned credential from the original. For the current Portunus threat model, physical card cloning remains the more practical attack surface.
 
 ---
 
 ## Admin API security
 
-The admin API is protected separately from the device API.
+The admin API uses **session-cookie-based authentication**, separate from the device request HMAC model.
 
-When `PORTUNUS_ADMIN_API_KEY` is set, `/admin/v1/*` endpoints require:
+### Session auth flow
 
-```text
-Authorization: Bearer <key>
-```
+1. A client `POST`s to `/admin/v1/login` with `{"username": "...", "password": "..."}`.
+2. The server validates the password against the bcrypt hash in `admin_users`.
+3. On success, the server creates a session row in the `sessions` SQLite table and sets a `portunus_session` cookie:
+   - `HttpOnly` — not accessible from JavaScript
+   - `Secure` — only sent over HTTPS
+   - `SameSite=Strict` — not sent in cross-site requests
+4. Subsequent requests to any `/admin/v1/*` or `/admin/ui/*` route are authenticated by reading the session ID from the cookie and verifying it against the `sessions` table.
+5. `POST /admin/v1/logout` deletes the session row and clears the cookie.
+6. `POST /admin/v1/change-password` is a session-authenticated endpoint that verifies the current password before updating the bcrypt hash.
 
-If `PORTUNUS_ADMIN_API_KEY` is empty, admin routes are not protected by Bearer-token auth. That may be acceptable for isolated local development, but it should not be treated as secure deployment.
+### Forced password reset
 
-Admin routes do **not** use HMAC request signing.
+The `admin_users.must_change_pw` flag is set to `1` on new accounts. An account in this state can authenticate, but any request other than `POST /admin/v1/change-password` is rejected until the password is changed. This enforces a password reset on the bootstrap admin account before the UI can be used.
+
+### Admin accounts and RBAC
+
+Admin users are linked to RBAC roles via `admin_users.role_id`. The role controls which named permissions the account holds. An account with `enabled = 0` cannot log in regardless of credentials or session state.
+
+### Admin web UI
+
+The admin web UI served at `/admin/ui/` uses the same session cookie as the API. Unauthenticated requests to the UI redirect to the login page.
+
+### What is not used for admin routes
+
+Admin routes do **not** use HMAC request signing (`X-Portunus-Sig`). HMAC is a device-to-server authentication mechanism only.
 
 ---
 
@@ -345,10 +391,11 @@ For the current codebase, the strongest practical setup is:
 
 - set `PORTUNUS_TLS_CERT_FILE` and `PORTUNUS_TLS_KEY_FILE`
 - set `PORTUNUS_HMAC_SECRET`
-- set `PORTUNUS_ADMIN_API_KEY`
+- set `PORTUNUS_CREDENTIAL_HASH_SECRET` (generate with `openssl rand -hex 32`)
 - leave `PORTUNUS_ALLOW_ALL` unset or `false`
 - commission modules through the admin API
-- register cards in the database instead of relying on legacy env-var allowlists
+- change the bootstrap admin password on first login (enforced by `must_change_pw`)
+- enroll members and grant per-module authorizations instead of relying on legacy credential or env-var allowlists
 
 ### Firmware
 
@@ -373,6 +420,7 @@ To stay aligned with the current repository, this document does **not** claim th
 - hardware-backed secret protection on the firmware side
 - strong anti-replay at the application layer
 - cryptographically strong smart-card authentication
+- a completed `POST /v1/provision_credential` server endpoint (called by PROVISIONING_CONSOLE firmware but not yet implemented)
 
 Those may be good next steps, but they are not the current implemented baseline.
 
@@ -385,4 +433,4 @@ Those may be good next steps, but they are not the current implemented baseline.
 - [Server setup](setup_server.md)
 - [Firmware setup](setup_firmware.md)
 - [Access module setup and architecture](../access_module/README.md)
-- [Shared secrets setup](../access_module/shared_secrets_setup.md)
+- [Shared secrets setup](shared_secrets_setup.md)

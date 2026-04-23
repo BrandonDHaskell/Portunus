@@ -2,7 +2,7 @@
 
 Get the Portunus server running on a Debian-based Linux machine (desktop dev box or Raspberry Pi 5).
 
-**Last updated:** March 2026
+**Last updated:** April 2026
 
 ---
 
@@ -103,7 +103,7 @@ The server is configured entirely through environment variables. No config file 
 |---|---|---|
 | `PORTUNUS_ENV` | `dev` or `prod`. Dev mode seeds the database with a default module and door on startup. Prod mode skips seeding. | `prod` |
 | `PORTUNUS_HMAC_SECRET` | Pre-shared key for HMAC-SHA256 request signing. Every device endpoint POST must include a valid `X-Portunus-Sig` header computed with this secret. Must match `CONFIG_PORTUNUS_HMAC_SECRET` in the firmware. Generate with `openssl rand -hex 32`. | `a3f1...` (64 hex chars) |
-| `PORTUNUS_ADMIN_API_KEY` | Bearer token protecting all `/admin/v1/*` routes. Generate with `openssl rand -hex 32`. | `b7e2...` (64 hex chars) |
+| `PORTUNUS_CREDENTIAL_HASH_SECRET` | HMAC key used to hash credential IDs before storage. Prevents rainbow-table attacks against a stolen database. Generate with `openssl rand -hex 32`. Required in prod — server refuses to start without it. | `c9d4...` (64 hex chars) |
 | `PORTUNUS_TLS_CERT_FILE` | Path to the PEM-encoded server certificate. | `./certs/server.pem` |
 | `PORTUNUS_TLS_KEY_FILE` | Path to the PEM-encoded server private key. | `./certs/server.key` |
 
@@ -115,10 +115,11 @@ The server is configured entirely through environment variables. No config file 
 | `PORTUNUS_GRPC_ADDR` | *(empty — disabled)* | Listen address for the gRPC server. Set to `:50051` to enable. |
 | `PORTUNUS_DB_PATH` | `./data/portunus.db` | Path to the SQLite database file. The parent directory is created automatically. |
 | `PORTUNUS_KNOWN_MODULES` | *(empty)* | Comma-separated module IDs to pre-register in dev mode (e.g. `door-001,door-002`). Only used when `PORTUNUS_ENV=dev`. |
-| `PORTUNUS_ALLOW_ALL` | `false` | When `true`, all card taps are granted. **Dev/testing only.** |
-| `PORTUNUS_ALLOWED_CARD_IDS` | *(empty)* | Comma-separated card UIDs for the legacy env-var allowlist. Superseded by DB-backed card registration via the admin API. |
+| `PORTUNUS_ALLOW_ALL` | `false` | When `true`, all credentials are granted access. **Dev/testing only.** |
+| `PORTUNUS_ALLOWED_CREDENTIAL_IDS` | *(empty)* | Comma-separated raw credential IDs for the legacy env-var allowlist. Superseded by the DB-backed member + authorization path. |
 | `PORTUNUS_HEARTBEAT_RETENTION_DAYS` | `30` | Heartbeat records older than this are pruned automatically. Set to `0` to keep forever. |
-| `PORTUNUS_PRUNE_INTERVAL_HOURS` | `6` | How often the background pruner runs. |
+| `PORTUNUS_PRUNE_INTERVAL_HOURS` | `6` | How often the background heartbeat pruner runs. |
+| `PORTUNUS_EXPIRY_WORKER_INTERVAL_MINUTES` | `60` | How often the background member expiry sweep runs. |
 
 ### Dev quick-start (minimal)
 
@@ -129,7 +130,7 @@ cd server
 PORTUNUS_ENV=dev PORTUNUS_ALLOW_ALL=true go run ./cmd/portunus-server
 ```
 
-This starts the server on `:8080` with plain HTTP, seeds a default `door-001` module, and grants all card taps. The database is created at `./data/portunus.db`.
+This starts the server on `:8080` with plain HTTP, seeds a default `door-001` module, and grants all credential checks. The database is created at `./data/portunus.db`.
 
 ### Production example
 
@@ -141,7 +142,7 @@ export PORTUNUS_DB_PATH=/var/lib/portunus/portunus.db
 export PORTUNUS_TLS_CERT_FILE=/etc/portunus/certs/server.pem
 export PORTUNUS_TLS_KEY_FILE=/etc/portunus/certs/server.key
 export PORTUNUS_HMAC_SECRET=<your-64-char-hex-secret>
-export PORTUNUS_ADMIN_API_KEY=<your-64-char-hex-key>
+export PORTUNUS_CREDENTIAL_HASH_SECRET=<your-64-char-hex-secret>
 export PORTUNUS_HEARTBEAT_RETENTION_DAYS=90
 
 ./server/bin/portunus-server
@@ -314,7 +315,7 @@ PORTUNUS_DB_PATH=/var/lib/portunus/portunus.db
 PORTUNUS_TLS_CERT_FILE=/etc/portunus/certs/server.pem
 PORTUNUS_TLS_KEY_FILE=/etc/portunus/certs/server.key
 PORTUNUS_HMAC_SECRET=<your-secret-here>
-PORTUNUS_ADMIN_API_KEY=<your-admin-key-here>
+PORTUNUS_CREDENTIAL_HASH_SECRET=<your-credential-hash-secret-here>
 PORTUNUS_HEARTBEAT_RETENTION_DAYS=90
 EOF
 
@@ -379,23 +380,45 @@ curl -s -X POST https://localhost:8443/v1/heartbeat \
 
 ### Admin API
 
-Register a card:
+The admin API uses session-cookie authentication. Log in first to obtain a session cookie, then use the cookie jar for subsequent requests.
+
+Log in and save the session cookie:
 
 ```bash
-curl -s -X POST https://localhost:8443/admin/v1/cards \
+curl -s -c /tmp/portunus-cookies.txt \
+  -X POST https://localhost:8443/admin/v1/login \
   --cacert certs/ca.pem \
-  -H "Authorization: Bearer $PORTUNUS_ADMIN_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"card_id": "04:A3:2B:1C", "tag": "Brandon front-door key"}' | jq .
+  -d '{"username": "admin", "password": "<your-password>"}' | jq .
+```
+
+Register a credential (using the saved cookie):
+
+```bash
+curl -s -b /tmp/portunus-cookies.txt \
+  -X POST https://localhost:8443/admin/v1/credentials \
+  --cacert certs/ca.pem \
+  -H "Content-Type: application/json" \
+  -d '{"credential_id": "04:A3:2B:1C", "tag": "Brandon front-door key"}' | jq .
 ```
 
 List modules:
 
 ```bash
-curl -s https://localhost:8443/admin/v1/modules \
-  --cacert certs/ca.pem \
-  -H "Authorization: Bearer $PORTUNUS_ADMIN_API_KEY" | jq .
+curl -s -b /tmp/portunus-cookies.txt \
+  https://localhost:8443/admin/v1/modules \
+  --cacert certs/ca.pem | jq .
 ```
+
+Log out:
+
+```bash
+curl -s -b /tmp/portunus-cookies.txt \
+  -X POST https://localhost:8443/admin/v1/logout \
+  --cacert certs/ca.pem | jq .
+```
+
+For plain HTTP dev mode, omit `--cacert certs/ca.pem` and replace `https://localhost:8443` with `http://localhost:8080`.
 
 See [docs/api.md](api.md) for the full endpoint reference.
 
@@ -407,10 +430,11 @@ See [docs/api.md](api.md) for the full endpoint reference.
 |---|---|---|
 | `PORTUNUS_ENV` | `dev` | `prod` |
 | TLS | Optional (plain HTTP on `:8080`) | Required (`PORTUNUS_TLS_CERT_FILE` + `PORTUNUS_TLS_KEY_FILE`) |
-| HMAC signing | Optional (can omit `PORTUNUS_HMAC_SECRET`) | Required — rejects unsigned requests with 401 |
-| Admin API auth | Optional (can omit `PORTUNUS_ADMIN_API_KEY`) | Required — rejects unauthenticated admin requests |
+| HMAC signing | Optional (can omit `PORTUNUS_HMAC_SECRET`) | Required — rejects unsigned device requests with 401 |
+| Credential hash secret | Optional (can omit `PORTUNUS_CREDENTIAL_HASH_SECRET`) | Required — server refuses to start without it |
+| Admin API auth | Session-cookie auth always active; bootstrap account created on first start | Session-cookie auth; change bootstrap password on first login (`must_change_pw` enforced) |
 | Database seeding | Auto-seeds a default door and module(s) on startup | No seeding — all entities created via admin API |
-| `PORTUNUS_ALLOW_ALL` | Useful for testing (grants all cards) | Must be `false` or unset |
+| `PORTUNUS_ALLOW_ALL` | Useful for testing (grants all credentials) | Must be `false` or unset |
 | Database path | `./data/portunus.db` (relative to working dir) | `/var/lib/portunus/portunus.db` (absolute, owned by service user) |
 | Process management | `go run` or `./bin/portunus-server` in a terminal | systemd service with auto-restart |
 | Logging | Visible in terminal stdout | `journalctl -u portunus-server` |

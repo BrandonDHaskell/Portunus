@@ -1,5 +1,7 @@
 # Portunus Access Module — TLS and Shared Secret Setup
 
+**Last updated:** April 2026
+
 This guide explains how the current Portunus snapshot secures communication
 between the ESP32 access module and the Go server.
 
@@ -26,14 +28,23 @@ is the same:
 - **TLS** protects the channel.
 - **HMAC** authenticates the request body.
 
+There is also a third secret that lives entirely on the server:
+
+3. **`PORTUNUS_CREDENTIAL_HASH_SECRET`** (server-only — not shared with firmware)
+   - Credentials are stored as `HMAC-SHA256(secret, credential_id)` rather than bare SHA-256.
+   - This prevents offline dictionary attacks against a stolen database.
+   - Required in `prod` mode. Generate with `openssl rand -hex 32`.
+   - The PROVISIONING_CONSOLE firmware variant hashes credentials on-device with bare SHA-256 before transmitting; the server re-hashes with its HMAC key on receipt. Neither raw credential IDs nor on-device hashes are stored.
+
 ## What this document covers
 
-This file focuses only on the security material shared between the firmware and
-server:
+This file focuses on the security material shared between the firmware and
+server, plus the server-side credential hash secret:
 
 - generating and installing TLS certificates for the current repo workflow
 - embedding a private CA certificate into the firmware for LAN use
 - generating and configuring the HMAC shared secret
+- generating and configuring the credential hash secret (server-only)
 - current Kconfig settings that control TLS, CA pinning, HMAC, and optional
   gRPC transport
 
@@ -258,6 +269,19 @@ export PORTUNUS_HMAC_SECRET="<your-64-char-hex-secret>"
 When this environment variable is set, the current server enables HMAC
 verification for inbound POSTs and for gRPC requests if gRPC is enabled.
 
+### 3.6 Credential hash secret (server-only)
+
+The credential hash secret is separate from the HMAC secret and requires no firmware configuration. It controls how credential IDs are hashed before storage:
+
+```bash
+openssl rand -hex 32   # generate
+export PORTUNUS_CREDENTIAL_HASH_SECRET="<your-64-char-hex-secret>"
+```
+
+This variable is required in `prod` mode — the server will refuse to start without it. In `dev` mode it is optional; when absent, credential IDs are still hashed but without a key (bare SHA-256).
+
+Keep this value secret and consistent: changing it invalidates all stored credential hashes and requires re-registration of every credential.
+
 ### 3.4 Firmware HMAC options
 
 In `menuconfig`, navigate to:
@@ -370,6 +394,7 @@ export PORTUNUS_TLS_CERT_FILE="$PWD/certs/server.pem"
 export PORTUNUS_TLS_KEY_FILE="$PWD/certs/server.key"
 
 export PORTUNUS_HMAC_SECRET="<your-64-char-hex-secret>"
+export PORTUNUS_CREDENTIAL_HASH_SECRET="<your-64-char-hex-secret>"
 
 # Optional gRPC listener
 export PORTUNUS_GRPC_ADDR=:50051
@@ -441,10 +466,12 @@ CA, the existing firmware CA pin remains valid.
 - TLS support in firmware
 - custom CA pinning for LAN deployments
 - fallback to ESP-IDF certificate bundle for public CAs
-- HMAC signing in firmware
-- HMAC verification in the Go server
+- HMAC signing in firmware and verification in the Go server
+- keyed HMAC-SHA256 credential hashing on the server (`PORTUNUS_CREDENTIAL_HASH_SECRET`)
+- on-device SHA-256 hashing of credentials in PROVISIONING_CONSOLE firmware before transmission
 - optional gRPC transport using the same trust material
 - certificate generation script in the repo
+- `sdkconfig.defaults`, `sdkconfig.defaults.dev`, `sdkconfig.defaults.prod`, and `sdkconfig.defaults.ci` overlay files committed in the repo
 
 ### Not a finished repo workflow yet
 
@@ -452,11 +479,6 @@ CA, the existing firmware CA pin remains valid.
 - flash encryption enablement workflow
 - device-unique secret provisioning
 - hardware-backed key storage on the module
-- production sdkconfig overlay files committed in the repo
-
-The `Taskfile` includes `firmware:build:dev` and `firmware:build:prod`, but the
-expected `sdkconfig.defaults*` overlay files are not present in this snapshot.
-Use `menuconfig` and your local build environment for real security settings.
 
 ---
 
@@ -464,13 +486,20 @@ Use `menuconfig` and your local build environment for real security settings.
 
 For the current Portunus snapshot, use this baseline:
 
+Firmware:
+
 - `CONFIG_PORTUNUS_USE_TLS=y`
 - `CONFIG_PORTUNUS_TLS_SKIP_VERIFY=n`
 - `CONFIG_PORTUNUS_TLS_USE_CUSTOM_CA=y` for LAN/private CA deployments
 - `CONFIG_PORTUNUS_HMAC_ENABLED=y`
 - a fresh 32-byte HMAC secret generated with OpenSSL
 - repo-generated CA and server cert for LAN use
-- optional gRPC only after confirming `PORTUNUS_GRPC_ADDR` is active on the
-  server
+- optional gRPC only after confirming `PORTUNUS_GRPC_ADDR` is active on the server
+
+Server:
+
+- `PORTUNUS_HMAC_SECRET` — must exactly match the firmware HMAC secret
+- `PORTUNUS_CREDENTIAL_HASH_SECRET` — server-only; generate independently with `openssl rand -hex 32`
+- `PORTUNUS_TLS_CERT_FILE` + `PORTUNUS_TLS_KEY_FILE` — use the certs generated by `task certs:generate`
 
 That is the security setup that best matches the current code.
