@@ -9,27 +9,35 @@ Named after the Roman god of keys and doors.
 ## How it works
 
 ```
- ┌────────────┐                                    ┌────────────────┐
- │   Card     │                                    │  Admin (curl)  │
- │   tap      │                                    │                │
- └─────┬──────┘                                    └───────┬────────┘
-       │                                                   │
-       ▼                                                   ▼
- ┌──────────────┐   protobuf + TLS + HMAC    ┌──────────────────────┐
- │ Access Module│◄──────────────────────────►│   Portunus Server    │
- │   (ESP32)    │                            │       (Go)           │
- │              │   heartbeat ──────────►    │                      │
- │ MFRC522 RFID │   access request ──────►   │  SQLite DB           │
- │ Door strike  │   ◄────── grant/deny       │  Device registry     │
- │ Reed switch  │                            │  Card policy engine  │
- │ Status LED   │                            │  Audit log           │
- └──────────────┘                            │  Admin REST API      │
-                                             └──────────────────────┘
+ ┌────────────────┐                               ┌─────────────────────┐
+ │  Credential    │                               │  Admin Web UI / curl │
+ │  tap           │                               │                      │
+ └───────┬────────┘                               └──────────┬───────────┘
+         │                                                   │ session cookie
+         ▼                                                   ▼
+ ┌──────────────────┐  protobuf + TLS + HMAC  ┌──────────────────────────┐
+ │  Access Module   │◄───────────────────────►│     Portunus Server      │
+ │    (ESP32)       │                         │         (Go)             │
+ │                  │  heartbeat ──────────►  │                          │
+ │  MFRC522 RFID    │  access request ──────► │  SQLite DB               │
+ │  Door strike     │  ◄────── grant/deny     │  Device registry         │
+ │  Reed switch     │                         │  Member & credential     │
+ │  Status LED      │                         │    policy engine         │
+ │                  │                         │  Audit log               │
+ └──────────────────┘                         │  Admin REST API + Web UI │
+                                              └──────────────────────────┘
 ```
 
-1. A card is tapped on the RFID reader at the door.
-2. The access module sends the card UID to the server over TLS, signed with HMAC-SHA256.
-3. The server checks the module's registration, hashes the card UID, and evaluates it against the card policy.
+Two firmware variants are supported, selected at compile time:
+
+- **ACCESS_POINT** — standard door control: reads a credential, asks the server, actuates the door strike.
+- **PROVISIONING_CONSOLE** — enrollment console: two-scan flow (operator + new credential), hashes on-device, submits a provisioning request to the server.
+
+ACCESS_POINT runtime flow:
+
+1. A credential is tapped on the RFID reader at the door.
+2. The access module sends the credential UID to the server over TLS, signed with HMAC-SHA256.
+3. The server checks the module's registration, hashes the credential with HMAC-SHA256, and evaluates it against the member and authorization policy.
 4. The server returns grant or deny. The module actuates the door strike and shows LED feedback.
 5. Every decision is recorded in an append-only audit log.
 
@@ -37,26 +45,30 @@ Named after the Roman god of keys and doors.
 
 ## Current status
 
-**v1 MVP — functional end-to-end.** The full card-tap-to-door-unlock loop is working on hardware.
+**v1 MVP — functional end-to-end.** The full credential-tap-to-door-unlock loop is working on hardware, with a full member management system and admin web UI.
 
 ### What's working
 
-- RFID card reading (MFRC522 via SPI) with anti-re-read debounce
+- RFID credential reading (MFRC522 via SPI) with anti-re-read debounce
 - Door strike control with configurable hold timer and early re-lock on door close
 - Reed switch monitoring with software debounce
-- LED feedback patterns (granted, denied, card read, system ready, error)
-- System FSM with hardware abstraction interfaces and capability-based degradation
+- LED feedback patterns (granted, denied, credential read, system ready, error)
+- ACCESS_POINT `SystemFSM` with hardware abstraction interfaces and capability-based degradation
+- PROVISIONING_CONSOLE `ProvisioningFSM` — two-scan enrollment flow with on-device HMAC-SHA256 hashing
 - FreeRTOS event bus (queue-backed pub/sub) for all inter-component messaging
 - WiFi management with exponential-backoff reconnection
 - Server communication over HTTP/1.1 + protobuf with TLS and HMAC signing
 - gRPC transport (HTTP/2 + TLS via nghttp2, build-time selectable)
-- Go server with heartbeat ingestion, access decision engine, and admin REST API
-- SQLite persistence with auto-migration, serialized writes, and heartbeat pruning
-- Card registration with SHA-256 hashing (raw UIDs never stored)
+- Go server with heartbeat ingestion, access decision engine, member management, and admin REST API
+- Admin web UI at `/admin/ui/` for managing members, credentials, modules, and authorizations
+- Session-cookie-based admin authentication (login, logout, change-password) with forced first-login reset
+- Member and role-based access control (RBAC) — members, roles, permissions, and per-module authorization grants
+- SQLite persistence with auto-migration (11 migrations), serialized writes, and heartbeat pruning
+- Credential registration with keyed HMAC-SHA256 hashing (raw UIDs never stored)
 - Module commissioning, revocation, and door management via admin API
-- Full Kconfig-driven configuration (all pins, timing, security, network settings)
+- Full Kconfig-driven configuration (module variant, pins, timing, security, network settings)
 - Private CA certificate generation and firmware embedding for LAN TLS pinning
-- Cross-platform Taskfile with build, test, lint, format, proto gen, and cert management
+- Cross-platform Taskfile with build, test, lint, format, proto gen, cert management, and deploy
 
 ### Known limitations
 
@@ -64,7 +76,7 @@ Named after the Roman god of keys and doors.
 - MFRC522 authenticates by UID only (cloneable); acceptable for makerspace threat model
 - No offline/cached access policy when the server is unreachable (planned)
 - No OTA firmware updates (reflash via USB required)
-- No admin web UI (admin API is curl/CLI only)
+- `POST /v1/provision_credential` server endpoint is not yet implemented — PROVISIONING_CONSOLE firmware compiles and enrolls on-device, but the server-side handler is pending
 
 ---
 
@@ -84,7 +96,7 @@ go install github.com/go-task/task/v3/cmd/task@latest
 # Run tests
 task test:server
 
-# Start the server in dev mode (plain HTTP, all cards granted)
+# Start the server in dev mode (plain HTTP, all credentials granted)
 cd server
 PORTUNUS_ENV=dev PORTUNUS_ALLOW_ALL=true go run ./cmd/portunus-server
 ```
@@ -99,7 +111,7 @@ Requires [ESP-IDF 5.4+](https://docs.espressif.com/projects/esp-idf/en/stable/es
 # Source ESP-IDF environment
 . ~/esp/esp-idf/export.sh
 
-# Configure (WiFi credentials, server host, pin assignments)
+# Configure (module variant, WiFi credentials, server host, pin assignments)
 task firmware:menuconfig
 
 # Build and flash
@@ -119,17 +131,19 @@ Portunus/
 │   ├── api/portunus/v1/       Generated protobuf + gRPC Go stubs
 │   └── internal/
 │       ├── config/            Environment variable config
-│       ├── db/                SQLite open, migrate, write worker
-│       ├── httpapi/           HTTP handlers, middleware, admin API
+│       ├── db/                SQLite open, migrate, write worker (11 migrations)
+│       ├── httpapi/           HTTP handlers, middleware, admin API, admin web UI
 │       ├── grpcapi/           gRPC handlers, interceptors
 │       └── portunus/
-│           ├── service/       Business logic (heartbeat, access, admin)
+│           ├── service/       Business logic (heartbeat, access, members, RBAC, admin)
 │           ├── store/         Store interfaces + SQLite implementations
 │           └── types/         Domain types
 │
 ├── access_module/             ESP32-S3 firmware (ESP-IDF / C++)
-│   ├── main/                  Composition root
-│   ├── core/system_fsm/       Central state machine
+│   ├── main/                  Composition root (selects FSM via Kconfig)
+│   ├── core/
+│   │   ├── system_fsm/        ACCESS_POINT state machine
+│   │   └── provisioning_fsm/  PROVISIONING_CONSOLE two-scan enrollment FSM
 │   ├── components/
 │   │   ├── portunus_interfaces/   ICredentialReader, IAccessPoint, IFeedback
 │   │   ├── portunus_types/        Shared types (credential_t, events, errors)
