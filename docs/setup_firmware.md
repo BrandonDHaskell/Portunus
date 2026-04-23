@@ -6,7 +6,11 @@ Build, configure, flash, and test the ESP32-S3 firmware for the Portunus access 
 
 ## What the firmware does today
 
-The current access module firmware runs on an ESP32-S3 and provides:
+The firmware is built with **ESP-IDF** and uses **Kconfig** for Portunus-specific settings. Two firmware variants are supported, selected at compile time:
+
+### ACCESS_POINT (default)
+
+The standard door-control module. Provides:
 
 - MFRC522 RFID credential reading over SPI
 - door strike control over GPIO
@@ -22,7 +26,18 @@ The current access module firmware runs on an ESP32-S3 and provides:
 - HMAC-SHA256 request signing
 - a central `SystemFSM` that coordinates credential flow, access decisions, unlock timing, door-state handling, and feedback
 
-The firmware is built with **ESP-IDF** and uses **Kconfig** for Portunus-specific settings.
+### PROVISIONING_CONSOLE
+
+A two-scan credential enrollment console. No door-strike hardware required. Provides:
+
+- MFRC522 RFID credential reading over SPI
+- WiFi station connectivity
+- a `ProvisioningFSM` that implements the two-scan enrollment flow:
+  - scan 1: operator credential (must match the configured `PORTUNUS_OPERATOR_UUID`)
+  - scan 2: the new credential to enroll
+- on-device SHA-256 hashing of the new credential (via mbedTLS) before transmission
+- `POST /v1/provision_credential` submission to the Portunus server
+- HMAC-SHA256 request signing
 
 ---
 
@@ -35,6 +50,10 @@ access_module/
 ├── CMakeLists.txt
 ├── README.md
 ├── partitions.csv
+├── sdkconfig.defaults
+├── sdkconfig.defaults.dev
+├── sdkconfig.defaults.prod
+├── sdkconfig.defaults.ci
 ├── main/
 │   ├── CMakeLists.txt
 │   ├── Kconfig.projbuild
@@ -45,7 +64,8 @@ access_module/
 │   ├── portunus_proto/
 │   └── portunus_types/
 ├── core/
-│   └── system_fsm/
+│   ├── system_fsm/
+│   └── provisioning_fsm/
 ├── drivers/
 │   ├── access_point_gpio/
 │   ├── feedback_led/
@@ -61,7 +81,7 @@ access_module/
     └── proto_gen.py
 ```
 
-`main/main.cpp` is the composition root. It initializes the platform, constructs the enabled drivers and services, injects them into `SystemFSM`, and starts the runtime.
+`main/main.cpp` is the composition root. It initializes the platform, constructs the enabled drivers and services, and starts either `SystemFSM` (ACCESS_POINT) or `ProvisioningFSM` (PROVISIONING_CONSOLE) depending on the `PORTUNUS_MODULE_TYPE` Kconfig choice.
 
 ---
 
@@ -169,24 +189,15 @@ All Portunus-specific settings are defined in:
 access_module/main/Kconfig.projbuild
 ```
 
-### Important current-state note about dev/prod overlay builds
+### Dev and prod overlay builds
 
-The root `Taskfile.yml` defines these commands:
+The root `Taskfile.yml` defines:
 
-- `task firmware:build:dev`
-- `task firmware:build:prod`
+- `task firmware:build` — plain build using `sdkconfig` as edited by `menuconfig`
+- `task firmware:build:dev` — applies `sdkconfig.defaults` + `sdkconfig.defaults.dev` overlays
+- `task firmware:build:prod` — applies `sdkconfig.defaults` + `sdkconfig.defaults.prod` overlays; additionally injects `PORTUNUS_HMAC_SECRET` read from the repo-root `.env` file into a temporary `sdkconfig.defaults.secret` at build time
 
-Those commands expect `sdkconfig.defaults`, `sdkconfig.defaults.dev`, and `sdkconfig.defaults.prod` to exist under `access_module/`.
-
-Those files are **not present in this repository snapshot**.
-
-So, in the current state of the repo, the reliable configuration workflow is:
-
-1. use `menuconfig`
-2. save the generated `sdkconfig`
-3. build with `task firmware:build` or `idf.py build`
-
-Do not rely on the dev/prod overlay tasks unless you add those overlay files yourself.
+All four overlay files (`sdkconfig.defaults`, `sdkconfig.defaults.dev`, `sdkconfig.defaults.prod`, `sdkconfig.defaults.ci`) are committed in `access_module/`. The `firmware:build:prod` task reads `PORTUNUS_HMAC_SECRET` from `.env` via the Taskfile `dotenv` mechanism so the secret never needs to be committed to source control.
 
 ---
 
@@ -194,6 +205,7 @@ Do not rely on the dev/prod overlay tasks unless you add those overlay files you
 
 The current Kconfig menus are:
 
+- **Module Variant**
 - **Feature Toggles**
 - **Security Configuration**
 - **Transport Configuration**
@@ -204,6 +216,23 @@ The current Kconfig menus are:
 - **Door Configuration**
 - **Timing Configuration**
 - **Event Bus Configuration**
+
+### Module Variant
+
+The top-level variant choice selects which firmware role this module performs. Set this before configuring anything else.
+
+| Option | Value | Notes |
+|---|---|---|
+| `PORTUNUS_MODULE_TYPE_ACCESS_POINT` | choice | Default — standard door-control module using `SystemFSM` |
+| `PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE` | choice | Two-scan enrollment console using `ProvisioningFSM` |
+
+When `PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE` is selected, a **Provisioning Console Settings** submenu becomes visible:
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `PORTUNUS_PROVISION_TIMEOUT_MS` | int | `30000` | How long (ms) the console waits for the new credential after the operator scan before returning to idle. Range: 5000–120000. |
+| `PORTUNUS_OPERATOR_UUID` | string | `""` | UUID of the `member_access` record authorized to use this console. Must match a record with the `credential.provision_guest` permission on the server. Generate with `uuidgen`. |
+| `PORTUNUS_DEFAULT_ROLE_ID` | string | `"guest"` | `role_id` sent in every `ProvisionCredentialRequest`. Must match an existing role on the server. Common values: `guest`, `member`. |
 
 ### Feature Toggles
 
@@ -403,22 +432,31 @@ Then log out and back in.
 
 ## First-boot expectations
 
-On a healthy build with WiFi enabled, the normal sequence is:
+On a healthy build with WiFi enabled, the common startup sequence is:
 
 1. NVS initializes
 2. WiFi starts
 3. the event bus initializes
 4. enabled drivers are constructed
-5. `SystemFSM` initializes and starts
+5. the active FSM initializes and starts
 6. heartbeat service starts if enabled
 7. server communication starts if WiFi is enabled
 
-At runtime:
+### ACCESS_POINT runtime behavior
 
-- credential reads publish events
-- `server_comm` forwards heartbeat and access messages to the server
-- the server response turns into `EVENT_ACCESS_GRANTED` or `EVENT_ACCESS_DENIED`
+- credential reads publish `EVENT_CREDENTIAL_READ`
+- `server_comm` subscribes to `EVENT_CREDENTIAL_READ` and forwards access requests to the server
+- `server_comm` forwards heartbeat messages to the server
+- the server response publishes `EVENT_ACCESS_GRANTED` or `EVENT_ACCESS_DENIED`
 - `SystemFSM` unlocks or denies locally and drives the LED feedback path
+
+### PROVISIONING_CONSOLE runtime behavior
+
+- scan 1 (operator): `ProvisioningFSM` checks the credential UID against `PORTUNUS_OPERATOR_UUID`; on match, transitions to `AWAITING_CREDENTIAL`
+- scan 2 (new credential): the FSM SHA-256-hashes the credential on-device, publishes `EVENT_PROVISION_REQUEST`, and transitions to `SENDING`
+- `server_comm` subscribes to `EVENT_PROVISION_REQUEST` and posts a `ProvisionCredentialRequest` to `POST /v1/provision_credential`
+- on `EVENT_PROVISION_SUCCESS` or `EVENT_PROVISION_FAILED`, the FSM returns to `IDLE`
+- if no second scan arrives within `PORTUNUS_PROVISION_TIMEOUT_MS`, the FSM also returns to `IDLE`
 
 ---
 
@@ -428,13 +466,14 @@ At runtime:
 
 This is the current default mode.
 
-`server_comm`:
+`server_comm` subscribes to events, encodes protobuf messages with Nanopb, posts them to the server, decodes the protobuf response, and republishes decision events to the event bus. Which events it subscribes to depends on the compiled variant:
 
-- subscribes to heartbeat and credential events
-- encodes protobuf messages with Nanopb
-- posts them to the server
-- decodes the protobuf response
-- republishes access decision events back to the event bus
+| Variant | Event subscription | Server endpoint |
+|---|---|---|
+| ACCESS_POINT | `EVENT_CREDENTIAL_READ` | `POST /v1/access_request` |
+| PROVISIONING_CONSOLE | `EVENT_PROVISION_REQUEST` | `POST /v1/provision_credential` |
+
+Both variants also subscribe to heartbeat events when `PORTUNUS_ENABLE_HEARTBEAT=y`.
 
 ### Optional path: gRPC over HTTP/2 + TLS
 
@@ -471,10 +510,10 @@ For day-to-day firmware building, you do **not** need to regenerate protobuf fil
 
 To keep this guide aligned with the current repo state, the following should be treated as **not yet fully wired into a committed firmware setup flow**:
 
-- committed `sdkconfig.defaults` overlay files for dev/prod builds
 - a completed secure-boot workflow in the firmware setup process
 - a completed flash-encryption workflow in the firmware setup process
 - encrypted on-device storage for HMAC secrets
+- the `POST /v1/provision_credential` server endpoint (called by PROVISIONING_CONSOLE firmware but not yet implemented on the server side)
 
 Those may exist as design intent elsewhere, but they are not part of the current, ready-to-run firmware setup path in this snapshot.
 
@@ -486,11 +525,13 @@ For the current repo state, the most accurate firmware workflow is:
 
 1. install and source ESP-IDF
 2. run `task firmware:menuconfig`
-3. set WiFi, module ID, server host, TLS, and HMAC options
-4. if using private-CA TLS, run `task certs:generate -- --ip <SERVER_IP>`
-5. build with `task firmware:build`
-6. flash with `task firmware:flash-monitor`
-7. verify that the server is reachable and that heartbeat + access requests succeed
+3. under **Module Variant**, select the target variant (ACCESS_POINT or PROVISIONING_CONSOLE)
+4. if PROVISIONING_CONSOLE: set `PORTUNUS_OPERATOR_UUID` and `PORTUNUS_DEFAULT_ROLE_ID` under **Provisioning Console Settings**
+5. set WiFi, module ID, server host, TLS, and HMAC options
+6. if using private-CA TLS, run `task certs:generate -- --ip <SERVER_IP>`
+7. build with `task firmware:build` (or `task firmware:build:dev` / `task firmware:build:prod` for overlay builds)
+8. flash with `task firmware:flash-monitor`
+9. verify that the server is reachable and that heartbeat and request messages succeed
 
 ---
 
