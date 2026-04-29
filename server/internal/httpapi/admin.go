@@ -269,3 +269,13 @@ func (s *Server) handleAdminDeleteDoor(w http.ResponseWriter, r *http.Request) {
 	s.logger.Printf("admin: deleted door %q", doorID)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "door_id": doorID, "deleted": true})
 }
+
+// ── System health ────────────────────────────────────────────────────────────
+
+func (s *Server) handleAdminHealth(w http.ResponseWriter, r *http.Request) {
+	audit := s.accessService.AuditHealth()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":    audit.ConsecutiveFailures == 0,
+		"audit": audit,
+	})
+}

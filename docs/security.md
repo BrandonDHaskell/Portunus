@@ -172,11 +172,19 @@ x-portunus-sig
 The server’s gRPC interceptor:
 
 1. reads `x-portunus-sig` from incoming metadata
-2. re-marshals the decoded protobuf message with Go’s protobuf library
-3. computes the expected HMAC over those protobuf bytes
+2. builds the same canonical projection string from the parsed request fields
+3. computes the expected `HMAC-SHA256(secret, projection)`
 4. rejects invalid or missing signatures with gRPC `UNAUTHENTICATED`
 
-This is slightly different from the HTTP middleware implementation, but both paths are implemented and both are active in the current codebase.
+The projection format is `"{type}|{module_id}|{key_field}"`:
+
+| RPC | Projection |
+|---|---|
+| `SendHeartbeat` | `heartbeat\|{module_id}\|{sequence}` |
+| `RequestAccess` | `access\|{module_id}\|{credential_id}` |
+| `ProvisionCredential` | `provision\|{module_id}\|{operator_uuid}` |
+
+This differs from the HTTP path, which signs the raw body bytes. The projection approach is used on the gRPC path to avoid spurious HMAC mismatches caused by wire-format differences between Nanopb (on the ESP32) and the Go protobuf library (on the server). Both use the same pre-shared secret.
 
 ### Enforcement is configuration-dependent
 
@@ -230,6 +238,24 @@ This is an improvement over bare SHA-256: without the server secret, a stolen da
 ```bash
 openssl rand -hex 32
 ```
+
+### Dev fallback: bare SHA-256
+
+When `PORTUNUS_CREDENTIAL_HASH_SECRET` is **not set**, `HashCredentialID` falls back to bare SHA-256:
+
+```
+credential_hash = SHA-256(credential_id)
+```
+
+The server logs a warning at startup when this path is active:
+
+```
+WARNING: PORTUNUS_CREDENTIAL_HASH_SECRET not set — credential IDs hashed without a key (insecure, dev only)
+```
+
+**Critical incompatibility:** bare SHA-256 hashes and keyed HMAC-SHA256 hashes of the same credential ID produce different 32-byte values. A database populated without the secret cannot be used with a server that subsequently has the secret set — every stored hash will fail to match. Re-registering all credentials is required if the secret is added to an existing database.
+
+This fallback exists only for local development and integration testing. It must never be used in a deployment where credential data is expected to persist or migrate.
 
 ### Admin registration flow
 

@@ -26,12 +26,20 @@ const hmacHeaderKey = "x-portunus-sig"
 // Format: "{type}|{module_id}|{key_field}"
 // Using parsed fields instead of re-marshalled bytes makes verification
 // independent of protobuf wire-format differences between Nanopb and Go.
+//
+// Projection formats (must match grpc_post_proto() in services/server_comm):
+//
+//	Heartbeat:  "heartbeat|{module_id}|{sequence}"
+//	Access:     "access|{module_id}|{credential_id}"
+//	Provision:  "provision|{module_id}|{operator_uuid}"
 func hmacProjection(req interface{}) ([]byte, error) {
 	switch m := req.(type) {
 	case *pb.HeartbeatRequest:
 		return []byte(fmt.Sprintf("heartbeat|%s|%d", m.ModuleId, m.Sequence)), nil
 	case *pb.AccessRequest:
 		return []byte(fmt.Sprintf("access|%s|%s", m.ModuleId, m.CredentialId)), nil
+	case *pb.ProvisionCredentialRequest:
+		return []byte(fmt.Sprintf("provision|%s|%s", m.ModuleId, m.OperatorUuid)), nil
 	default:
 		return nil, fmt.Errorf("unsupported request type %T", req)
 	}
@@ -40,8 +48,11 @@ func hmacProjection(req interface{}) ([]byte, error) {
 // HMACInterceptor returns a gRPC unary server interceptor that verifies
 // the HMAC-SHA256 signature attached as custom metadata by the ESP32.
 //
-// The signature is computed over the raw protobuf request body using
-// the pre-shared secret, matching the HTTP middleware behaviour.
+// The signature is computed over a canonical projection of key request fields
+// (see hmacProjection), not the raw protobuf bytes. This avoids spurious
+// mismatches caused by wire-format differences between Nanopb and the Go
+// protobuf library. The HTTP path signs the raw body; the gRPC path signs
+// the projection — both use the same pre-shared secret.
 //
 // When secret is empty, the interceptor is a no-op pass-through.
 func HMACInterceptor(secret string) grpc.UnaryServerInterceptor {

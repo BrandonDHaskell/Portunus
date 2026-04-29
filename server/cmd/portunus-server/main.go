@@ -28,8 +28,11 @@ import (
 )
 
 func main() {
-	cfg := config.FromEnv()
+	cfg, err := config.FromEnv()
 	logger := log.New(os.Stdout, "portunus-server ", log.LstdFlags|log.LUTC)
+	if err != nil {
+		logger.Fatalf("configuration error: %v", err)
+	}
 
 	if err := cfg.Validate(); err != nil {
 		logger.Fatalf("configuration error:\n%v", err)
@@ -50,6 +53,8 @@ func main() {
 			logger.Fatalf("db seed error: %v", err)
 		}
 	}
+	// "test" intentionally skips dev seeding — the test environment manages
+	// its own fixture data.
 	writer := db.NewWorker(dbConn)
 	defer writer.Close()
 
@@ -100,6 +105,7 @@ func main() {
 		logger.Printf("WARNING: PORTUNUS_CREDENTIAL_HASH_SECRET not set — credential IDs hashed without a key (insecure, dev only)")
 	}
 	accessSvc.SetCredentialHashSecret(credentialHashSecret)
+	accessSvc.SetLogger(logger)
 
 	// Member access + module authorization services (PR 4).
 	memberAccessSvc := service.NewMemberAccessService(memberAccessStore, roleStore)
@@ -218,7 +224,12 @@ func main() {
 			ProvisionService: provisionSvc,
 		})
 		pb.RegisterPortunusServiceServer(grpcServer, grpcHandler)
-		reflection.Register(grpcServer)
+		if cfg.Env != "prod" {
+			reflection.Register(grpcServer)
+			logger.Printf("gRPC reflection: ENABLED (non-prod)")
+		} else {
+			logger.Printf("gRPC reflection: DISABLED (prod)")
+		}
 
 		go func() {
 			lis, err := net.Listen("tcp", cfg.GRPCAddr)
