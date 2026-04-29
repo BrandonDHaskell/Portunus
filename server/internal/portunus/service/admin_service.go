@@ -246,6 +246,16 @@ func (s *AdminService) DeleteDoor(ctx context.Context, doorID string) error {
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
+func deriveModuleStatus(rec *store.ModuleRecord) types.ModuleStatus {
+	if rec.RevokedAt != nil {
+		return types.ModuleStatusRevoked
+	}
+	if rec.CommissionedAt == nil {
+		return types.ModuleStatusDiscovered
+	}
+	return types.ModuleStatusActive
+}
+
 func moduleRecordToInfo(rec *store.ModuleRecord) *types.ModuleInfo {
 	if rec == nil {
 		return nil
@@ -254,6 +264,7 @@ func moduleRecordToInfo(rec *store.ModuleRecord) *types.ModuleInfo {
 		ModuleID:      rec.ModuleID,
 		DoorID:        rec.DoorID,
 		DisplayName:   rec.DisplayName,
+		Status:        deriveModuleStatus(rec),
 		Enabled:       rec.Enabled,
 		Commissioned:  rec.CommissionedAt != nil,
 		LastIP:        rec.LastIP,

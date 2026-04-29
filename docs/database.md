@@ -103,6 +103,22 @@ This means unknown modules are still represented in the database so that heartbe
 
 That is the rule used by the device registry and therefore the access decision path.
 
+#### Module lifecycle states
+
+The admin API derives a `status` field for every module from the same three columns. The mapping is:
+
+| `revoked_at_ms` | `commissioned_at_ms` | `status` |
+|---|---|---|
+| non-null | any | `revoked` |
+| null | null | `discovered` |
+| null | non-null | `active` |
+
+- **`discovered`** — the server has seen a heartbeat from this module but an admin has not commissioned it. The device is not trusted; access requests are denied.
+- **`active`** — commissioned, enabled, and not revoked. The device is trusted and access decisions are made for its requests.
+- **`revoked`** — explicitly revoked by an admin. The device is not trusted regardless of the `enabled` flag.
+
+This field is computed in `AdminService.deriveModuleStatus()` and returned in all module list and detail responses. It is not stored in the database.
+
 ---
 
 ### `module_heartbeats`
@@ -169,6 +185,19 @@ Stores registered RFID credentials as keyed HMAC-SHA256 hashes rather than raw c
 - Admin credential registration hashes the supplied credential ID with HMAC-SHA256 (keyed with `PORTUNUS_CREDENTIAL_HASH_SECRET`) before insertion.
 - `IsCredentialAllowed()` looks up the hash and returns `true` only when `status = 'active'`.
 - When an active credential is checked, `last_seen_at_ms` is updated asynchronously via a background goroutine dispatched to `writer.Do()` with a 5-second timeout.
+
+#### Hash algorithm depends on server configuration
+
+The 32-byte value stored in `credential_hash` is produced by `HashCredentialID`, whose output depends on whether `PORTUNUS_CREDENTIAL_HASH_SECRET` is set:
+
+| Configuration | Hash stored |
+|---|---|
+| `PORTUNUS_CREDENTIAL_HASH_SECRET` set (prod / recommended) | `HMAC-SHA256(secret, credential_id)` |
+| `PORTUNUS_CREDENTIAL_HASH_SECRET` not set (dev fallback only) | `SHA-256(credential_id)` |
+
+These two variants produce different 32-byte values for the same credential ID and are **not interchangeable**. A database populated without the secret cannot be queried correctly once the secret is added — all stored hashes will fail to match. Re-registering all credentials is required if the secret is introduced to an existing database.
+
+The server logs a warning at startup when the bare SHA-256 fallback is active. The `prod` environment enforces that `PORTUNUS_CREDENTIAL_HASH_SECRET` is set via config validation.
 
 #### Current status semantics
 
@@ -581,27 +610,98 @@ SQLite WAL mode creates companion files next to the main database file:
 - `portunus.db-wal`
 - `portunus.db-shm`
 
-Do not delete these while the server is running.
+Do not delete these while the server is running. Always back up using the methods below so that WAL state is safely flushed into the backup copy.
+
+### Online backup with `sqlite3` (recommended)
+
+The `.backup` command checkpoints the WAL and produces a consistent single-file copy while the server is running:
+
+```bash
+sqlite3 /opt/portunus/data/portunus.db ".backup '/opt/portunus/backups/portunus-$(date +%Y%m%d-%H%M%S).db'"
+```
 
 ### Offline backup
 
-```bash
-cp ./data/portunus.db ./data/portunus-backup.db
-```
-
-### Online backup with `sqlite3`
+If the server is stopped, a plain copy is safe:
 
 ```bash
-sqlite3 ./data/portunus.db ".backup './data/portunus-backup.db'"
+cp /opt/portunus/data/portunus.db /opt/portunus/backups/portunus-$(date +%Y%m%d-%H%M%S).db
 ```
+
+### Automated daily backups on a Raspberry Pi
+
+Create a backup script at `/opt/portunus/scripts/backup-db.sh`:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+DB_PATH="/opt/portunus/data/portunus.db"
+BACKUP_DIR="/opt/portunus/backups"
+KEEP_DAYS=30
+
+mkdir -p "$BACKUP_DIR"
+
+BACKUP_FILE="$BACKUP_DIR/portunus-$(date +%Y%m%d-%H%M%S).db"
+sqlite3 "$DB_PATH" ".backup '$BACKUP_FILE'"
+
+# Verify the backup is not corrupt before rotating old copies.
+if sqlite3 "$BACKUP_FILE" "PRAGMA integrity_check;" | grep -q "^ok$"; then
+    # Remove backups older than KEEP_DAYS days.
+    find "$BACKUP_DIR" -name "portunus-*.db" -mtime "+$KEEP_DAYS" -delete
+    echo "Backup OK: $BACKUP_FILE"
+else
+    echo "ERROR: integrity check failed on $BACKUP_FILE" >&2
+    rm -f "$BACKUP_FILE"
+    exit 1
+fi
+```
+
+Make it executable:
+
+```bash
+chmod +x /opt/portunus/scripts/backup-db.sh
+```
+
+Add a cron entry to run it daily at 03:00:
+
+```bash
+crontab -e
+```
+
+```
+0 3 * * * /opt/portunus/scripts/backup-db.sh >> /var/log/portunus-backup.log 2>&1
+```
+
+### Backup rotation
+
+The script above keeps 30 days of backups and deletes older copies automatically. Adjust `KEEP_DAYS` to match your retention requirements. At roughly 1–5 MB per database on a typical deployment, 30 daily copies requires minimal storage.
+
+### Backup verification
+
+The script runs `PRAGMA integrity_check` on every backup before rotating old copies. You can also verify any backup manually:
+
+```bash
+sqlite3 /opt/portunus/backups/portunus-20260429-030001.db "PRAGMA integrity_check;"
+# Expected output: ok
+```
+
+A result other than `ok` means the backup file is corrupt and should not be used for restore.
 
 ### Restore
 
-1. Stop the server
-2. Replace the database file with the backup copy
-3. Restart the server
+1. Stop the server: `sudo systemctl stop portunus`
+2. Copy the backup over the live database:
+   ```bash
+   cp /opt/portunus/backups/portunus-<timestamp>.db /opt/portunus/data/portunus.db
+   ```
+3. Remove stale WAL files if present:
+   ```bash
+   rm -f /opt/portunus/data/portunus.db-wal /opt/portunus/data/portunus.db-shm
+   ```
+4. Restart the server: `sudo systemctl start portunus`
 
-On startup, the server will apply any pending embedded migrations.
+On startup, the server applies any pending embedded migrations that were added after the backup was taken.
 
 ---
 
@@ -616,9 +716,9 @@ SELECT
   module_id,
   display_name,
   CASE
-    WHEN enabled = 1 AND commissioned_at_ms IS NOT NULL AND revoked_at_ms IS NULL
-      THEN 'known'
-    ELSE 'unknown'
+    WHEN revoked_at_ms IS NOT NULL THEN 'revoked'
+    WHEN commissioned_at_ms IS NULL THEN 'discovered'
+    ELSE 'active'
   END AS status,
   datetime(last_seen_at_ms / 1000, 'unixepoch') AS last_seen,
   last_ip,

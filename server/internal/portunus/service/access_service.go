@@ -3,12 +3,31 @@ package service
 import (
 	"context"
 	"errors"
+	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/types"
 )
+
+// AuditHealthSnapshot is a point-in-time view of audit write health.
+// ConsecutiveFailures resets to zero on every successful write.
+type AuditHealthSnapshot struct {
+	ConsecutiveFailures int64      `json:"consecutive_failures"`
+	TotalFailures       int64      `json:"total_failures"`
+	LastFailure         *time.Time `json:"last_failure,omitempty"`
+	LastSuccess         *time.Time `json:"last_success,omitempty"`
+}
+
+type auditState struct {
+	mu                  sync.Mutex
+	consecutiveFailures int64
+	totalFailures       int64
+	lastFailure         time.Time
+	lastSuccess         time.Time
+}
 
 var (
 	ErrInvalidCredentialID = errors.New("credential_id is required")
@@ -30,10 +49,36 @@ type AccessService struct {
 	memberAccessStore    store.MemberAccessStore
 	moduleAuthStore      store.ModuleAuthorizationStore
 	credentialHashSecret []byte
+	logger               *log.Logger
+	audit                auditState
 }
 
 func NewAccessService(reg *DeviceRegistry, policy AccessPolicy, es store.AccessEventStore) *AccessService {
 	return &AccessService{registry: reg, policy: policy, eventStore: es}
+}
+
+// SetLogger attaches a logger for audit failure warnings. When nil (the default),
+// audit failures are tracked in memory but not logged.
+func (s *AccessService) SetLogger(l *log.Logger) { s.logger = l }
+
+// AuditHealth returns a point-in-time snapshot of audit write health.
+// ConsecutiveFailures resets to zero on any successful write.
+func (s *AccessService) AuditHealth() AuditHealthSnapshot {
+	s.audit.mu.Lock()
+	defer s.audit.mu.Unlock()
+	snap := AuditHealthSnapshot{
+		ConsecutiveFailures: s.audit.consecutiveFailures,
+		TotalFailures:       s.audit.totalFailures,
+	}
+	if !s.audit.lastFailure.IsZero() {
+		t := s.audit.lastFailure
+		snap.LastFailure = &t
+	}
+	if !s.audit.lastSuccess.IsZero() {
+		t := s.audit.lastSuccess
+		snap.LastSuccess = &t
+	}
+	return snap
 }
 
 // SetCredentialStore enables DB-backed credential lookups, replacing the legacy
@@ -150,9 +195,11 @@ func (s *AccessService) Decide(ctx context.Context, req types.AccessRequest) (ty
 	}, nil
 }
 
-// recordEvent persists the access decision to the audit log. Errors are
-// intentionally not returned to the caller — a failed audit write should
-// not prevent the device from receiving its access decision.
+// recordEvent persists the access decision to the audit log.
+// Errors are not returned to the caller — a failed write must not block the
+// access decision reaching the device (availability-first policy).
+// Failures are counted and logged so operators can detect a degraded audit state
+// via GET /admin/v1/health without the system silently losing events.
 func (s *AccessService) recordEvent(
 	ctx context.Context,
 	req types.AccessRequest,
@@ -178,7 +225,24 @@ func (s *AccessService) recordEvent(
 		rec.CredentialHash = HashCredentialID(credentialID, s.credentialHashSecret)
 	}
 
-	_ = s.eventStore.RecordEvent(ctx, rec)
+	if err := s.eventStore.RecordEvent(ctx, rec); err != nil {
+		s.audit.mu.Lock()
+		s.audit.consecutiveFailures++
+		s.audit.totalFailures++
+		s.audit.lastFailure = time.Now().UTC()
+		consecutive := s.audit.consecutiveFailures
+		total := s.audit.totalFailures
+		s.audit.mu.Unlock()
+		if s.logger != nil {
+			s.logger.Printf("WARN audit write failed (consecutive=%d total=%d): %v", consecutive, total, err)
+		}
+		return
+	}
+
+	s.audit.mu.Lock()
+	s.audit.consecutiveFailures = 0
+	s.audit.lastSuccess = time.Now().UTC()
+	s.audit.mu.Unlock()
 }
 
 // ListEventsByCredential returns recent access events for the given credential

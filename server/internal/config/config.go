@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -71,13 +72,15 @@ func (c Config) Validate() error {
 	return errors.Join(errs...)
 }
 
-func FromEnv() Config {
+// FromEnv reads configuration from environment variables.
+// It returns an error if PORTUNUS_ENV is set to an unrecognised value.
+// Valid values are "dev", "test", and "prod".
+func FromEnv() (Config, error) {
 	addr := getenvDefault("PORTUNUS_HTTP_ADDR", ":8080")
 
 	env := strings.ToLower(getenvDefault("PORTUNUS_ENV", "dev"))
-	if env != "dev" && env != "prod" {
-		// fail-soft: treat unknown as dev
-		env = "dev"
+	if env != "dev" && env != "test" && env != "prod" {
+		return Config{}, fmt.Errorf("PORTUNUS_ENV %q is not valid: must be one of: dev, test, prod", env)
 	}
 
 	dbPath := getenvDefault("PORTUNUS_DB_PATH", "./data/portunus.db")
@@ -116,7 +119,7 @@ func FromEnv() Config {
 		TLSKeyFile:           tlsKey,
 		HMACSecret:           hmacSecret,
 		CredentialHashSecret: credentialHashSecret,
-	}
+	}, nil
 }
 
 func getenvDefault(key, def string) string {

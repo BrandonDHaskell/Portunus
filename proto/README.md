@@ -46,7 +46,7 @@ proto/
 
 ## Current contract
 
-The current schema defines four messages and one service:
+The current schema defines six messages, one enum, and one service:
 
 ### Messages
 
@@ -54,12 +54,19 @@ The current schema defines four messages and one service:
 - `HeartbeatResponse`
 - `AccessRequest`
 - `AccessResponse`
+- `ProvisionCredentialRequest`
+- `ProvisionCredentialResponse`
+
+### Enums
+
+- `ProvisionStatus`
 
 ### Service
 
 - `PortunusService`
   - `SendHeartbeat`
   - `RequestAccess`
+  - `ProvisionCredential`
 
 These RPCs are the canonical service contract even when the firmware uses the
 HTTP/protobuf fallback.
@@ -86,9 +93,11 @@ In the current implementation:
 - the **HTTP API** accepts protobuf requests on:
   - `POST /v1/heartbeat`
   - `POST /v1/access_request`
+  - `POST /v1/provision_credential` (PROVISIONING_CONSOLE firmware variant only)
 - the **gRPC API** optionally exposes:
   - `/portunus.v1.PortunusService/SendHeartbeat`
   - `/portunus.v1.PortunusService/RequestAccess`
+  - `/portunus.v1.PortunusService/ProvisionCredential`
 
 ### Access module
 
@@ -104,11 +113,15 @@ parse device traffic:
 - `services/server_comm/` for HTTP/protobuf and transport selection
 - `services/grpc_client/` for the gRPC transport implementation
 
-In the current firmware:
+In the standard access module firmware:
 
 - heartbeat events are encoded as `HeartbeatRequest`
 - credential reads are encoded as `AccessRequest`
 - server replies are decoded as `HeartbeatResponse` or `AccessResponse`
+
+In the PROVISIONING_CONSOLE firmware variant:
+
+- provisioning results are encoded as `ProvisionCredentialRequest` and decoded as `ProvisionCredentialResponse`
 
 ## Current transport behavior
 
@@ -139,6 +152,7 @@ Current behavior:
 - methods:
   - `SendHeartbeat`
   - `RequestAccess`
+  - `ProvisionCredential`
 - request/response payloads: the same protobuf message types used by the
   HTTP/protobuf path
 
@@ -225,13 +239,34 @@ through the heartbeat service/store path.
 `AccessRequest` currently carries:
 
 - `module_id`
-- `card_id`
+- `credential_id`
 - optional `door_closed`
 - optional `requested_at`
 
 The current Go server converts that protobuf message into
 `server/internal/portunus/types.AccessRequest` and evaluates it through the
 access service.
+
+### Provisioning
+
+`ProvisionCredentialRequest` is sent by the PROVISIONING_CONSOLE firmware
+variant after a successful two-scan flow.  The raw credential UID never leaves
+the device; only the SHA-256 digest (computed on-device via mbedTLS) is sent.
+It carries:
+
+- `operator_uuid` — UUID of the admin user performing the provisioning (scan 1)
+- `module_id` — module ID of the provisioning console
+- `credential_hash` — 32-byte SHA-256 digest of the raw credential UID
+- `role_id` — role to assign to the new member (must already exist on the server)
+
+The server responds with `ProvisionCredentialResponse`:
+
+- `member_uuid` — UUID of the newly created member record (non-empty on `SUCCESS` only)
+- `status` — `ProvisionStatus` enum value encoding the outcome
+- `detail` — human-readable string for duplicate or error cases (operator display)
+
+The `ProvisionStatus` enum covers: `SUCCESS`, `DUPLICATE_ACTIVE`,
+`DUPLICATE_INACTIVE`, `DUPLICATE_PENDING`, `UNAUTHORIZED`, and `INVALID_ROLE`.
 
 ## Compatibility rules
 

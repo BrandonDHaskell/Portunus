@@ -2,6 +2,23 @@ package types
 
 // ── Module admin types ──────────────────────────────────────────────────────
 
+// ModuleStatus is the derived lifecycle state of a module, computed from the
+// enabled, commissioned_at_ms, and revoked_at_ms columns.
+//
+//   discovered — seen by the server (auto-created on first heartbeat) but never
+//                commissioned by an admin. The device is not trusted.
+//   active     — commissioned, enabled, and not revoked. The device is trusted
+//                and access decisions are made for its requests.
+//   revoked    — explicitly revoked by an admin. The device is no longer trusted
+//                regardless of the enabled flag.
+type ModuleStatus string
+
+const (
+	ModuleStatusDiscovered ModuleStatus = "discovered"
+	ModuleStatusActive     ModuleStatus = "active"
+	ModuleStatusRevoked    ModuleStatus = "revoked"
+)
+
 type RegisterModuleRequest struct {
 	ModuleID    string `json:"module_id"`
 	DoorID      string `json:"door_id,omitempty"`
@@ -9,18 +26,19 @@ type RegisterModuleRequest struct {
 }
 
 type ModuleInfo struct {
-	ModuleID       string `json:"module_id"`
-	DoorID         string `json:"door_id,omitempty"`
-	DisplayName    string `json:"display_name,omitempty"`
-	Enabled        bool   `json:"enabled"`
-	Commissioned   bool   `json:"commissioned"`
-	CommissionedAt string `json:"commissioned_at,omitempty"`
-	RevokedAt      string `json:"revoked_at,omitempty"`
-	LastSeenAt     string `json:"last_seen_at,omitempty"`
-	LastIP         string `json:"last_ip,omitempty"`
-	LastFWVersion  string `json:"last_fw_version,omitempty"`
-	LastWiFiRSSI   *int   `json:"last_wifi_rssi,omitempty"`
-	CreatedAt      string `json:"created_at"`
+	ModuleID       string       `json:"module_id"`
+	DoorID         string       `json:"door_id,omitempty"`
+	DisplayName    string       `json:"display_name,omitempty"`
+	Status         ModuleStatus `json:"status"`
+	Enabled        bool         `json:"enabled"`
+	Commissioned   bool         `json:"commissioned"`
+	CommissionedAt string       `json:"commissioned_at,omitempty"`
+	RevokedAt      string       `json:"revoked_at,omitempty"`
+	LastSeenAt     string       `json:"last_seen_at,omitempty"`
+	LastIP         string       `json:"last_ip,omitempty"`
+	LastFWVersion  string       `json:"last_fw_version,omitempty"`
+	LastWiFiRSSI   *int         `json:"last_wifi_rssi,omitempty"`
+	CreatedAt      string       `json:"created_at"`
 }
 
 type ListModulesResponse struct {

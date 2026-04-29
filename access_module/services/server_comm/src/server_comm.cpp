@@ -187,34 +187,48 @@ static bool get_rssi(int32_t *out)
  * @brief Perform a gRPC unary call with HMAC signing.
  *
  * Wraps grpc_client_unary_call() with HMAC metadata attachment.
- * The HMAC is computed over the raw protobuf body (same as the HTTP path)
- * and sent as a custom gRPC metadata header (x-portunus-sig).
+ * The HMAC is computed over @p sig_projection — a canonical string built
+ * from key request fields — and sent as a custom gRPC metadata header
+ * (x-portunus-sig).  The server interceptor validates the same projection,
+ * making verification independent of wire-format differences between Nanopb
+ * and the Go protobuf library.
  *
- * @param method     gRPC method path (e.g. "/portunus.v1.PortunusService/SendHeartbeat")
- * @param req_buf    Nanopb-encoded protobuf request body
- * @param req_len    Length of req_buf
- * @param resp_buf   Buffer to receive the protobuf response
- * @param resp_cap   Capacity of resp_buf
- * @param resp_len   [out] Actual protobuf bytes written to resp_buf
- * @param grpc_status [out] gRPC status code (0 = OK)
+ * Projection formats (must match hmacProjection() in grpcapi/interceptors.go):
+ *   Heartbeat:   "heartbeat|{module_id}|{sequence}"
+ *   Access:      "access|{module_id}|{credential_id}"
+ *   Provision:   "provision|{module_id}|{operator_uuid}"
+ *
+ * @param method         gRPC method path (e.g. "/portunus.v1.PortunusService/SendHeartbeat")
+ * @param req_buf        Nanopb-encoded protobuf request body
+ * @param req_len        Length of req_buf
+ * @param sig_projection NUL-terminated canonical string to sign for HMAC
+ * @param resp_buf       Buffer to receive the protobuf response
+ * @param resp_cap       Capacity of resp_buf
+ * @param resp_len       [out] Actual protobuf bytes written to resp_buf
+ * @param grpc_status    [out] gRPC status code (0 = OK)
  *
  * @return PORTUNUS_OK on successful round-trip.
  */
 static portunus_err_t grpc_post_proto(const char *method,
                                        const uint8_t *req_buf, size_t req_len,
+                                       const char *sig_projection,
                                        uint8_t *resp_buf, size_t resp_cap,
                                        int *resp_len, int *grpc_status)
 {
 #if PORTUNUS_HMAC_ENABLED
-    /* Compute HMAC-SHA256 over the protobuf body and set as gRPC metadata.
-     * The server interceptor validates this before processing the RPC. */
+    /* Sign the canonical projection string, not the raw protobuf bytes.
+     * The server interceptor computes the same projection from parsed fields,
+     * so both sides agree even when Nanopb and Go encode the same message
+     * with different field ordering or varint padding. */
     char sig_hex[PORTUNUS_HMAC_HEX_LEN];
-    if (compute_hmac_hex(req_buf, req_len, sig_hex)) {
+    if (compute_hmac_hex((const uint8_t *)sig_projection, strlen(sig_projection), sig_hex)) {
         grpc_client_set_metadata(s_grpc_handle, PORTUNUS_HMAC_HEADER_NAME, sig_hex);
     } else {
         ESP_LOGE(TAG, "HMAC computation failed — aborting RPC");
         return PORTUNUS_ERR_HTTP_CONNECT;
     }
+#else
+    (void)sig_projection;
 #endif /* PORTUNUS_HMAC_ENABLED */
 
     return grpc_client_unary_call(s_grpc_handle, method,
@@ -433,10 +447,13 @@ static void handle_heartbeat(const event_heartbeat_t *hb)
     int resp_len = 0;
 
 #if PORTUNUS_USE_GRPC
+    char proj[128];
+    snprintf(proj, sizeof(proj), "heartbeat|%s|%" PRIu32, req.module_id, req.sequence);
     int grpc_status = 0;
     portunus_err_t err = grpc_post_proto(
         "/portunus.v1.PortunusService/SendHeartbeat",
         req_buf, ostream.bytes_written,
+        proj,
         resp_buf, sizeof(resp_buf),
         &resp_len, &grpc_status);
     if (err != PORTUNUS_OK) {
@@ -498,10 +515,13 @@ static void handle_credential(const event_credential_read_t *cred)
     int resp_len = 0;
 
 #if PORTUNUS_USE_GRPC
+    char proj[128];
+    snprintf(proj, sizeof(proj), "access|%s|%s", req.module_id, req.credential_id);
     int grpc_status = 0;
     portunus_err_t err = grpc_post_proto(
         "/portunus.v1.PortunusService/RequestAccess",
         req_buf, ostream.bytes_written,
+        proj,
         resp_buf, sizeof(resp_buf),
         &resp_len, &grpc_status);
     if (err != PORTUNUS_OK) {
@@ -616,10 +636,13 @@ static void handle_provision(const event_provision_request_t *req)
     int resp_len = 0;
 
 #if PORTUNUS_USE_GRPC
+    char proj[128];
+    snprintf(proj, sizeof(proj), "provision|%s|%s", pb_req.module_id, pb_req.operator_uuid);
     int grpc_status = 0;
     portunus_err_t err = grpc_post_proto(
         "/portunus.v1.PortunusService/ProvisionCredential",
         req_buf, ostream.bytes_written,
+        proj,
         resp_buf, sizeof(resp_buf),
         &resp_len, &grpc_status);
     if (err != PORTUNUS_OK) {

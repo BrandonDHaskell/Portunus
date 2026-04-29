@@ -79,6 +79,7 @@ func NewServer(d Dependencies) *Server {
 		mux.HandleFunc("POST /admin/v1/login", s.handleAdminLogin)
 		mux.HandleFunc("POST /admin/v1/logout", requireSession(s.handleAdminLogout))
 		mux.HandleFunc("POST /admin/v1/change-password", requireSession(s.handleAdminChangePassword))
+		mux.HandleFunc("GET /admin/v1/health", requireSession(s.handleAdminHealth))
 	}
 
 	// ── Admin endpoints (session + permission required) ─────────────────
