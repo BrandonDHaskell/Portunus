@@ -37,7 +37,11 @@ vars:
   # Override with: task <target> PYTHON=py
   PYTHON: '{{if eq OS "windows"}}python{{else}}python3{{end}}'
 
-  # ── ESP-IDF Python environment ───────────────────────────────────────────
+  # ── ESP-IDF environment ──────────────────────────────────────────────────
+  # IDF_PATH points to the ESP-IDF installation root.
+  # Override with: task firmware:build IDF_PATH=/path/to/esp-idf
+  IDF_PATH: '{{.HOME}}/esp/esp-idf'
+
   # The ESP-IDF venv has nanopb and grpcio-tools pre-installed.
   # Proto generation uses this interpreter so system Python stays unmodified.
   # Override with: task proto:gen IDF_PYTHON=/path/to/python
@@ -194,54 +198,85 @@ tasks:
   firmware:build:
     desc: Build the ESP32 firmware (requires ESP-IDF)
     dir: "{{.FIRMWARE_DIR}}"
+    env:
+      IDF_PATH: "{{.IDF_PATH}}"
     cmds:
-      - idf.py build
+      - |
+        eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
+        idf.py build
 
   firmware:build:dev:
     desc: Build firmware with dev sdkconfig overlay
     dir: "{{.FIRMWARE_DIR}}"
+    env:
+      IDF_PATH: "{{.IDF_PATH}}"
     cmds:
-      - idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.dev" build
+      - |
+        eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
+        idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.dev" build
 
   firmware:build:prod:
     desc: Build firmware with prod sdkconfig overlay (requires PORTUNUS_HMAC_SECRET in .env)
     dir: "{{.FIRMWARE_DIR}}"
+    env:
+      IDF_PATH: "{{.IDF_PATH}}"
     cmds:
       - |
         : "${PORTUNUS_HMAC_SECRET:?PORTUNUS_HMAC_SECRET must be set in .env}"
         printf 'CONFIG_PORTUNUS_HMAC_SECRET="%s"\n' "$PORTUNUS_HMAC_SECRET" > sdkconfig.defaults.secret
         trap "rm -f sdkconfig.defaults.secret" EXIT
+        eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
         idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.prod;sdkconfig.defaults.secret" build
 
   firmware:flash:
     desc: Flash firmware to connected ESP32
     dir: "{{.FIRMWARE_DIR}}"
+    env:
+      IDF_PATH: "{{.IDF_PATH}}"
     cmds:
-      - idf.py flash
+      - |
+        eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
+        idf.py flash
 
   firmware:monitor:
     desc: Open serial monitor to connected ESP32
     dir: "{{.FIRMWARE_DIR}}"
+    env:
+      IDF_PATH: "{{.IDF_PATH}}"
     cmds:
-      - idf.py monitor
+      - |
+        eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
+        idf.py monitor
 
   firmware:flash-monitor:
     desc: Flash firmware and open serial monitor
     dir: "{{.FIRMWARE_DIR}}"
+    env:
+      IDF_PATH: "{{.IDF_PATH}}"
     cmds:
-      - idf.py flash monitor
+      - |
+        eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
+        idf.py flash monitor
 
   firmware:menuconfig:
     desc: Open ESP-IDF menuconfig
     dir: "{{.FIRMWARE_DIR}}"
+    env:
+      IDF_PATH: "{{.IDF_PATH}}"
     cmds:
-      - idf.py menuconfig
+      - |
+        eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
+        idf.py menuconfig
 
   firmware:clean:
     desc: Clean firmware build directory
     dir: "{{.FIRMWARE_DIR}}"
+    env:
+      IDF_PATH: "{{.IDF_PATH}}"
     cmds:
-      - idf.py fullclean
+      - |
+        eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
+        idf.py fullclean
 
   # ─── Deploy ────────────────────────────────────────────────────────────────
   # Requires SSH key-based auth to the Pi. Configure target in .env:
