@@ -380,7 +380,28 @@ curl -s -X POST https://localhost:8443/v1/heartbeat \
 
 ### Admin API
 
-The admin API uses session-cookie authentication. Log in first to obtain a session cookie, then use the cookie jar for subsequent requests.
+The admin API uses session-cookie authentication. Before you can log in, you need the bootstrap password the server generated on first start.
+
+#### First-run admin credentials
+
+On the very first startup, if no admin account exists, the server creates one and prints a randomly generated password to stdout:
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FIRST RUN — initial admin account created
+  username: admin
+  password: <randomly generated>
+  You will be required to change this password on first login.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+Copy that password before it scrolls away. If you are running as a systemd service, retrieve it from the journal:
+
+```bash
+sudo journalctl -u portunus-server | grep -A4 "FIRST RUN"
+```
+
+The account has `must_change_pw` set, which means the server will reject every admin request — including all admin UI pages — until you change the password. See [Change the bootstrap password](#change-the-bootstrap-password) below.
 
 Log in and save the session cookie:
 
@@ -389,7 +410,7 @@ curl -s -c /tmp/portunus-cookies.txt \
   -X POST https://localhost:8443/admin/v1/login \
   --cacert certs/ca.pem \
   -H "Content-Type: application/json" \
-  -d '{"username": "admin", "password": "<your-password>"}' | jq .
+  -d '{"username": "admin", "password": "<password from server output>"}' | jq .
 ```
 
 Register a credential (using the saved cookie):
@@ -420,7 +441,92 @@ curl -s -b /tmp/portunus-cookies.txt \
 
 For plain HTTP dev mode, omit `--cacert certs/ca.pem` and replace `https://localhost:8443` with `http://localhost:8080`.
 
+#### Change the bootstrap password
+
+This step is required before any other admin operation will work. The server enforces it — requests will return `403` until the password is changed.
+
+Via the admin web UI (simplest):
+
+```
+http://localhost:8080/admin/ui/change-password    # dev
+https://localhost:8443/admin/ui/change-password   # production
+```
+
+Or via the API:
+
+```bash
+curl -s -b /tmp/portunus-cookies.txt \
+  -X POST https://localhost:8443/admin/v1/change-password \
+  --cacert certs/ca.pem \
+  -H "Content-Type: application/json" \
+  -d '{"current_password": "<bootstrap password>", "new_password": "<your new password>"}' | jq .
+```
+
+Once the password is changed, `must_change_pw` is cleared and the admin API and UI are fully accessible.
+
 See [docs/api.md](api.md) for the full endpoint reference.
+
+---
+
+## Register an access module
+
+Before an ESP32 module can receive access decisions from the server, it must be registered (commissioned). The server rejects heartbeats and access requests from unregistered modules with `unknown_module`.
+
+### Dev mode — automatic
+
+When `PORTUNUS_ENV=dev`, the server auto-seeds a module with `module_id: door-001` on startup. If your firmware's `CONFIG_PORTUNUS_MODULE_ID` is set to `door-001`, no manual registration is needed during development.
+
+### Production mode — manual registration required
+
+In production, all modules must be registered via the admin API. The `module_id` in the request **must exactly match** `CONFIG_PORTUNUS_MODULE_ID` as configured in the firmware's `menuconfig`.
+
+Log in and obtain a session cookie first (see [First-run admin credentials](#first-run-admin-credentials) above), then:
+
+```bash
+curl -s -b /tmp/portunus-cookies.txt \
+  -X POST https://localhost:8443/admin/v1/modules \
+  --cacert certs/ca.pem \
+  -H "Content-Type: application/json" \
+  -d '{
+    "module_id": "door-001",
+    "door_id": "door_main",
+    "display_name": "Main entrance"
+  }' | jq .
+```
+
+| Field | Description | Must match |
+|---|---|---|
+| `module_id` | Unique identifier for this device | `CONFIG_PORTUNUS_MODULE_ID` in firmware menuconfig |
+| `door_id` | Logical door identifier (used for authorizations) | Any string you choose |
+| `display_name` | Human-readable label shown in the admin UI | Any string you choose |
+
+Expected response (201):
+
+```json
+{
+  "ok": true,
+  "module": {
+    "module_id": "door-001",
+    "door_id": "door_main",
+    "display_name": "Main entrance",
+    "enabled": true,
+    "commissioned": true,
+    "commissioned_at": "2026-04-28T..."
+  }
+}
+```
+
+Once registered, the module's heartbeats will show `"known": true` and access requests will be evaluated against the credential policy.
+
+To confirm a module is commissioned, list all modules:
+
+```bash
+curl -s -b /tmp/portunus-cookies.txt \
+  https://localhost:8443/admin/v1/modules \
+  --cacert certs/ca.pem | jq .
+```
+
+For plain HTTP dev mode, omit `--cacert certs/ca.pem` and replace `https://localhost:8443` with `http://localhost:8080`.
 
 ---
 

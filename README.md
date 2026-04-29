@@ -79,6 +79,8 @@ ACCESS_POINT runtime flow:
 
 ## Quick start
 
+**New to Portunus?** Start with the [Getting Started guide](docs/getting_started.md) — it walks through the full server + firmware setup in order, with dev and production paths.
+
 ### Server
 
 Requires Go 1.24+ and [Task](https://taskfile.dev).
@@ -178,6 +180,7 @@ Portunus/
 
 | Document | Description |
 |---|---|
+| [Getting started](docs/getting_started.md) | End-to-end setup sequence for new developers — dev and production paths |
 | [Server setup](docs/setup_server.md) | Install dependencies, configure, run, and deploy the Go server |
 | [Firmware setup](docs/setup_firmware.md) | Install ESP-IDF, wire hardware, configure Kconfig, build and flash |
 | [CI/CD pipeline](docs/ci_cd_pipeline.md) | Local build/test/deploy pipeline, cross-compilation, deployment to Raspberry Pi |
@@ -185,6 +188,7 @@ Portunus/
 | [Database](docs/database.md) | SQLite schema, migrations, write model, useful queries |
 | [Security](docs/security.md) | Threat model, defense layers, TLS/HMAC details, hardening checklist |
 | [API reference](docs/api.md) | HTTP and gRPC endpoint documentation (device + admin) |
+| [Troubleshooting](docs/troubleshooting.md) | Common errors and fixes for server, firmware, connectivity, and auth |
 | [Project plan](project_plan.md) | Phased roadmap, design decisions, hardware specs |
 
 ---
