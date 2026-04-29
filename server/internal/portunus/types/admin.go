@@ -5,12 +5,12 @@ package types
 // ModuleStatus is the derived lifecycle state of a module, computed from the
 // enabled, commissioned_at_ms, and revoked_at_ms columns.
 //
-//   discovered — seen by the server (auto-created on first heartbeat) but never
-//                commissioned by an admin. The device is not trusted.
-//   active     — commissioned, enabled, and not revoked. The device is trusted
-//                and access decisions are made for its requests.
-//   revoked    — explicitly revoked by an admin. The device is no longer trusted
-//                regardless of the enabled flag.
+//	discovered — seen by the server (auto-created on first heartbeat) but never
+//	             commissioned by an admin. The device is not trusted.
+//	active     — commissioned, enabled, and not revoked. The device is trusted
+//	             and access decisions are made for its requests.
+//	revoked    — explicitly revoked by an admin. The device is no longer trusted
+//	             regardless of the enabled flag.
 type ModuleStatus string
 
 const (
