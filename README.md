@@ -74,7 +74,6 @@ ACCESS_POINT runtime flow:
 - MFRC522 authenticates by UID only (cloneable); acceptable for makerspace threat model
 - No offline/cached access policy when the server is unreachable (planned)
 - No OTA firmware updates (reflash via USB required)
-- `POST /v1/provision_credential` server endpoint is not yet implemented — PROVISIONING_CONSOLE firmware compiles and enrolls on-device, but the server-side handler is pending
 
 ---
 
