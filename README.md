@@ -2,12 +2,14 @@
 
 **LAN-first door access control system** — ESP32 access modules communicate with a Go server to manage RFID-based door access for makerspaces, workshops, and small offices.
 
+Named after the Roman god of keys and doors.
+
 ---
 
 ## How it works
 
 ```
- ┌────────────────┐                               ┌──────────────────────┐
+ ┌────────────────┐                               ┌─────────────────────┐
  │  Credential    │                               │  Admin Web UI / curl │
  │  tap           │                               │                      │
  └───────┬────────┘                               └──────────┬───────────┘

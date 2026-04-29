@@ -474,4 +474,4 @@ To keep expectations aligned with the actual code in this snapshot:
 - `../docs/api.md` — server API details
 - `../docs/setup_firmware.md` — deeper firmware setup guidance
 - `drivers/README.md` — driver naming and extension patterns
-- `../docs/shared_secrets_setup.md` — TLS certificate setup, HMAC shared secret, and credential hash secret configuration
+- `shared_secrets_setup.md` — additional setup context for shared secrets and local certificates

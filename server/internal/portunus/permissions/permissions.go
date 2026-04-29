@@ -48,6 +48,9 @@ const (
 	ModuleAuthGrant  = "module_auth.grant"
 	ModuleAuthRevoke = "module_auth.revoke"
 	ModuleAuthList   = "module_auth.list"
+
+	// Audit log
+	AuditLogList = "audit_log.list"
 )
 
 // All returns every defined permission. Used to seed the admin role and to
@@ -61,5 +64,6 @@ func All() []string {
 		RoleList, RoleCreate, RoleEdit, RoleDelete, RoleAssignPermission,
 		MemberProvision, MemberList, MemberView, MemberAssignRole, MemberDisable, MemberArchive,
 		ModuleAuthGrant, ModuleAuthRevoke, ModuleAuthList,
+		AuditLogList,
 	}
 }

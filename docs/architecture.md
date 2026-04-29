@@ -381,12 +381,12 @@ Both transports encode identical protobuf messages. The server can run both list
 │          │       │ last_seen    │       │ free_heap        │
 └──────────┘       │ last_ip      │       └──────────────────┘
                    │ last_fw_ver  │
-                   │ last_rssi    │        ┌──────────────────┐
-                   └──────┬───────┘        │  access_events   │
-                          │                │                  │
-                          │          *────1│ access_event_id  │
-                          └────────────────│ module_id (FK)   │
-                                           │ door_id (FK)     │
+                   │ last_rssi    │       ┌──────────────────┐
+                   └──────┬───────┘       │  access_events   │
+                          │               │                  │
+                          │         *────1│ access_event_id  │
+                          └───────────────│ module_id (FK)   │
+                                          │ door_id (FK)     │
                    ┌─────────────┐         │ cred_hash(FK)    │
                    │ credentials │   *────1│ decision_granted │
                    │             │─────────│ decision_reason  │
@@ -461,7 +461,7 @@ The HMAC pre-shared key and WiFi credentials are stored in the firmware's flash 
 | Pure-Go SQLite (modernc.org) | No CGo dependency means trivial cross-compilation and no C toolchain required on the deployment target. |
 | Serialized write worker | Eliminates SQLite's "database is locked" without requiring WAL-only or connection pooling complexity. Single goroutine processes all writes sequentially. |
 | Protobuf as wire format | Strongly-typed contract, compact binary encoding (important for ESP32 memory), code generation for both Go and C (Nanopb). |
-| Dual transport (HTTP + gRPC) | HTTP/1.1 is simpler to debug and works with curl. gRPC provides bidirectional streaming for future features. Both share the same protobuf messages. (HTTP/1.1 should never be used in prod) |
+| Dual transport (HTTP + gRPC) | HTTP/1.1 is simpler to debug and works with curl. gRPC provides bidirectional streaming for future features. Both share the same protobuf messages. |
 | HMAC over request body | Application-level authentication independent of TLS. Verifies that the message came from an enrolled device, not just any TLS client. |
 | Keyed HMAC-SHA256 credential hashing | Protects credential UIDs at rest with a server-side secret. Unlike bare SHA-256, keyed hashing prevents offline rainbow-table attacks on a stolen database. Secret set via `PORTUNUS_CREDENTIAL_HASH_SECRET`; required in prod. |
 | On-device hashing in PROVISIONING_CONSOLE | The ProvisioningFSM hashes the raw credential UID on-device (SHA-256 via mbedTLS) before publishing `EVENT_PROVISION_REQUEST`. The raw UID never leaves the ESP32, even over an encrypted channel. |
