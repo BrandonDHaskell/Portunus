@@ -420,7 +420,6 @@ To stay aligned with the current repository, this document does **not** claim th
 - hardware-backed secret protection on the firmware side
 - strong anti-replay at the application layer
 - cryptographically strong smart-card authentication
-- a completed `POST /v1/provision_credential` server endpoint (called by PROVISIONING_CONSOLE firmware but not yet implemented)
 
 Those may be good next steps, but they are not the current implemented baseline.
 

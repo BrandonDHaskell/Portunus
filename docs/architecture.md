@@ -193,7 +193,6 @@ Scan 1: operator places any credential
                                                 │
                                                 ▼
                                          [Portunus Server]
-                                            (endpoint pending implementation)
                                                 │
                                                 ▼
                                          decode response
