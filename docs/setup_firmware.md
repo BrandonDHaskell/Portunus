@@ -94,7 +94,7 @@ You need:
 - **ESP-IDF 5.x** with ESP32-S3 support
 - **Python 3**
 - **CMake** and **Ninja**
-- **Task** if you want to use the repo task wrappers
+- **Task** — used throughout this guide for build, flash, and cert commands; see [Install Task](#install-task) below
 - **OpenSSL** if you want to generate a private CA and server certs for TLS pinning
 - **protobuf tooling + Nanopb** only if you change the `.proto` contract
 
@@ -122,7 +122,39 @@ For partial bench testing, you can disable individual hardware features in `menu
 
 ---
 
+## Install Task
+
+[Task](https://taskfile.dev) is the build runner used throughout this guide. All `task firmware:*` and `task certs:*` commands in this guide require it.
+
+If you already set up the server side, Task is already installed — skip this section.
+
+**With Go installed** (recommended — Go is also required for the server):
+
+```bash
+go install github.com/go-task/task/v3/cmd/task@latest
+```
+
+Ensure `$(go env GOPATH)/bin` is in your PATH. If you have not installed Go yet, follow the [Go install instructions in the server setup guide](setup_server.md#install-go), then run the command above.
+
+**Without Go** (firmware-only setup):
+
+Download and install a standalone binary from [taskfile.dev/installation](https://taskfile.dev/installation/). On Debian/Ubuntu:
+
+```bash
+sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+```
+
+Verify either way:
+
+```bash
+task --version
+```
+
+---
+
 ## Install ESP-IDF
+
+> **Time and disk space:** The ESP-IDF clone and toolchain install downloads roughly 2–5 GB and takes 10–30 minutes depending on your connection and machine. This is normal — the toolchain includes a full cross-compiler, debugger, and Python environment for the ESP32 target. Do not interrupt the `./install.sh` step.
 
 Install ESP-IDF using Espressif’s normal process. Example:
 
@@ -198,6 +230,21 @@ The root `Taskfile.yml` defines:
 - `task firmware:build:prod` — applies `sdkconfig.defaults` + `sdkconfig.defaults.prod` overlays; additionally injects `PORTUNUS_HMAC_SECRET` read from the repo-root `.env` file into a temporary `sdkconfig.defaults.secret` at build time
 
 All four overlay files (`sdkconfig.defaults`, `sdkconfig.defaults.dev`, `sdkconfig.defaults.prod`, `sdkconfig.defaults.ci`) are committed in `access_module/`. The `firmware:build:prod` task reads `PORTUNUS_HMAC_SECRET` from `.env` via the Taskfile `dotenv` mechanism so the secret never needs to be committed to source control.
+
+Create a `.env` file in the **repo root** (not inside `access_module/`) before running the prod build:
+
+```bash
+# .env — repo root, gitignored
+PORTUNUS_HMAC_SECRET=<your-64-char-hex-secret>
+```
+
+Generate the secret value with:
+
+```bash
+openssl rand -hex 32
+```
+
+Use the same value for `PORTUNUS_HMAC_SECRET` on the server. The `.env` file is covered by the `*.env` entry in `.gitignore` — never commit it. If the variable is missing when you run `task firmware:build:prod`, the task will fail with an explicit error before writing any build files.
 
 ---
 
@@ -414,19 +461,45 @@ idf.py monitor
 idf.py flash monitor
 ```
 
-If needed, specify the serial port explicitly:
+### Finding your serial port
+
+When the ESP32-S3 is connected over USB, it appears as a serial device. To find the right port:
+
+```bash
+ls /dev/ttyACM* /dev/ttyUSB* 2>/dev/null
+```
+
+ESP32-S3 boards typically show up as `/dev/ttyACM0` (USB CDC) or `/dev/ttyUSB0` (USB-to-UART bridge), depending on the board. If you see multiple entries, unplug the board, run the command again to see what disappears, then reconnect.
+
+You can also check `dmesg` immediately after plugging in:
+
+```bash
+dmesg | tail -5
+```
+
+Look for a line like `usb ... cp210x converter now attached to ttyUSB0` or `cdc_acm ... ttyACM0`.
+
+To specify the port explicitly:
 
 ```bash
 idf.py -p /dev/ttyACM0 flash monitor
 ```
 
-On Debian-based systems, make sure your user has serial-port access:
+### Serial port permissions
+
+On Debian-based systems, your user needs to be in the `dialout` group to access serial ports without `sudo`:
 
 ```bash
 sudo usermod -a -G dialout $USER
 ```
 
-Then log out and back in.
+Log out and back in for the group change to take effect. If the port still shows "Permission denied", verify with:
+
+```bash
+groups $USER
+```
+
+Confirm `dialout` appears in the output.
 
 ---
 
@@ -527,11 +600,12 @@ For the current repo state, the most accurate firmware workflow is:
 2. run `task firmware:menuconfig`
 3. under **Module Variant**, select the target variant (ACCESS_POINT or PROVISIONING_CONSOLE)
 4. if PROVISIONING_CONSOLE: set `PORTUNUS_OPERATOR_UUID` and `PORTUNUS_DEFAULT_ROLE_ID` under **Provisioning Console Settings**
-5. set WiFi, module ID, server host, TLS, and HMAC options
+5. set WiFi, **module ID** (`PORTUNUS_MODULE_ID`), server host, TLS, and HMAC options — note the module ID for the next step
 6. if using private-CA TLS, run `task certs:generate -- --ip <SERVER_IP>`
 7. build with `task firmware:build` (or `task firmware:build:dev` / `task firmware:build:prod` for overlay builds)
 8. flash with `task firmware:flash-monitor`
-9. verify that the server is reachable and that heartbeat and request messages succeed
+9. **register the module on the server** — the server will reject all requests from an unregistered module with `unknown_module`; see [Register an access module](setup_server.md#register-an-access-module) in the server setup guide (dev mode with `door-001` is pre-registered automatically)
+10. verify that the server is reachable and that heartbeat and request messages succeed
 
 ---
 
