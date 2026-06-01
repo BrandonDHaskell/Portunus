@@ -157,33 +157,23 @@ func TestAccessRequest_AllowAll_Granted(t *testing.T) {
 	}
 }
 
-func TestAccessRequest_CredentialNotAllowed_Denied(t *testing.T) {
-	allowed := map[string]struct{}{"AABBCCDD": {}}
-	ts := newTestServer(t, []string{"door-001"}, service.AccessPolicy{
-		AllowedCredentialIDs: allowed,
-	})
+// TestAccessRequest_MisconfiguredService_Returns500 verifies that the HTTP
+// handler returns 500 (not a silent grant) when the access service is not
+// fully wired — both member-access and module-auth stores must be set.
+func TestAccessRequest_MisconfiguredService_Returns500(t *testing.T) {
+	ts := newTestServer(t, []string{"door-001"}, service.AccessPolicy{})
+	// newTestServer does not wire memberAccessStore or moduleAuthStore,
+	// so Decide will return an internal error.
 
-	body := []byte(`{"module_id":"door-001","credential_id":"UNKNOWN_CREDENTIAL"}`)
+	body := []byte(`{"module_id":"door-001","credential_id":"04:AA:BB:CC"}`)
 	resp, err := http.Post(ts.URL+"/v1/access_request", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
-	}
-
-	var ar types.AccessResponse
-	if err := json.NewDecoder(resp.Body).Decode(&ar); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-
-	if ar.Granted {
-		t.Error("expected granted=false for unknown credential")
-	}
-	if ar.Reason != "credential_not_allowed" {
-		t.Errorf("expected reason=credential_not_allowed, got %q", ar.Reason)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("expected 500 for misconfigured service, got %d", resp.StatusCode)
 	}
 }
 

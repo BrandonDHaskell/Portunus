@@ -16,9 +16,8 @@ type Config struct {
 	Env    string // "dev" | "prod"
 	DBPath string // e.g. "./data/portunus.db"
 
-	KnownModules         []string
-	AllowAll             bool
-	AllowedCredentialIDs []string
+	KnownModules []string
+	AllowAll     bool
 
 	// Heartbeat retention
 	HeartbeatRetentionDays int // 0 = keep forever
@@ -86,8 +85,6 @@ func FromEnv() (Config, error) {
 	dbPath := getenvDefault("PORTUNUS_DB_PATH", "./data/portunus.db")
 
 	knownModules := splitCSV(os.Getenv("PORTUNUS_KNOWN_MODULES"))
-	allowedCredentials := splitCSV(os.Getenv("PORTUNUS_ALLOWED_CREDENTIAL_IDS"))
-
 	allowAll := strings.EqualFold(os.Getenv("PORTUNUS_ALLOW_ALL"), "true") ||
 		os.Getenv("PORTUNUS_ALLOW_ALL") == "1"
 
@@ -107,9 +104,8 @@ func FromEnv() (Config, error) {
 		Env:      env,
 		DBPath:   dbPath,
 
-		KnownModules:         knownModules,
-		AllowAll:             allowAll,
-		AllowedCredentialIDs: allowedCredentials,
+		KnownModules: knownModules,
+		AllowAll:     allowAll,
 
 		HeartbeatRetentionDays:      retentionDays,
 		PruneIntervalHours:          pruneInterval,

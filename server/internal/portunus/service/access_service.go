@@ -36,16 +36,12 @@ var (
 type AccessPolicy struct {
 	// AllowAll grants access to any credential (dev/testing only).
 	AllowAll bool
-	// AllowedCredentialIDs is the legacy env-var allowlist (deprecated).
-	// When CredentialStore is set, this is ignored.
-	AllowedCredentialIDs map[string]struct{}
 }
 
 type AccessService struct {
 	registry             *DeviceRegistry
 	policy               AccessPolicy
 	eventStore           store.AccessEventStore
-	credentialStore      store.CredentialStore // nil = use legacy AllowedCredentialIDs map
 	memberAccessStore    store.MemberAccessStore
 	moduleAuthStore      store.ModuleAuthorizationStore
 	credentialHashSecret []byte
@@ -81,15 +77,8 @@ func (s *AccessService) AuditHealth() AuditHealthSnapshot {
 	return snap
 }
 
-// SetCredentialStore enables DB-backed credential lookups, replacing the legacy
-// AllowedCredentialIDs map. Call after NewAccessService, before serving traffic.
-func (s *AccessService) SetCredentialStore(cs store.CredentialStore) {
-	s.credentialStore = cs
-}
-
-// SetMemberAccessStore enables the member_access + module_authorizations access path.
-// When both this and SetModuleAuthStore are set, this path takes priority over
-// the legacy credential store path.
+// SetMemberAccessStore wires the member_access store required for access decisions.
+// Must be called (along with SetModuleAuthStore) before calling Validate.
 func (s *AccessService) SetMemberAccessStore(ms store.MemberAccessStore) {
 	s.memberAccessStore = ms
 }
@@ -103,6 +92,22 @@ func (s *AccessService) SetModuleAuthStore(mas store.ModuleAuthorizationStore) {
 // match the key used at registration time. Call after NewAccessService, before serving traffic.
 func (s *AccessService) SetCredentialHashSecret(secret []byte) {
 	s.credentialHashSecret = secret
+}
+
+// Validate returns an error if the service is not fully wired for production use.
+// Call this after all Set* calls and before serving traffic; treat a non-nil return
+// as a fatal configuration error.  AllowAll bypasses the check (dev/test only).
+func (s *AccessService) Validate() error {
+	if s.policy.AllowAll {
+		return nil
+	}
+	if s.memberAccessStore == nil {
+		return errors.New("access service: SetMemberAccessStore was not called")
+	}
+	if s.moduleAuthStore == nil {
+		return errors.New("access service: SetModuleAuthStore was not called")
+	}
+	return nil
 }
 
 func (s *AccessService) Decide(ctx context.Context, req types.AccessRequest) (types.AccessResponse, error) {
@@ -168,39 +173,13 @@ func (s *AccessService) Decide(ctx context.Context, req types.AccessRequest) (ty
 			return types.AccessResponse{}, err
 		}
 		granted, reason, grantedMemberUUID = g, r, memberUUID
-	} else if s.credentialStore != nil {
-		// Legacy DB-backed credential lookup.
-		rawUID, parseErr := ParseCredentialUID(credentialID)
-		if parseErr != nil {
-			s.recordEvent(ctx, req, false, "invalid_credential_format", now)
-			return types.AccessResponse{
-				OK:         true,
-				Known:      true,
-				Granted:    false,
-				Reason:     "invalid_credential_format",
-				ModuleID:   moduleID,
-				ServerTime: now.Format(time.RFC3339Nano),
-			}, nil
-		}
-		allowed, err := s.credentialStore.IsCredentialAllowed(ctx, HashCredentialID(rawUID, s.credentialHashSecret))
-		if err != nil {
-			s.recordEvent(ctx, req, false, "credential_lookup_error", now)
-			return types.AccessResponse{}, err
-		}
-		if allowed {
-			granted = true
-			reason = "credential_allowed"
-		} else {
-			reason = "credential_not_allowed"
-		}
 	} else {
-		// Legacy env-var allowlist fallback.
-		if _, ok := s.policy.AllowedCredentialIDs[credentialID]; ok {
-			granted = true
-			reason = "credential_allowed"
-		} else {
-			reason = "credential_not_allowed"
-		}
+		// Both member-access and module-auth stores are required; reaching here means
+		// Validate() was not called (or was ignored) before serving traffic.
+		// Deny and surface as an internal error — never silently fall through to a
+		// credential-only path that skips per-module authorization.
+		s.recordEvent(ctx, req, false, "service_misconfigured", now)
+		return types.AccessResponse{}, errors.New("access service: not fully wired — call Validate() before serving")
 	}
 
 	if granted && grantedMemberUUID != "" {
