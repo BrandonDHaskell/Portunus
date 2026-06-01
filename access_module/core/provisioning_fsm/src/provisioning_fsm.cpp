@@ -4,17 +4,16 @@
  *
  * Two-scan flow:
  *   1. Any credential read in IDLE → start 30s timeout, move to AWAITING.
- *   2. Any credential read in AWAITING → compute SHA-256(uid), publish
- *      EVENT_PROVISION_REQUEST, move to SENDING.
+ *   2. Any credential read in AWAITING → copy raw UID bytes into
+ *      EVENT_PROVISION_REQUEST, move to SENDING.  The server applies
+ *      HMAC-SHA256(secret, uid) before storage so enrollment and lookup use
+ *      the same algorithm.
  *   3. Timeout in AWAITING → return to IDLE.
  *   4. EVENT_PROVISION_SUCCESS / EVENT_PROVISION_FAILED → show feedback,
  *      return to IDLE.
  *
  * The operator_uuid and role_id are read from Kconfig at build time and
  * embedded in every ProvisionCredentialRequest.
- *
- * SHA-256 is computed via mbedTLS (already present for TLS). The raw
- * credential UID bytes never leave the device — only the hash is sent.
  */
 
 #include "provisioning_fsm.h"
@@ -27,7 +26,6 @@
 #include "wifi_mgr.h"
 #endif
 
-#include "mbedtls/sha256.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -57,21 +55,6 @@ static const int CARD_REREAD_DELAY_MS     = 1000;
 static inline int64_t now_ms(void)
 {
     return esp_timer_get_time() / 1000;
-}
-
-/**
- * @brief Compute SHA-256(data, len) into out[32].
- * @return true on success.
- */
-static bool sha256(const uint8_t *data, size_t len, uint8_t out[32])
-{
-    mbedtls_sha256_context ctx;
-    mbedtls_sha256_init(&ctx);
-    int rc = mbedtls_sha256_starts(&ctx, 0 /* is_224=false */);
-    if (rc == 0) { rc = mbedtls_sha256_update(&ctx, data, len); }
-    if (rc == 0) { rc = mbedtls_sha256_finish(&ctx, out); }
-    mbedtls_sha256_free(&ctx);
-    return (rc == 0);
 }
 
 /* ── Constructor ──────────────────────────────────────────────────────────── */
@@ -267,15 +250,8 @@ void ProvisioningFSM::handle_credential_read(const event_credential_read_t *cred
         break;
 
     case PROV_STATE_AWAITING_CREDENTIAL: {
-        /* Scan 2: new credential. Compute SHA-256 and publish request. */
+        /* Scan 2: new credential. Send raw UID bytes; server applies HMAC-SHA256. */
         ESP_LOGI(TAG, "Scan 2 (new credential) — UID: %s — sending provision request", uid_str);
-
-        uint8_t hash[32];
-        if (!sha256(cred->credential.uid, cred->credential.uid_len, hash)) {
-            ESP_LOGE(TAG, "SHA-256 computation failed — aborting provisioning");
-            transition_to_idle();
-            return;
-        }
 
         if (!m_has_network) {
             ESP_LOGW(TAG, "Network unavailable — cannot provision");
@@ -291,7 +267,10 @@ void ProvisioningFSM::handle_credential_read(const event_credential_read_t *cred
                 CONFIG_PORTUNUS_OPERATOR_UUID,
                 sizeof(req_evt.payload.provision_request.operator_uuid) - 1);
 
-        memcpy(req_evt.payload.provision_request.credential_hash, hash, 32);
+        memcpy(req_evt.payload.provision_request.credential_uid,
+               cred->credential.uid,
+               cred->credential.uid_len);
+        req_evt.payload.provision_request.credential_uid_len = cred->credential.uid_len;
 
         strncpy(req_evt.payload.provision_request.role_id,
                 CONFIG_PORTUNUS_DEFAULT_ROLE_ID,

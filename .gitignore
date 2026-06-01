@@ -57,3 +57,6 @@ server/data/
 access_module.tar.gz
 *.env
 certs/
+
+# For now, ignore AI
+.claude/

@@ -224,7 +224,7 @@ func TestAdminCredentials_RegisterUpdateDelete(t *testing.T) {
 	base := ts.URL
 
 	resp := do(t, adminReq(t, http.MethodPost, base+"/admin/v1/credentials",
-		map[string]string{"credential_id": "AABBCCDD", "tag": "test-credential"}, cookie))
+		map[string]string{"credential_id": "AA:BB:CC:DD", "tag": "test-credential"}, cookie))
 	var regBody map[string]any
 	json.NewDecoder(resp.Body).Decode(&regBody)
 	resp.Body.Close()
@@ -254,7 +254,7 @@ func TestAdminCredentials_RegisterUpdateDelete(t *testing.T) {
 
 func TestAdminCredentials_DuplicateRegister_409(t *testing.T) {
 	ts, cookie := newAdminTestServer(t)
-	body := map[string]string{"credential_id": "AABBCCDD"}
+	body := map[string]string{"credential_id": "AA:BB:CC:DD"}
 
 	resp := do(t, adminReq(t, http.MethodPost, ts.URL+"/admin/v1/credentials", body, cookie))
 	resp.Body.Close()

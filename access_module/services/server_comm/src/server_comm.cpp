@@ -619,8 +619,8 @@ static void handle_provision(const event_provision_request_t *req)
     strncpy(pb_req.role_id, req->role_id,
             sizeof(pb_req.role_id) - 1);
 
-    pb_req.credential_hash.size = 32;
-    memcpy(pb_req.credential_hash.bytes, req->credential_hash, 32);
+    pb_req.credential_uid.size = req->credential_uid_len;
+    memcpy(pb_req.credential_uid.bytes, req->credential_uid, req->credential_uid_len);
 
     /* Encode */
     uint8_t req_buf[portunus_v1_ProvisionCredentialRequest_size];

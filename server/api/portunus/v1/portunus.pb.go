@@ -479,7 +479,7 @@ func (x *AccessResponse) GetServerTime() string {
 }
 
 // Sent by a provisioning console after a successful two-scan flow.
-// The raw credential never leaves the device; only SHA-256(raw) is sent.
+// The device sends the raw RFID UID bytes; the server applies HMAC-SHA256.
 //
 // Server Go equivalent: types.ProvisionCredentialRequest
 type ProvisionCredentialRequest struct {
@@ -488,10 +488,11 @@ type ProvisionCredentialRequest struct {
 	OperatorUuid string `protobuf:"bytes,1,opt,name=operator_uuid,json=operatorUuid,proto3" json:"operator_uuid,omitempty"`
 	// Module ID of the provisioning console.
 	ModuleId string `protobuf:"bytes,2,opt,name=module_id,json=moduleId,proto3" json:"module_id,omitempty"`
-	// SHA-256 of the raw credential (computed on-device via mbedTLS).
-	CredentialHash []byte `protobuf:"bytes,3,opt,name=credential_hash,json=credentialHash,proto3" json:"credential_hash,omitempty"`
 	// Role ID to assign to the new member.  Must already exist on the server.
-	RoleId        string `protobuf:"bytes,4,opt,name=role_id,json=roleId,proto3" json:"role_id,omitempty"`
+	RoleId string `protobuf:"bytes,4,opt,name=role_id,json=roleId,proto3" json:"role_id,omitempty"`
+	// Raw RFID UID bytes read from the card (1–10 bytes).
+	// The server computes HMAC-SHA256(secret, credential_uid) before storing.
+	CredentialUid []byte `protobuf:"bytes,5,opt,name=credential_uid,json=credentialUid,proto3" json:"credential_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -540,18 +541,18 @@ func (x *ProvisionCredentialRequest) GetModuleId() string {
 	return ""
 }
 
-func (x *ProvisionCredentialRequest) GetCredentialHash() []byte {
-	if x != nil {
-		return x.CredentialHash
-	}
-	return nil
-}
-
 func (x *ProvisionCredentialRequest) GetRoleId() string {
 	if x != nil {
 		return x.RoleId
 	}
 	return ""
+}
+
+func (x *ProvisionCredentialRequest) GetCredentialUid() []byte {
+	if x != nil {
+		return x.CredentialUid
+	}
+	return nil
 }
 
 // Returned by the server after processing a provisioning request.
@@ -656,12 +657,12 @@ const file_portunus_v1_portunus_proto_rawDesc = "" +
 	"\x06reason\x18\x04 \x01(\tR\x06reason\x12\x1b\n" +
 	"\tmodule_id\x18\x05 \x01(\tR\bmoduleId\x12\x1f\n" +
 	"\vserver_time\x18\x06 \x01(\tR\n" +
-	"serverTime\"\xa0\x01\n" +
+	"serverTime\"\xb5\x01\n" +
 	"\x1aProvisionCredentialRequest\x12#\n" +
 	"\roperator_uuid\x18\x01 \x01(\tR\foperatorUuid\x12\x1b\n" +
-	"\tmodule_id\x18\x02 \x01(\tR\bmoduleId\x12'\n" +
-	"\x0fcredential_hash\x18\x03 \x01(\fR\x0ecredentialHash\x12\x17\n" +
-	"\arole_id\x18\x04 \x01(\tR\x06roleId\"\x8c\x01\n" +
+	"\tmodule_id\x18\x02 \x01(\tR\bmoduleId\x12\x17\n" +
+	"\arole_id\x18\x04 \x01(\tR\x06roleId\x12%\n" +
+	"\x0ecredential_uid\x18\x05 \x01(\fR\rcredentialUidJ\x04\b\x03\x10\x04R\x0fcredential_hash\"\x8c\x01\n" +
 	"\x1bProvisionCredentialResponse\x12\x1f\n" +
 	"\vmember_uuid\x18\x01 \x01(\tR\n" +
 	"memberUuid\x124\n" +

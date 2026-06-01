@@ -337,7 +337,7 @@ func TestAdminService_RegisterUpdateDeleteCredential(t *testing.T) {
 	svc := newTestAdminService(newFakeModuleStore(), newFakeCredentialStore())
 	ctx := context.Background()
 
-	info, err := svc.RegisterCredential(ctx, types.RegisterCredentialRequest{CredentialID: "AABBCCDD", Tag: "test"})
+	info, err := svc.RegisterCredential(ctx, types.RegisterCredentialRequest{CredentialID: "AA:BB:CC:DD", Tag: "test"})
 	if err != nil {
 		t.Fatalf("RegisterCredential: %v", err)
 	}

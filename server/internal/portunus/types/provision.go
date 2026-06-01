@@ -1,13 +1,13 @@
 package types
 
 // ProvisionCredentialRequest is the domain type for device-initiated provisioning.
-// The credential_hash carries the SHA-256 digest computed on-device via mbedTLS;
-// the raw UID bytes never leave the device.
+// CredentialUID carries the raw RFID UID bytes from the device; the server applies
+// HMAC-SHA256(secret, CredentialUID) before storing in member_access.credential_hash.
 type ProvisionCredentialRequest struct {
-	OperatorUUID   string `json:"operator_uuid"`
-	ModuleID       string `json:"module_id"`
-	CredentialHash []byte `json:"credential_hash"` // 32-byte SHA-256, pre-computed on device
-	RoleID         string `json:"role_id"`
+	OperatorUUID  string `json:"operator_uuid"`
+	ModuleID      string `json:"module_id"`
+	CredentialUID []byte `json:"credential_uid"` // raw RFID UID bytes (1–10 bytes)
+	RoleID        string `json:"role_id"`
 }
 
 // ProvisionStatus represents the outcome of a device-initiated provisioning request.

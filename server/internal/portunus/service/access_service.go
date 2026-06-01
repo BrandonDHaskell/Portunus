@@ -149,7 +149,19 @@ func (s *AccessService) Decide(ctx context.Context, req types.AccessRequest) (ty
 		reason = "allow_all"
 	} else if s.memberAccessStore != nil && s.moduleAuthStore != nil {
 		// Member access + module authorization path (production path from PR 4 onward).
-		credHash := HashCredentialID(credentialID, s.credentialHashSecret)
+		rawUID, parseErr := ParseCredentialUID(credentialID)
+		if parseErr != nil {
+			s.recordEvent(ctx, req, false, "invalid_credential_format", now)
+			return types.AccessResponse{
+				OK:         true,
+				Known:      true,
+				Granted:    false,
+				Reason:     "invalid_credential_format",
+				ModuleID:   moduleID,
+				ServerTime: now.Format(time.RFC3339Nano),
+			}, nil
+		}
+		credHash := HashCredentialID(rawUID, s.credentialHashSecret)
 		g, r, memberUUID, err := s.decideMemberAccess(ctx, credHash, moduleID, now)
 		if err != nil {
 			s.recordEvent(ctx, req, false, "member_lookup_error", now)
@@ -158,7 +170,19 @@ func (s *AccessService) Decide(ctx context.Context, req types.AccessRequest) (ty
 		granted, reason, grantedMemberUUID = g, r, memberUUID
 	} else if s.credentialStore != nil {
 		// Legacy DB-backed credential lookup.
-		allowed, err := s.credentialStore.IsCredentialAllowed(ctx, HashCredentialID(credentialID, s.credentialHashSecret))
+		rawUID, parseErr := ParseCredentialUID(credentialID)
+		if parseErr != nil {
+			s.recordEvent(ctx, req, false, "invalid_credential_format", now)
+			return types.AccessResponse{
+				OK:         true,
+				Known:      true,
+				Granted:    false,
+				Reason:     "invalid_credential_format",
+				ModuleID:   moduleID,
+				ServerTime: now.Format(time.RFC3339Nano),
+			}, nil
+		}
+		allowed, err := s.credentialStore.IsCredentialAllowed(ctx, HashCredentialID(rawUID, s.credentialHashSecret))
 		if err != nil {
 			s.recordEvent(ctx, req, false, "credential_lookup_error", now)
 			return types.AccessResponse{}, err
@@ -222,7 +246,9 @@ func (s *AccessService) recordEvent(
 
 	credentialID := strings.TrimSpace(req.CredentialID)
 	if credentialID != "" {
-		rec.CredentialHash = HashCredentialID(credentialID, s.credentialHashSecret)
+		if rawUID, err := ParseCredentialUID(credentialID); err == nil {
+			rec.CredentialHash = HashCredentialID(rawUID, s.credentialHashSecret)
+		}
 	}
 
 	if err := s.eventStore.RecordEvent(ctx, rec); err != nil {

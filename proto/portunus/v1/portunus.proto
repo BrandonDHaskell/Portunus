@@ -141,7 +141,7 @@ message AccessResponse {
 // ──────────────────────────────────────────────────────────────────────────
 
 // Sent by a provisioning console after a successful two-scan flow.
-// The raw credential never leaves the device; only SHA-256(raw) is sent.
+// The device sends the raw RFID UID bytes; the server applies HMAC-SHA256.
 //
 // Server Go equivalent: types.ProvisionCredentialRequest
 message ProvisionCredentialRequest {
@@ -151,11 +151,17 @@ message ProvisionCredentialRequest {
   // Module ID of the provisioning console.
   string module_id       = 2;
 
-  // SHA-256 of the raw credential (computed on-device via mbedTLS).
-  bytes  credential_hash = 3;
+  // Retired: was SHA-256(raw UID bytes) computed on-device.  Replaced by
+  // credential_uid (field 5) so the server can apply a consistent HMAC.
+  reserved 3;
+  reserved "credential_hash";
 
   // Role ID to assign to the new member.  Must already exist on the server.
   string role_id         = 4;
+
+  // Raw RFID UID bytes read from the card (1–10 bytes).
+  // The server computes HMAC-SHA256(secret, credential_uid) before storing.
+  bytes  credential_uid  = 5;
 }
 
 // Returned by the server after processing a provisioning request.
