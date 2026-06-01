@@ -3,17 +3,17 @@
  * @brief Provisioning console FSM implementation.
  *
  * Two-scan flow:
- *   1. Any credential read in IDLE → start 30s timeout, move to AWAITING.
- *   2. Any credential read in AWAITING → copy raw UID bytes into
- *      EVENT_PROVISION_REQUEST, move to SENDING.  The server applies
- *      HMAC-SHA256(secret, uid) before storage so enrollment and lookup use
- *      the same algorithm.
+ *   1. Credential read in IDLE → store raw UID bytes as operator badge
+ *      (m_operator_cred), start 30s timeout, move to AWAITING.
+ *   2. Credential read in AWAITING → copy scan-1 operator UID and scan-2
+ *      member UID into EVENT_PROVISION_REQUEST, move to SENDING.
+ *      The server applies HMAC-SHA256(secret, uid) for both UIDs and
+ *      resolves scan-1 to an admin user for operator attribution.
  *   3. Timeout in AWAITING → return to IDLE.
  *   4. EVENT_PROVISION_SUCCESS / EVENT_PROVISION_FAILED → show feedback,
  *      return to IDLE.
  *
- * The operator_uuid and role_id are read from Kconfig at build time and
- * embedded in every ProvisionCredentialRequest.
+ * The default role_id is read from Kconfig at build time.
  */
 
 #include "provisioning_fsm.h"
@@ -158,8 +158,8 @@ portunus_err_t ProvisioningFSM::start()
     }
 
     ESP_LOGI(TAG, "Provisioning FSM running — state=IDLE");
-    ESP_LOGI(TAG, "Operator UUID: %s  Role: %s  Timeout: %d ms",
-             CONFIG_PORTUNUS_OPERATOR_UUID,
+    ESP_LOGI(TAG, "Provisioning FSM: scan-1 = operator badge, scan-2 = new member card");
+    ESP_LOGI(TAG, "Role: %s  Timeout: %d ms",
              CONFIG_PORTUNUS_DEFAULT_ROLE_ID,
              CONFIG_PORTUNUS_PROVISION_TIMEOUT_MS);
 
@@ -240,8 +240,9 @@ void ProvisioningFSM::handle_credential_read(const event_credential_read_t *cred
     switch (m_prov_state) {
 
     case PROV_STATE_IDLE:
-        /* Scan 1: operator presence confirmed. Start timeout. */
-        ESP_LOGI(TAG, "Scan 1 (operator) — UID: %s — awaiting new credential", uid_str);
+        /* Scan 1: operator badge tap — store UID for attribution, start timeout. */
+        ESP_LOGI(TAG, "Scan 1 (operator badge) — UID: %s — awaiting new member card", uid_str);
+        m_operator_cred       = cred->credential;
         m_prov_state          = PROV_STATE_AWAITING_CREDENTIAL;
         m_timeout_deadline_ms = now_ms() + CONFIG_PORTUNUS_PROVISION_TIMEOUT_MS;
         if (m_has_feedback) {
@@ -250,8 +251,8 @@ void ProvisioningFSM::handle_credential_read(const event_credential_read_t *cred
         break;
 
     case PROV_STATE_AWAITING_CREDENTIAL: {
-        /* Scan 2: new credential. Send raw UID bytes; server applies HMAC-SHA256. */
-        ESP_LOGI(TAG, "Scan 2 (new credential) — UID: %s — sending provision request", uid_str);
+        /* Scan 2: new member card. Bundle scan-1 operator UID + scan-2 member UID. */
+        ESP_LOGI(TAG, "Scan 2 (new member card) — UID: %s — sending provision request", uid_str);
 
         if (!m_has_network) {
             ESP_LOGW(TAG, "Network unavailable — cannot provision");
@@ -263,10 +264,13 @@ void ProvisioningFSM::handle_credential_read(const event_credential_read_t *cred
         memset(&req_evt, 0, sizeof(req_evt));
         req_evt.id = EVENT_PROVISION_REQUEST;
 
-        strncpy(req_evt.payload.provision_request.operator_uuid,
-                CONFIG_PORTUNUS_OPERATOR_UUID,
-                sizeof(req_evt.payload.provision_request.operator_uuid) - 1);
+        /* Scan-1: operator badge UID (field 6 — server resolves to admin user). */
+        memcpy(req_evt.payload.provision_request.operator_credential_uid,
+               m_operator_cred.uid,
+               m_operator_cred.uid_len);
+        req_evt.payload.provision_request.operator_credential_uid_len = m_operator_cred.uid_len;
 
+        /* Scan-2: new member card UID (field 5). */
         memcpy(req_evt.payload.provision_request.credential_uid,
                cred->credential.uid,
                cred->credential.uid_len);

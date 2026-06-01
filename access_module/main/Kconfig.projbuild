@@ -34,15 +34,6 @@ menu "Portunus Configuration"
                     the operator scan before returning to idle and requiring
                     the operator to scan again.
 
-            config PORTUNUS_OPERATOR_UUID
-                string "Operator UUID"
-                default ""
-                help
-                    UUID of the member_access record authorised to use this
-                    provisioning console. Must match a record that has the
-                    credential.provision_guest permission assigned on the server.
-                    Generate with: uuidgen
-
             config PORTUNUS_DEFAULT_ROLE_ID
                 string "Default role ID for provisioned members"
                 default "guest"

@@ -44,12 +44,17 @@ func NewProvisionService(
 // Provision handles a ProvisionCredentialRequest from a PROVISIONING_CONSOLE module.
 // It returns a domain error only for internal failures; all provisioning outcomes
 // (duplicate, unauthorized, invalid_role) are encoded in the response Status.
+//
+// Operator resolution order:
+//  1. If OperatorCredentialUID is non-empty: hash it, look up via
+//     admin_user_credentials, and use that admin as the operator.
+//  2. If OperatorCredentialUID is empty: fall back to OperatorUUID directly
+//     (legacy firmware that sends the Kconfig UUID in field 1).
 func (s *ProvisionService) Provision(
 	ctx context.Context,
 	req types.ProvisionCredentialRequest,
 ) (types.ProvisionCredentialResponse, error) {
 	moduleID := strings.TrimSpace(req.ModuleID)
-	operatorUUID := strings.TrimSpace(req.OperatorUUID)
 	roleID := strings.TrimSpace(req.RoleID)
 
 	if moduleID == "" {
@@ -59,7 +64,7 @@ func (s *ProvisionService) Provision(
 		return types.ProvisionCredentialResponse{}, ErrProvisionCredentialUIDRequired
 	}
 
-	// Hash the raw UID bytes server-side so enrollment and lookup use the same algorithm.
+	// Hash the scan-2 raw UID bytes server-side.
 	credHash := HashCredentialID(req.CredentialUID, s.credentialHashSecret)
 
 	// Check module is known.
@@ -73,34 +78,13 @@ func (s *ProvisionService) Provision(
 		return types.ProvisionCredentialResponse{OK: false, Known: false}, nil
 	}
 
-	// Verify operator: must be an enabled admin user.
-	if operatorUUID == "" {
-		return types.ProvisionCredentialResponse{
-			OK:     true,
-			Known:  true,
-			Status: types.ProvisionStatusUnauthorized,
-			Detail: "operator_uuid is required",
-		}, nil
-	}
-	operator, err := s.adminUsers.GetAdminUserByUUID(ctx, operatorUUID)
+	// Resolve operator identity.
+	operatorUUID, resp, err := s.resolveOperator(ctx, req)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return types.ProvisionCredentialResponse{
-				OK:     true,
-				Known:  true,
-				Status: types.ProvisionStatusUnauthorized,
-				Detail: "operator not found",
-			}, nil
-		}
-		return types.ProvisionCredentialResponse{}, fmt.Errorf("operator lookup: %w", err)
+		return types.ProvisionCredentialResponse{}, err
 	}
-	if !operator.Enabled {
-		return types.ProvisionCredentialResponse{
-			OK:     true,
-			Known:  true,
-			Status: types.ProvisionStatusUnauthorized,
-			Detail: "operator account is disabled",
-		}, nil
+	if resp != nil {
+		return *resp, nil
 	}
 
 	// Validate role.
@@ -166,6 +150,57 @@ func (s *ProvisionService) Provision(
 		MemberUUID: memberUUID,
 		Status:     types.ProvisionStatusSuccess,
 	}, nil
+}
+
+// resolveOperator determines the operator UUID from the request.
+// Returns (uuid, nil, nil) on success.
+// Returns ("", &unauthorizedResponse, nil) when the operator is not valid.
+// Returns ("", nil, err) on an internal error.
+func (s *ProvisionService) resolveOperator(
+	ctx context.Context,
+	req types.ProvisionCredentialRequest,
+) (string, *types.ProvisionCredentialResponse, error) {
+	unauthorized := func(detail string) *types.ProvisionCredentialResponse {
+		return &types.ProvisionCredentialResponse{
+			OK:     true,
+			Known:  true,
+			Status: types.ProvisionStatusUnauthorized,
+			Detail: detail,
+		}
+	}
+
+	if len(req.OperatorCredentialUID) > 0 {
+		// Preferred path (new firmware): resolve scan-1 UID to an admin user.
+		opHash := HashCredentialID(req.OperatorCredentialUID, s.credentialHashSecret)
+		operator, err := s.adminUsers.GetAdminUserByCredential(ctx, opHash)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return "", unauthorized("operator badge not registered"), nil
+			}
+			return "", nil, fmt.Errorf("operator credential lookup: %w", err)
+		}
+		if !operator.Enabled {
+			return "", unauthorized("operator account is disabled"), nil
+		}
+		return operator.UUID, nil, nil
+	}
+
+	// Legacy path: operator_uuid supplied directly in field 1 (Kconfig firmware).
+	operatorUUID := strings.TrimSpace(req.OperatorUUID)
+	if operatorUUID == "" {
+		return "", unauthorized("operator_uuid is required"), nil
+	}
+	operator, err := s.adminUsers.GetAdminUserByUUID(ctx, operatorUUID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return "", unauthorized("operator not found"), nil
+		}
+		return "", nil, fmt.Errorf("operator lookup: %w", err)
+	}
+	if !operator.Enabled {
+		return "", unauthorized("operator account is disabled"), nil
+	}
+	return operator.UUID, nil, nil
 }
 
 // provisionDuplicateStatus maps an existing member record to the appropriate

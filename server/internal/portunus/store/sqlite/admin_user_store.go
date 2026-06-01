@@ -170,6 +170,43 @@ func (s *AdminUserStore) AnyAdminExists(ctx context.Context) (bool, error) {
 	return n > 0, nil
 }
 
+func (s *AdminUserStore) RegisterAdminCredential(ctx context.Context, adminUUID string, credentialHash []byte) error {
+	return s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		var exists int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM admin_users WHERE uuid = ?;`, adminUUID,
+		).Scan(&exists); err != nil {
+			return fmt.Errorf("RegisterAdminCredential check user: %w", err)
+		}
+		if exists == 0 {
+			return store.ErrNotFound
+		}
+
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO admin_user_credentials (credential_hash, admin_user_uuid, created_at_ms)
+			 VALUES (?, ?, ?);`,
+			credentialHash, adminUUID, time.Now().UTC().UnixMilli(),
+		)
+		if err != nil {
+			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+				return store.ErrAdminCredentialConflict
+			}
+			return fmt.Errorf("RegisterAdminCredential insert: %w", err)
+		}
+		return nil
+	})
+}
+
+func (s *AdminUserStore) GetAdminUserByCredential(ctx context.Context, credentialHash []byte) (*store.AdminUserRecord, error) {
+	const q = `
+SELECT u.uuid, u.username, u.password_hash, COALESCE(u.role_id,'admin'), COALESCE(u.enabled,1),
+       u.must_change_pw, u.created_at_ms, u.updated_at_ms, u.last_login_at_ms
+FROM admin_users u
+JOIN admin_user_credentials c ON c.admin_user_uuid = u.uuid
+WHERE c.credential_hash = ?;`
+	return scanAdminUser(s.db.QueryRowContext(ctx, q, credentialHash))
+}
+
 // scanAdminUser scans a single *sql.Row.
 func scanAdminUser(row *sql.Row) (*store.AdminUserRecord, error) {
 	var (

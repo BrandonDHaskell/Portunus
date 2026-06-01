@@ -20,15 +20,15 @@
  *                          │                             │
  *                        IDLE ◄──────────────────────── IDLE
  *
- * Scan 1 (in IDLE): any credential read advances the FSM and starts the
- * mandatory timeout. The credential is discarded — it serves only as a
- * physical presence confirmation.
+ * Scan 1 (in IDLE): the operator taps their registered admin badge. The raw
+ * UID bytes are stored in m_operator_cred and the FSM advances to
+ * AWAITING_CREDENTIAL, starting the mandatory timeout.
  *
- * Scan 2 (in AWAITING_CREDENTIAL): the new credential's raw UID bytes are
- * SHA-256 hashed on-device via mbedTLS. The hash, the pre-configured
- * operator UUID (Kconfig), and the default role ID are bundled into an
- * EVENT_PROVISION_REQUEST and published to the event bus. server_comm
- * encodes and sends the ProvisionCredentialRequest RPC.
+ * Scan 2 (in AWAITING_CREDENTIAL): the new member card is tapped. The
+ * scan-1 operator UID (m_operator_cred) and scan-2 member UID are bundled
+ * into an EVENT_PROVISION_REQUEST and published to the event bus. server_comm
+ * encodes and sends the ProvisionCredentialRequest RPC; the server resolves
+ * the scan-1 UID to an admin user for attribution.
  *
  * Architecture layer: Core / FSM (mirrors system_fsm architecture).
  */
@@ -96,8 +96,9 @@ private:
     bool m_has_network  = false;
 
     /* ── FSM state ────────────────────────────────────────────────────────── */
-    prov_state_t m_prov_state        = PROV_STATE_IDLE;
+    prov_state_t m_prov_state          = PROV_STATE_IDLE;
     int64_t      m_timeout_deadline_ms = 0;
+    credential_t m_operator_cred       = {};  /**< Scan-1 operator badge UID */
 
     /* ── FreeRTOS handles ─────────────────────────────────────────────────── */
     TaskHandle_t  m_fsm_task_handle  = nullptr;

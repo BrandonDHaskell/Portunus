@@ -116,10 +116,11 @@ typedef enum {
  * server_comm encodes this into a ProvisionCredentialRequest and sends it.
  */
 typedef struct {
-    char    operator_uuid[37];    /**< Pre-configured operator UUID (from Kconfig) */
-    uint8_t credential_uid[10];   /**< Raw RFID UID bytes (server applies HMAC-SHA256) */
-    uint8_t credential_uid_len;   /**< Number of valid bytes in credential_uid (1–10) */
-    char    role_id[33];          /**< Role ID to assign to the new member */
+    uint8_t operator_credential_uid[10]; /**< Raw RFID UID bytes from scan-1 (operator badge) */
+    uint8_t operator_credential_uid_len; /**< Number of valid bytes in operator_credential_uid (1–10) */
+    uint8_t credential_uid[10];          /**< Raw RFID UID bytes from scan-2 (new member card) */
+    uint8_t credential_uid_len;          /**< Number of valid bytes in credential_uid (1–10) */
+    char    role_id[33];                 /**< Role ID to assign to the new member */
 } event_provision_request_t;
 
 /**

@@ -1,13 +1,17 @@
 package types
 
 // ProvisionCredentialRequest is the domain type for device-initiated provisioning.
-// CredentialUID carries the raw RFID UID bytes from the device; the server applies
-// HMAC-SHA256(secret, CredentialUID) before storing in member_access.credential_hash.
+// CredentialUID carries the scan-2 raw RFID UID bytes (new member card).
+// OperatorCredentialUID carries the scan-1 raw RFID UID bytes (operator badge).
+// When OperatorCredentialUID is non-empty the server resolves it to an admin user
+// and ignores OperatorUUID. OperatorUUID is the legacy fallback for firmware that
+// does not send scan-1 UID.
 type ProvisionCredentialRequest struct {
-	OperatorUUID  string `json:"operator_uuid"`
-	ModuleID      string `json:"module_id"`
-	CredentialUID []byte `json:"credential_uid"` // raw RFID UID bytes (1–10 bytes)
-	RoleID        string `json:"role_id"`
+	OperatorUUID          string `json:"operator_uuid"`
+	OperatorCredentialUID []byte `json:"operator_credential_uid"` // scan-1 raw UID (1–10 bytes)
+	ModuleID              string `json:"module_id"`
+	CredentialUID         []byte `json:"credential_uid"` // scan-2 raw UID (1–10 bytes)
+	RoleID                string `json:"role_id"`
 }
 
 // ProvisionStatus represents the outcome of a device-initiated provisioning request.
