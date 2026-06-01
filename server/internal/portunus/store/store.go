@@ -2,10 +2,14 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/types"
 )
+
+// ErrNotFound is returned by any store method that looks up a single record and finds none.
+var ErrNotFound = errors.New("record not found")
 
 type HeartbeatRecord struct {
 	ReceivedAt time.Time

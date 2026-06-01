@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
-	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/types"
 )
 
@@ -112,103 +111,6 @@ func (s *Server) handleAdminDeleteModule(w http.ResponseWriter, r *http.Request)
 
 	s.logger.Printf("admin: deleted module %q", moduleID)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "module_id": moduleID, "deleted": true})
-}
-
-// ── Credentials ──────────────────────────────────────────────────────────────
-
-func (s *Server) handleAdminListCredentials(w http.ResponseWriter, r *http.Request) {
-	credentials, err := s.adminService.ListCredentials(r.Context())
-	if err != nil {
-		s.logger.Printf("admin list credentials: %v", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "failed to list credentials")
-		return
-	}
-	if credentials == nil {
-		credentials = []types.CredentialInfo{}
-	}
-	writeJSON(w, http.StatusOK, types.ListCredentialsResponse{OK: true, Credentials: credentials})
-}
-
-func (s *Server) handleAdminRegisterCredential(w http.ResponseWriter, r *http.Request) {
-	var req types.RegisterCredentialRequest
-	r.Body = http.MaxBytesReader(w, r.Body, maxAdminBody)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "bad_json", "invalid JSON body")
-		return
-	}
-
-	info, err := s.adminService.RegisterCredential(r.Context(), req)
-	if err != nil {
-		if errors.Is(err, service.ErrCredentialIDRequired) {
-			writeError(w, http.StatusBadRequest, "missing_credential_id", err.Error())
-			return
-		}
-		if errors.Is(err, store.ErrCredentialAlreadyExists) {
-			writeError(w, http.StatusConflict, "credential_exists", "credential is already registered")
-			return
-		}
-		s.logger.Printf("admin register credential: %v", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "failed to register credential")
-		return
-	}
-
-	s.logger.Printf("admin: registered credential tag=%q hash=%.16s…", req.Tag, info.CredentialHash)
-	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "credential": info})
-}
-
-func (s *Server) handleAdminUpdateCredentialStatus(w http.ResponseWriter, r *http.Request) {
-	hashHex := r.PathValue("credential_hash")
-	if hashHex == "" {
-		writeError(w, http.StatusBadRequest, "missing_credential_hash", "credential_hash path parameter is required")
-		return
-	}
-
-	var body struct {
-		Status string `json:"status"`
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxAdminBody)
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "bad_json", "invalid JSON body")
-		return
-	}
-
-	if err := s.adminService.SetCredentialStatus(r.Context(), hashHex, body.Status); err != nil {
-		if errors.Is(err, service.ErrInvalidStatus) {
-			writeError(w, http.StatusBadRequest, "invalid_status", err.Error())
-			return
-		}
-		if errors.Is(err, service.ErrCredentialNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "credential not found")
-			return
-		}
-		s.logger.Printf("admin update credential status: %v", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "failed to update credential")
-		return
-	}
-
-	s.logger.Printf("admin: credential %.16s… → %s", hashHex, body.Status)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "credential_hash": hashHex, "status": body.Status})
-}
-
-func (s *Server) handleAdminDeleteCredential(w http.ResponseWriter, r *http.Request) {
-	hashHex := r.PathValue("credential_hash")
-	if hashHex == "" {
-		writeError(w, http.StatusBadRequest, "missing_credential_hash", "credential_hash path parameter is required")
-		return
-	}
-
-	if err := s.adminService.DeleteCredential(r.Context(), hashHex); err != nil {
-		if errors.Is(err, service.ErrCredentialNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "credential not found")
-			return
-		}
-		s.logger.Printf("admin delete credential: %v", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "failed to delete credential")
-		return
-	}
-
-	s.logger.Printf("admin: deleted credential %.16s…", hashHex)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "credential_hash": hashHex, "deleted": true})
 }
 
 // ── Doors ───────────────────────────────────────────────────────────────────
