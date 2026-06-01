@@ -5,7 +5,7 @@
 The Portunus server exposes two groups of HTTP endpoints:
 
 - **Device API** (`/v1/*`) — used by ESP32 access modules for heartbeats and access requests. Authenticated via HMAC-SHA256 request signing. Accepts both JSON and protobuf (`application/x-protobuf`).
-- **Admin API** (`/admin/v1/*`) — used by administrators to manage modules, credentials, doors, members, and authorizations. Authenticated via session cookie. JSON only.
+- **Admin API** (`/admin/v1/*`) — used by administrators to manage modules, doors, members, and authorizations. Authenticated via session cookie. JSON only.
 
 An **Admin UI** is also available at `/admin/ui/` for browser-based management.
 
@@ -128,14 +128,10 @@ Credential tap event — the module sends the credential UID and receives a gran
    - If authorization is revoked → deny with `authorization_revoked`.
    - If authorization is expired → deny with `authorization_expired`.
    - Otherwise → grant with `credential_allowed`.
-4. Legacy credential store path (if member stores are not configured): hash the credential ID, look up in the `credentials` table, check `status = active`. Grant with `credential_allowed` or deny with `credential_not_allowed`.
-5. Legacy env-var fallback: check `PORTUNUS_ALLOWED_CREDENTIAL_IDS` list.
 
 ### POST /v1/provision_credential
 
-Used by PROVISIONING_CONSOLE firmware variant to enroll a new credential on the server. The firmware hashes the credential UID on-device (SHA-256 via mbedTLS) before sending, so raw UIDs never leave the device.
-
-> **Note:** This endpoint is called by PROVISIONING_CONSOLE firmware but is not yet implemented on the server. Provisioning console deployments are blocked until this endpoint is added.
+Used by PROVISIONING_CONSOLE firmware variant to enroll a new credential on the server. The firmware sends the raw UID bytes in the `credential_uid` proto field; the server applies HMAC-SHA256 server-side using `PORTUNUS_CREDENTIAL_HASH_SECRET` so that the resulting hash is identical to the one produced by the admin UI enrollment path.
 
 ---
 
@@ -303,88 +299,6 @@ Permanently delete a module and its associated heartbeat/access records (via CAS
 
 ---
 
-### Credentials
-
-Credentials are stored as SHA-256 hashes. The admin API accepts the raw credential UID for registration but returns and addresses credentials by their hash (hex-encoded).
-
-#### POST /admin/v1/credentials
-
-Register a new credential.
-
-**Request:**
-
-```json
-{
-  "credential_id": "04:A3:2B:1C",
-  "tag": "Alice's badge"
-}
-```
-
-**Response (201):**
-
-```json
-{
-  "ok": true,
-  "credential": {
-    "credential_hash": "a1b2c3d4e5f6...64 hex chars...",
-    "tag": "Alice's badge",
-    "status": "active",
-    "created_at": "2026-03-23T12:00:00Z"
-  }
-}
-```
-
-**Response (409):** Credential already registered.
-
-#### GET /admin/v1/credentials
-
-List all registered credentials.
-
-**Response (200):**
-
-```json
-{
-  "ok": true,
-  "credentials": [
-    {
-      "credential_hash": "a1b2c3d4e5f6...",
-      "tag": "Alice's badge",
-      "status": "active",
-      "created_at": "2026-03-23T12:00:00Z",
-      "last_seen_at": "2026-03-23T14:30:00Z"
-    }
-  ]
-}
-```
-
-#### PATCH /admin/v1/credentials/{credential_hash}
-
-Change a credential's status. Valid statuses: `active`, `disabled`, `lost`.
-
-**Request:**
-
-```json
-{ "status": "disabled" }
-```
-
-**Response (200):**
-
-```json
-{ "ok": true, "credential_hash": "a1b2c3d4e5f6...", "status": "disabled" }
-```
-
-#### DELETE /admin/v1/credentials/{credential_hash}
-
-Permanently delete a credential.
-
-**Response (200):**
-
-```json
-{ "ok": true, "credential_hash": "a1b2c3d4e5f6...", "deleted": true }
-```
-
----
-
 ### Doors
 
 #### POST /admin/v1/doors
@@ -519,13 +433,13 @@ Provision a new member. Creates the member with `provisioning_status: active`.
 
 #### POST /admin/v1/members/{member_uuid}/credential
 
-Attach a registered credential to a member. The credential must already exist in the credentials table. Supply the full 64-character hex credential hash.
+Attach a credential to a member by supplying the raw RFID UID. The server hashes it with HMAC-SHA256 before storing, producing the same hash as the provisioning-console enrollment path.
 
 **Request:**
 
 ```json
 {
-  "credential_hash": "a1b2c3d4e5f6...64 hex chars..."
+  "credential_id": "04:A3:2B:1C"
 }
 ```
 
@@ -662,7 +576,6 @@ List all module authorizations for a member.
 | `PORTUNUS_CREDENTIAL_HASH_SECRET` | (empty) | Keyed HMAC-SHA256 secret for credential ID hashing. Required in prod. Generate with `openssl rand -hex 32` |
 | `PORTUNUS_ALLOW_ALL` | `false` | Grant all access (dev only) |
 | `PORTUNUS_KNOWN_MODULES` | (empty) | CSV of module IDs for dev seeding |
-| `PORTUNUS_ALLOWED_CREDENTIAL_IDS` | (empty) | CSV of allowed credential UIDs (legacy fallback, deprecated) |
 | `PORTUNUS_HEARTBEAT_RETENTION_DAYS` | `30` | Heartbeat record retention |
 | `PORTUNUS_PRUNE_INTERVAL_HOURS` | `6` | Pruner run interval |
 | `PORTUNUS_EXPIRY_WORKER_INTERVAL_MINUTES` | `60` | How often the member expiry worker runs |
@@ -689,14 +602,6 @@ curl -s -c cookies.txt -X POST http://localhost:8080/admin/v1/login \
 curl -s -b cookies.txt -X POST http://localhost:8080/admin/v1/modules \
   -H "Content-Type: application/json" \
   -d '{"module_id": "door-001", "door_id": "door_main", "display_name": "Workshop"}' | jq .
-
-# Register a credential
-curl -s -b cookies.txt -X POST http://localhost:8080/admin/v1/credentials \
-  -H "Content-Type: application/json" \
-  -d '{"credential_id": "04:A3:2B:1C", "tag": "Alice"}' | jq .
-
-# List registered credentials
-curl -s -b cookies.txt http://localhost:8080/admin/v1/credentials | jq .
 
 # Simulate an access request (no HMAC in dev)
 curl -s -X POST http://localhost:8080/v1/access_request \

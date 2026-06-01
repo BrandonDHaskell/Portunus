@@ -46,26 +46,6 @@ type ListModulesResponse struct {
 	Modules []ModuleInfo `json:"modules"`
 }
 
-// ── Credential admin types ──────────────────────────────────────────────────
-
-type RegisterCredentialRequest struct {
-	CredentialID string `json:"credential_id"` // raw hex UID (e.g. "04:A3:2B:1C")
-	Tag          string `json:"tag,omitempty"` // human-readable label
-}
-
-type CredentialInfo struct {
-	CredentialHash string `json:"credential_hash"` // hex-encoded SHA-256
-	Tag            string `json:"tag,omitempty"`
-	Status         string `json:"status"` // "active", "disabled", "lost"
-	CreatedAt      string `json:"created_at"`
-	LastSeenAt     string `json:"last_seen_at,omitempty"`
-}
-
-type ListCredentialsResponse struct {
-	OK          bool             `json:"ok"`
-	Credentials []CredentialInfo `json:"credentials"`
-}
-
 // ── Door admin types ────────────────────────────────────────────────────────
 
 type RegisterDoorRequest struct {

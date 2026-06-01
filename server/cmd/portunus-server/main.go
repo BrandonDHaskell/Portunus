@@ -61,7 +61,6 @@ func main() {
 	deviceStore := sqlitestore.NewDeviceStore(dbConn, writer)
 	heartbeatStore := sqlitestore.NewHeartbeatStore(dbConn, writer)
 	accessEventStore := sqlitestore.NewAccessEventStore(dbConn, writer)
-	credentialStore := sqlitestore.NewCredentialStore(dbConn, writer)
 	moduleAdminStore := sqlitestore.NewModuleAdminStore(dbConn, writer)
 	adminUserStore := sqlitestore.NewAdminUserStore(dbConn, writer)
 	sessionStore := sqlitestore.NewSessionStore(dbConn, writer)
@@ -118,8 +117,8 @@ func main() {
 	// Provisioning service: handles device-initiated provisioning from PROVISIONING_CONSOLE modules.
 	provisionSvc := service.NewProvisionService(registry, memberAccessStore, roleStore, adminUserStore, credentialHashSecret)
 
-	// Admin service for module/credential/door management via REST API.
-	adminSvc := service.NewAdminService(moduleAdminStore, credentialStore, credentialHashSecret)
+	// Admin service for module and door management via REST API.
+	adminSvc := service.NewAdminService(moduleAdminStore, credentialHashSecret)
 
 	// Auth service: session-based admin authentication.
 	authSvc := service.NewAuthService(adminUserStore, sessionStore, roleStore, logger)

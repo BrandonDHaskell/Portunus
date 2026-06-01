@@ -39,7 +39,6 @@ func newAdminTestServer(t *testing.T) (*httptest.Server, *http.Cookie) {
 	adminUserStore := sqlitestore.NewAdminUserStore(conn, writer)
 	sessionStore := sqlitestore.NewSessionStore(conn, writer)
 	roleStore := sqlitestore.NewRoleStore(conn, writer)
-	credentialStore := sqlitestore.NewCredentialStore(conn, writer)
 	moduleAdminStore := sqlitestore.NewModuleAdminStore(conn, writer)
 
 	authSvc := service.NewAuthService(adminUserStore, sessionStore, roleStore, silentLogger)
@@ -67,7 +66,7 @@ func newAdminTestServer(t *testing.T) (*httptest.Server, *http.Cookie) {
 		t.Fatalf("test login: %v", err)
 	}
 
-	adminSvc := service.NewAdminService(moduleAdminStore, credentialStore, nil)
+	adminSvc := service.NewAdminService(moduleAdminStore, nil)
 
 	srv := httpapi.NewServer(httpapi.Dependencies{
 		Logger:       silentLogger,
@@ -211,68 +210,6 @@ func TestAdminModules_DeleteNotFound_404(t *testing.T) {
 func TestAdminModules_RevokeNotFound_404(t *testing.T) {
 	ts, cookie := newAdminTestServer(t)
 	resp := do(t, adminReq(t, http.MethodPost, ts.URL+"/admin/v1/modules/nonexistent/revoke", nil, cookie))
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("expected 404, got %d", resp.StatusCode)
-	}
-}
-
-// ── credential lifecycle ──────────────────────────────────────────────────────
-
-func TestAdminCredentials_RegisterUpdateDelete(t *testing.T) {
-	ts, cookie := newAdminTestServer(t)
-	base := ts.URL
-
-	resp := do(t, adminReq(t, http.MethodPost, base+"/admin/v1/credentials",
-		map[string]string{"credential_id": "AA:BB:CC:DD", "tag": "test-credential"}, cookie))
-	var regBody map[string]any
-	json.NewDecoder(resp.Body).Decode(&regBody)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("register credential: expected 201, got %d", resp.StatusCode)
-	}
-
-	credInfo, _ := regBody["credential"].(map[string]any)
-	credHash, _ := credInfo["credential_hash"].(string)
-	if credHash == "" {
-		t.Fatal("expected non-empty credential_hash in response")
-	}
-
-	resp = do(t, adminReq(t, http.MethodPatch, base+"/admin/v1/credentials/"+credHash,
-		map[string]string{"status": "disabled"}, cookie))
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("update status: expected 200, got %d", resp.StatusCode)
-	}
-
-	resp = do(t, adminReq(t, http.MethodDelete, base+"/admin/v1/credentials/"+credHash, nil, cookie))
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("delete credential: expected 200, got %d", resp.StatusCode)
-	}
-}
-
-func TestAdminCredentials_DuplicateRegister_409(t *testing.T) {
-	ts, cookie := newAdminTestServer(t)
-	body := map[string]string{"credential_id": "AA:BB:CC:DD"}
-
-	resp := do(t, adminReq(t, http.MethodPost, ts.URL+"/admin/v1/credentials", body, cookie))
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("first register: expected 201, got %d", resp.StatusCode)
-	}
-
-	resp = do(t, adminReq(t, http.MethodPost, ts.URL+"/admin/v1/credentials", body, cookie))
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusConflict {
-		t.Errorf("duplicate: expected 409, got %d", resp.StatusCode)
-	}
-}
-
-func TestAdminCredentials_DeleteNotFound_404(t *testing.T) {
-	ts, cookie := newAdminTestServer(t)
-	hashHex := "deadbeef00000000000000000000000000000000000000000000000000000000"
-	resp := do(t, adminReq(t, http.MethodDelete, ts.URL+"/admin/v1/credentials/"+hashHex, nil, cookie))
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", resp.StatusCode)

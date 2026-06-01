@@ -101,16 +101,6 @@ func NewServer(d Dependencies) *Server {
 		mux.HandleFunc("DELETE /admin/v1/modules/{module_id}",
 			requirePermission(permissions.ModuleDelete, s.handleAdminDeleteModule))
 
-		// Credentials
-		mux.HandleFunc("GET /admin/v1/credentials",
-			requirePermission(permissions.CredentialList, s.handleAdminListCredentials))
-		mux.HandleFunc("POST /admin/v1/credentials",
-			requirePermission(permissions.CredentialRegister, s.handleAdminRegisterCredential))
-		mux.HandleFunc("PATCH /admin/v1/credentials/{credential_hash}",
-			requirePermission(permissions.CredentialUpdateStatus, s.handleAdminUpdateCredentialStatus))
-		mux.HandleFunc("DELETE /admin/v1/credentials/{credential_hash}",
-			requirePermission(permissions.CredentialDelete, s.handleAdminDeleteCredential))
-
 		// Doors
 		mux.HandleFunc("GET /admin/v1/doors",
 			requirePermission(permissions.DoorList, s.handleAdminListDoors))

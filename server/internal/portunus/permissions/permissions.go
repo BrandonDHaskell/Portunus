@@ -12,12 +12,6 @@ const (
 	ModuleRevoke   = "module.revoke"
 	ModuleDelete   = "module.delete"
 
-	// Credential management (legacy table; superseded by member_access in PR 4)
-	CredentialList         = "credential.list"
-	CredentialRegister     = "credential.register"
-	CredentialUpdateStatus = "credential.update_status"
-	CredentialDelete       = "credential.delete"
-
 	// Door management
 	DoorList     = "door.list"
 	DoorRegister = "door.register"
@@ -58,7 +52,6 @@ const (
 func All() []string {
 	return []string{
 		ModuleList, ModuleGet, ModuleRegister, ModuleRevoke, ModuleDelete,
-		CredentialList, CredentialRegister, CredentialUpdateStatus, CredentialDelete,
 		DoorList, DoorRegister, DoorDelete,
 		AdminUserCreate, AdminUserList, AdminUserEdit, AdminUserDisable,
 		RoleList, RoleCreate, RoleEdit, RoleDelete, RoleAssignPermission,
