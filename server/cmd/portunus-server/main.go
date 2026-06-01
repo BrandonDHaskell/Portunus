@@ -86,19 +86,9 @@ func main() {
 	pruner.Start(ctx)
 	defer pruner.Stop()
 
-	allowed := make(map[string]struct{}, len(cfg.AllowedCredentialIDs))
-	for _, c := range cfg.AllowedCredentialIDs {
-		allowed[c] = struct{}{}
-	}
 	accessSvc := service.NewAccessService(registry, service.AccessPolicy{
-		AllowAll:             cfg.AllowAll,
-		AllowedCredentialIDs: allowed,
+		AllowAll: cfg.AllowAll,
 	}, accessEventStore)
-
-	// Enable DB-backed credential lookups (replaces the legacy AllowedCredentialIDs
-	// env-var map).  When credentials exist in the DB, the access service
-	// hashes the incoming credential ID and checks the credentials table.
-	accessSvc.SetCredentialStore(credentialStore)
 
 	credentialHashSecret := []byte(cfg.CredentialHashSecret)
 	if cfg.CredentialHashSecret == "" {
@@ -114,6 +104,9 @@ func main() {
 	// Enable member_access + module_authorizations path in the access service.
 	accessSvc.SetMemberAccessStore(memberAccessStore)
 	accessSvc.SetModuleAuthStore(moduleAuthStore)
+	if err := accessSvc.Validate(); err != nil {
+		logger.Fatalf("access service wiring error: %v", err)
+	}
 
 	// Expiry worker: transitions member records to 'expired' on a scheduled interval.
 	expiryWorker := service.NewExpiryWorker(memberAccessStore, service.ExpiryWorkerConfig{

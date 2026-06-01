@@ -676,3 +676,57 @@ func TestAccess_FirmwareEnrolledCredential_IsGranted(t *testing.T) {
 		t.Errorf("expected granted=true for firmware-enrolled credential, got reason=%q", resp.Reason)
 	}
 }
+
+// ── fail-open regression test ─────────────────────────────────────────────────
+
+// TestAccessService_FailOpen_UnauthorizedModuleIsDenied is the wiring regression
+// guard required by P1-1.  It constructs the service the same way main.go does
+// (both member-access and module-auth stores wired) and asserts that a member
+// whose credential IS enrolled but has NO module authorization is denied with
+// reason "module_not_authorized".
+//
+// If moduleAuthStore were ever accidentally removed from the wiring, the service
+// would error out (branch 3/4 hard-error path), not silently grant.  If the
+// member-access path were accidentally replaced with a credential-only path, this
+// test would catch the regression: "credential_allowed" would appear instead of
+// "module_not_authorized".
+func TestAccessService_FailOpen_UnauthorizedModuleIsDenied(t *testing.T) {
+	ctx := context.Background()
+	dbConn, writer := openSvcTestDB(t)
+	maStore := sqlitestore.NewMemberAccessStore(dbConn, writer)
+	moStore := sqlitestore.NewModuleAuthorizationStore(dbConn, writer)
+	moduleID := "module-guard"
+	memberUUID := "cccccccc-0000-4000-8000-000000000001"
+
+	credHash := service.HashCredentialID([]byte{0x04, 0xBB, 0xCC, 0xDD}, nil)
+
+	if err := maStore.CreateMember(ctx, memberUUID, "member", "", store.ProvisioningStatusActive, nil, nil); err != nil {
+		t.Fatalf("CreateMember: %v", err)
+	}
+	if err := maStore.AttachCredential(ctx, memberUUID, credHash); err != nil {
+		t.Fatalf("AttachCredential: %v", err)
+	}
+	// Intentionally no GrantAuthorization — the member has a credential but no module access.
+
+	deviceStore := memory.NewDeviceStore([]string{moduleID})
+	svc := service.NewAccessService(service.NewDeviceRegistry(deviceStore), service.AccessPolicy{}, memory.NewAccessEventStore())
+	svc.SetMemberAccessStore(maStore)
+	svc.SetModuleAuthStore(moStore)
+	if err := svc.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	resp, err := svc.Decide(ctx, types.AccessRequest{
+		ModuleID:     moduleID,
+		CredentialID: "04:BB:CC:DD",
+	})
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if resp.Granted {
+		t.Error("enrolled member with no module authorization must not be granted")
+	}
+	if resp.Reason != "module_not_authorized" {
+		t.Errorf("expected reason=module_not_authorized, got %q — wiring regression?", resp.Reason)
+	}
+}

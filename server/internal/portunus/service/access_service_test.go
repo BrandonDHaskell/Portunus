@@ -6,6 +6,7 @@ import (
 
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store/memory"
+	sqlitestore "github.com/BrandonDHaskell/Portunus/server/internal/portunus/store/sqlite"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/types"
 )
 
@@ -58,58 +59,83 @@ func TestDecide_AllowAll_RecordsGrantEvent(t *testing.T) {
 	}
 }
 
-func TestDecide_CredentialAllowed_RecordsGrantEvent(t *testing.T) {
-	allowed := map[string]struct{}{"AABBCCDD": {}}
-	svc, es := newTestAccessService(
-		[]string{"door-001"},
-		service.AccessPolicy{AllowedCredentialIDs: allowed},
-	)
+// TestDecide_MisconfiguredService_ReturnsError verifies that Decide returns a
+// hard error (rather than silently granting) when the service is not fully wired.
+// This guards against accidentally falling through to a credential-only path
+// that skips per-module authorization.
+func TestDecide_MisconfiguredService_ReturnsError(t *testing.T) {
+	svc, es := newTestAccessService([]string{"door-001"}, service.AccessPolicy{})
+	// Neither memberAccessStore nor moduleAuthStore is set — service is misconfigured.
 
 	_, err := svc.Decide(context.Background(), types.AccessRequest{
 		ModuleID:     "door-001",
-		CredentialID: "AABBCCDD",
+		CredentialID: "04:AA:BB:CC",
 	})
-	if err != nil {
-		t.Fatalf("Decide: %v", err)
+	if err == nil {
+		t.Fatal("expected error from misconfigured service, got nil")
 	}
 
+	// An audit event must still be recorded even when Decide returns an error.
 	events := es.Events()
 	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
+		t.Fatalf("expected 1 audit event, got %d", len(events))
 	}
-	if !events[0].Granted {
-		t.Error("expected granted=true for allowed credential")
-	}
-	if events[0].Reason != "credential_allowed" {
-		t.Errorf("expected reason=credential_allowed, got %q", events[0].Reason)
+	if events[0].Granted {
+		t.Error("misconfigured service must not grant")
 	}
 }
 
-func TestDecide_CredentialDenied_RecordsDenyEvent(t *testing.T) {
-	allowed := map[string]struct{}{"AABBCCDD": {}}
-	svc, es := newTestAccessService(
-		[]string{"door-001"},
-		service.AccessPolicy{AllowedCredentialIDs: allowed},
-	)
+// TestAccessService_Validate tests that Validate catches missing stores and
+// passes when both are present or when AllowAll is set.
+func TestAccessService_Validate(t *testing.T) {
+	newSvc := func(policy service.AccessPolicy) *service.AccessService {
+		ds := memory.NewDeviceStore(nil)
+		return service.NewAccessService(
+			service.NewDeviceRegistry(ds),
+			policy,
+			memory.NewAccessEventStore(),
+		)
+	}
 
-	_, err := svc.Decide(context.Background(), types.AccessRequest{
-		ModuleID:     "door-001",
-		CredentialID: "UNKNOWN_CREDENTIAL",
+	t.Run("missing both stores", func(t *testing.T) {
+		if err := newSvc(service.AccessPolicy{}).Validate(); err == nil {
+			t.Error("expected error when neither store is set")
+		}
 	})
-	if err != nil {
-		t.Fatalf("Decide: %v", err)
-	}
 
-	events := es.Events()
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Granted {
-		t.Error("expected granted=false for denied credential")
-	}
-	if events[0].Reason != "credential_not_allowed" {
-		t.Errorf("expected reason=credential_not_allowed, got %q", events[0].Reason)
-	}
+	t.Run("missing moduleAuthStore", func(t *testing.T) {
+		dbConn, writer := openSvcTestDB(t)
+		svc := newSvc(service.AccessPolicy{})
+		svc.SetMemberAccessStore(sqlitestore.NewMemberAccessStore(dbConn, writer))
+		if err := svc.Validate(); err == nil {
+			t.Error("expected error when moduleAuthStore is missing")
+		}
+	})
+
+	t.Run("missing memberAccessStore", func(t *testing.T) {
+		dbConn, writer := openSvcTestDB(t)
+		svc := newSvc(service.AccessPolicy{})
+		svc.SetModuleAuthStore(sqlitestore.NewModuleAuthorizationStore(dbConn, writer))
+		if err := svc.Validate(); err == nil {
+			t.Error("expected error when memberAccessStore is missing")
+		}
+	})
+
+	t.Run("fully wired", func(t *testing.T) {
+		dbConn, writer := openSvcTestDB(t)
+		svc := newSvc(service.AccessPolicy{})
+		svc.SetMemberAccessStore(sqlitestore.NewMemberAccessStore(dbConn, writer))
+		svc.SetModuleAuthStore(sqlitestore.NewModuleAuthorizationStore(dbConn, writer))
+		if err := svc.Validate(); err != nil {
+			t.Errorf("expected nil error when fully wired, got: %v", err)
+		}
+	})
+
+	t.Run("AllowAll bypasses check", func(t *testing.T) {
+		if err := newSvc(service.AccessPolicy{AllowAll: true}).Validate(); err != nil {
+			t.Errorf("expected AllowAll to bypass Validate, got: %v", err)
+		}
+	})
 }
 
 func TestDecide_UnknownModule_RecordsDenyEvent(t *testing.T) {
