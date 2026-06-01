@@ -158,6 +158,9 @@ func NewServer(d Dependencies) *Server {
 		mux.Handle("GET /admin/ui/static/", http.StripPrefix("/admin/ui/static/", staticHandler()))
 	}
 	if d.AdminUserService != nil {
+		// REST endpoint: register an admin user's RFID badge for provisioning scan-1.
+		mux.HandleFunc("POST /admin/v1/admin-users/{admin_uuid}/credential",
+			requirePermission(permissions.AdminUserEdit, s.handleAdminRegisterAdminCredential))
 		s.uiUserRoutes(mux)
 	}
 	if d.RoleService != nil {

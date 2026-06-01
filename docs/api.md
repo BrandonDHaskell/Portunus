@@ -131,7 +131,13 @@ Credential tap event — the module sends the credential UID and receives a gran
 
 ### POST /v1/provision_credential
 
-Used by PROVISIONING_CONSOLE firmware variant to enroll a new credential on the server. The firmware sends the raw UID bytes in the `credential_uid` proto field; the server applies HMAC-SHA256 server-side using `PORTUNUS_CREDENTIAL_HASH_SECRET` so that the resulting hash is identical to the one produced by the admin UI enrollment path.
+Used by PROVISIONING_CONSOLE firmware variant to enroll a new credential on the server.
+
+The firmware sends raw RFID UID bytes for both scans:
+- **`operator_credential_uid`** (proto field 6) — scan-1: operator's badge. The server hashes this and resolves it against `admin_user_credentials` to identify the operator. The resolved admin UUID is recorded in the new member's `created_by_uuid`.
+- **`credential_uid`** (proto field 5) — scan-2: new member card. The server applies `HMAC-SHA256(PORTUNUS_CREDENTIAL_HASH_SECRET, credential_uid)` before storing, producing the same hash as the admin UI enrollment path.
+
+The operator must have their RFID badge registered via `POST /admin/v1/admin-users/{uuid}/credential` before provisioning will succeed.
 
 ---
 
@@ -560,6 +566,32 @@ Revoke a member's access to a module. Records `revoked_at` and `revoked_by_uuid`
 List all module authorizations for a member.
 
 **Response (200):** Same shape as `GET /admin/v1/modules/{module_id}/authorizations`.
+
+---
+
+### Admin User Credentials
+
+An admin user may register one or more RFID badges. When that admin operates a provisioning console, the scan-1 tap of their badge is resolved server-side to their account, providing genuine operator attribution on provisioned members.
+
+#### POST /admin/v1/admin-users/{uuid}/credential
+
+Register an RFID badge for an admin user. Requires `admin_user.edit` permission.
+
+**Request:**
+
+```json
+{ "credential_id": "04:A3:2B:1C" }
+```
+
+**Response (201):**
+
+```json
+{ "ok": true, "admin_user_uuid": "550e8400-..." }
+```
+
+**Response (404):** Admin user not found.
+
+**Response (409):** Credential already registered to an admin user.
 
 ---
 

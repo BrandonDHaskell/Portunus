@@ -6,7 +6,17 @@ import (
 	"time"
 )
 
-var ErrUsernameAlreadyExists = errors.New("username already exists")
+var (
+	ErrUsernameAlreadyExists   = errors.New("username already exists")
+	ErrAdminCredentialConflict = errors.New("credential already registered to an admin user")
+)
+
+// AdminCredentialRecord represents a row in admin_user_credentials.
+type AdminCredentialRecord struct {
+	CredentialHash []byte
+	AdminUserUUID  string
+	CreatedAt      time.Time
+}
 
 // AdminUserRecord represents a row in the admin_users table.
 type AdminUserRecord struct {
@@ -54,4 +64,13 @@ type AdminUserStore interface {
 
 	// AnyAdminExists returns true if at least one admin_user row exists.
 	AnyAdminExists(ctx context.Context) (bool, error)
+
+	// RegisterAdminCredential registers a credential hash for an admin user.
+	// Returns ErrNotFound if the admin user does not exist,
+	// ErrAdminCredentialConflict if the hash is already registered.
+	RegisterAdminCredential(ctx context.Context, adminUUID string, credentialHash []byte) error
+
+	// GetAdminUserByCredential returns the admin user whose credential_hash
+	// matches, or ErrNotFound if no match exists.
+	GetAdminUserByCredential(ctx context.Context, credentialHash []byte) (*AdminUserRecord, error)
 }

@@ -612,13 +612,18 @@ static void handle_provision(const event_provision_request_t *req)
     portunus_v1_ProvisionCredentialRequest pb_req =
         portunus_v1_ProvisionCredentialRequest_init_zero;
 
-    strncpy(pb_req.operator_uuid, req->operator_uuid,
-            sizeof(pb_req.operator_uuid) - 1);
     strncpy(pb_req.module_id, PORTUNUS_MODULE_ID,
             sizeof(pb_req.module_id) - 1);
     strncpy(pb_req.role_id, req->role_id,
             sizeof(pb_req.role_id) - 1);
 
+    /* Scan-1: operator badge UID — server resolves to admin user. */
+    pb_req.operator_credential_uid.size = req->operator_credential_uid_len;
+    memcpy(pb_req.operator_credential_uid.bytes,
+           req->operator_credential_uid,
+           req->operator_credential_uid_len);
+
+    /* Scan-2: new member card UID — server applies HMAC-SHA256 before storing. */
     pb_req.credential_uid.size = req->credential_uid_len;
     memcpy(pb_req.credential_uid.bytes, req->credential_uid, req->credential_uid_len);
 

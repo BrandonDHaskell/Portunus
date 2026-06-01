@@ -141,15 +141,19 @@ message AccessResponse {
 // ──────────────────────────────────────────────────────────────────────────
 
 // Sent by a provisioning console after a successful two-scan flow.
-// The device sends the raw RFID UID bytes; the server applies HMAC-SHA256.
+// The device sends raw RFID UID bytes for both scans; the server applies
+// HMAC-SHA256 and resolves the scan-1 UID to an admin user for attribution.
 //
 // Server Go equivalent: types.ProvisionCredentialRequest
 message ProvisionCredentialRequest {
-  // UUID of the operator performing the provisioning (from scan 1).
-  string operator_uuid   = 1;
+  // UUID of the admin operator.  Populated by the server after resolving
+  // operator_credential_uid (field 6) to an admin_users record.
+  // When field 6 is absent (legacy firmware), the device supplies this
+  // directly from Kconfig CONFIG_PORTUNUS_OPERATOR_UUID.
+  string operator_uuid          = 1;
 
   // Module ID of the provisioning console.
-  string module_id       = 2;
+  string module_id              = 2;
 
   // Retired: was SHA-256(raw UID bytes) computed on-device.  Replaced by
   // credential_uid (field 5) so the server can apply a consistent HMAC.
@@ -157,11 +161,17 @@ message ProvisionCredentialRequest {
   reserved "credential_hash";
 
   // Role ID to assign to the new member.  Must already exist on the server.
-  string role_id         = 4;
+  string role_id                = 4;
 
-  // Raw RFID UID bytes read from the card (1–10 bytes).
+  // Raw RFID UID bytes read from the new-member card (scan 2, 1–10 bytes).
   // The server computes HMAC-SHA256(secret, credential_uid) before storing.
-  bytes  credential_uid  = 5;
+  bytes  credential_uid         = 5;
+
+  // Raw RFID UID bytes read from the operator's card (scan 1, 1–10 bytes).
+  // The server hashes this and looks up the matching admin_user_credentials
+  // row to determine the true operator identity.  When present, this takes
+  // precedence over operator_uuid (field 1).
+  bytes  operator_credential_uid = 6;
 }
 
 // Returned by the server after processing a provisioning request.
