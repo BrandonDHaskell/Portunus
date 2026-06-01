@@ -19,6 +19,7 @@ import (
 	"log"
 
 	pb "github.com/BrandonDHaskell/Portunus/server/api/portunus/v1"
+	"github.com/BrandonDHaskell/Portunus/server/internal/pbconvert"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/types"
 	"google.golang.org/grpc/codes"
@@ -161,26 +162,7 @@ func (s *Server) ProvisionCredential(ctx context.Context, req *pb.ProvisionCrede
 
 	return &pb.ProvisionCredentialResponse{
 		MemberUuid: resp.MemberUUID,
-		Status:     domainProvisionStatusToProto(resp.Status),
+		Status:     pbconvert.DomainProvisionStatusToProto(resp.Status),
 		Detail:     resp.Detail,
 	}, nil
-}
-
-func domainProvisionStatusToProto(s types.ProvisionStatus) pb.ProvisionStatus {
-	switch s {
-	case types.ProvisionStatusSuccess:
-		return pb.ProvisionStatus_PROVISION_STATUS_SUCCESS
-	case types.ProvisionStatusDuplicateActive:
-		return pb.ProvisionStatus_PROVISION_STATUS_DUPLICATE_ACTIVE
-	case types.ProvisionStatusDuplicateInactive:
-		return pb.ProvisionStatus_PROVISION_STATUS_DUPLICATE_INACTIVE
-	case types.ProvisionStatusDuplicatePending:
-		return pb.ProvisionStatus_PROVISION_STATUS_DUPLICATE_PENDING
-	case types.ProvisionStatusUnauthorized:
-		return pb.ProvisionStatus_PROVISION_STATUS_UNAUTHORIZED
-	case types.ProvisionStatusInvalidRole:
-		return pb.ProvisionStatus_PROVISION_STATUS_INVALID_ROLE
-	default:
-		return pb.ProvisionStatus_PROVISION_STATUS_UNSPECIFIED
-	}
 }

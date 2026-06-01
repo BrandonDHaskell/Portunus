@@ -259,6 +259,39 @@ func TestDecide_MissingModuleID_NoEventRecorded(t *testing.T) {
 	}
 }
 
+// TestAccessReasonCodes_FitNanopbBound asserts that every reason code the
+// access service writes into AccessResponse.reason fits within the Nanopb
+// max_size:33 allocation (32 usable chars + 1 NUL byte).  If a new reason
+// code is added that exceeds 32 chars, the Nanopb encode will fail at runtime
+// on the ESP32 — this test catches that at compile/test time instead.
+func TestAccessReasonCodes_FitNanopbBound(t *testing.T) {
+	const maxLen = 32 // Nanopb max_size:33 reserves one byte for NUL
+
+	// All values that may appear in the wire AccessResponse.reason field.
+	// Keep this in sync with access_service.go Decide / decideMemberAccess.
+	wireCodes := []string{
+		"allow_all",
+		"denied",
+		"unknown_module",
+		"invalid_credential_format",
+		"credential_not_found",
+		"member_expired",
+		"member_suspended",
+		"member_archived",
+		"member_disabled",
+		"module_not_authorized",
+		"authorization_revoked",
+		"authorization_expired",
+		"credential_allowed",
+	}
+
+	for _, code := range wireCodes {
+		if len(code) > maxLen {
+			t.Errorf("reason code %q is %d chars, exceeds Nanopb max %d", code, len(code), maxLen)
+		}
+	}
+}
+
 func TestDecide_MissingCredentialID_NoEventRecorded(t *testing.T) {
 	svc, es := newTestAccessService([]string{"door-001"}, service.AccessPolicy{})
 

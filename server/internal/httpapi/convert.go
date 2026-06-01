@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	pb "github.com/BrandonDHaskell/Portunus/server/api/portunus/v1"
+	"github.com/BrandonDHaskell/Portunus/server/internal/pbconvert"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/types"
 )
 
@@ -81,26 +82,7 @@ func provisionRequestFromProto(p *pb.ProvisionCredentialRequest) types.Provision
 func provisionResponseToProto(r types.ProvisionCredentialResponse) *pb.ProvisionCredentialResponse {
 	return &pb.ProvisionCredentialResponse{
 		MemberUuid: r.MemberUUID,
-		Status:     domainProvisionStatusToProto(r.Status),
+		Status:     pbconvert.DomainProvisionStatusToProto(r.Status),
 		Detail:     r.Detail,
-	}
-}
-
-func domainProvisionStatusToProto(s types.ProvisionStatus) pb.ProvisionStatus {
-	switch s {
-	case types.ProvisionStatusSuccess:
-		return pb.ProvisionStatus_PROVISION_STATUS_SUCCESS
-	case types.ProvisionStatusDuplicateActive:
-		return pb.ProvisionStatus_PROVISION_STATUS_DUPLICATE_ACTIVE
-	case types.ProvisionStatusDuplicateInactive:
-		return pb.ProvisionStatus_PROVISION_STATUS_DUPLICATE_INACTIVE
-	case types.ProvisionStatusDuplicatePending:
-		return pb.ProvisionStatus_PROVISION_STATUS_DUPLICATE_PENDING
-	case types.ProvisionStatusUnauthorized:
-		return pb.ProvisionStatus_PROVISION_STATUS_UNAUTHORIZED
-	case types.ProvisionStatusInvalidRole:
-		return pb.ProvisionStatus_PROVISION_STATUS_INVALID_ROLE
-	default:
-		return pb.ProvisionStatus_PROVISION_STATUS_UNSPECIFIED
 	}
 }
