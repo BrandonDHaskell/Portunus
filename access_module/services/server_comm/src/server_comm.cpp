@@ -1,15 +1,21 @@
 /**
  * @file server_comm.cpp
- * @brief Server communication component implementation.
+ * @brief Server communication component — handles both HTTP/1.1 and gRPC transports.
  *
  * Architecture:
  *   Event bus callbacks (on_heartbeat_event / on_credential_event) copy
  *   incoming events into s_comm_queue.  The comm_task drains the queue,
- *   encodes protobuf, performs the HTTP POST, and publishes the result
- *   (access decisions) back to the event bus.
+ *   encodes protobuf, sends the request to the server, and publishes the
+ *   result (access decisions) back to the event bus.
  *
- *   HTTP I/O is blocking and runs entirely on the comm_task stack, so
- *   the event bus dispatcher is never blocked.
+ *   Transport is selected at build time via Kconfig CONFIG_PORTUNUS_USE_GRPC:
+ *     - Off (default): HTTP/1.1 + protobuf over esp_http_client.  Each call
+ *       opens a new connection; TLS is controlled by PORTUNUS_USE_TLS.
+ *     - On: gRPC (HTTP/2 + TLS) via grpc_client.  A single persistent
+ *       connection is reused across calls with exponential-backoff reconnect.
+ *
+ *   All I/O is blocking and runs entirely on the comm_task stack, so the
+ *   event bus dispatcher is never blocked.
  */
 
 #include "server_comm.h"

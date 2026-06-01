@@ -1,7 +1,7 @@
 package service_test
 
 // Integration tests for the AccessService member_access + module_authorizations
-// decision path introduced in PR 4.  These tests use an in-memory SQLite
+// decision path.  These tests use an in-memory SQLite
 // database with the production schema applied via the migration runner.
 
 import (
