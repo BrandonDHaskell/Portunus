@@ -70,10 +70,10 @@ func accessResponseToProto(r types.AccessResponse) *pb.AccessResponse {
 
 func provisionRequestFromProto(p *pb.ProvisionCredentialRequest) types.ProvisionCredentialRequest {
 	return types.ProvisionCredentialRequest{
-		OperatorUUID:   p.GetOperatorUuid(),
-		ModuleID:       p.GetModuleId(),
-		CredentialHash: p.GetCredentialHash(),
-		RoleID:         p.GetRoleId(),
+		OperatorUUID:  p.GetOperatorUuid(),
+		ModuleID:      p.GetModuleId(),
+		CredentialUID: p.GetCredentialUid(),
+		RoleID:        p.GetRoleId(),
 	}
 }
 

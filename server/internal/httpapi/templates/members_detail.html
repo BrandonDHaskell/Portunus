@@ -87,9 +87,9 @@
     {{if not .CredentialHash}}
     <form method="POST" action="/admin/ui/members/{{.UUID}}/credential" style="display:flex;gap:.5rem;align-items:flex-end">
       <div class="form-group" style="margin:0">
-        <label for="credential_hash">Attach Credential Hash (64 hex chars)</label>
-        <input id="credential_hash" name="credential_hash" type="text" class="font-mono"
-          placeholder="sha256 hex…" maxlength="64" style="width:28rem">
+        <label for="credential_id">Attach Credential UID (e.g. 04:A3:2B:1C)</label>
+        <input id="credential_id" name="credential_id" type="text" class="font-mono"
+          placeholder="XX:XX:XX:XX" maxlength="29" style="width:28rem">
       </div>
       <button class="btn btn-primary" type="submit">Attach</button>
     </form>

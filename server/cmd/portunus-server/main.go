@@ -123,7 +123,7 @@ func main() {
 	defer expiryWorker.Stop()
 
 	// Provisioning service: handles device-initiated provisioning from PROVISIONING_CONSOLE modules.
-	provisionSvc := service.NewProvisionService(registry, memberAccessStore, roleStore, adminUserStore)
+	provisionSvc := service.NewProvisionService(registry, memberAccessStore, roleStore, adminUserStore, credentialHashSecret)
 
 	// Admin service for module/credential/door management via REST API.
 	adminSvc := service.NewAdminService(moduleAdminStore, credentialStore, credentialHashSecret)
@@ -142,19 +142,20 @@ func main() {
 
 	// HTTP
 	srv := httpapi.NewServer(httpapi.Dependencies{
-		Logger:              logger,
-		Addr:                cfg.HTTPAddr,
-		HeartbeatService:    heartbeatSvc,
-		AccessService:       accessSvc,
-		ProvisionService:    provisionSvc,
-		AdminService:        adminSvc,
-		AuthService:         authSvc,
-		AdminUserService:    adminUserSvc,
-		RoleService:         roleSvc,
-		MemberAccessService: memberAccessSvc,
-		ModuleAuthService:   moduleAuthSvc,
-		HMACSecret:          cfg.HMACSecret,
-		TLSEnabled:          tlsEnabled,
+		Logger:               logger,
+		Addr:                 cfg.HTTPAddr,
+		HeartbeatService:     heartbeatSvc,
+		AccessService:        accessSvc,
+		ProvisionService:     provisionSvc,
+		AdminService:         adminSvc,
+		AuthService:          authSvc,
+		AdminUserService:     adminUserSvc,
+		RoleService:          roleSvc,
+		MemberAccessService:  memberAccessSvc,
+		ModuleAuthService:    moduleAuthSvc,
+		HMACSecret:           cfg.HMACSecret,
+		CredentialHashSecret: credentialHashSecret,
+		TLSEnabled:           tlsEnabled,
 	})
 
 	go func() {

@@ -14,6 +14,29 @@ import (
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/types"
 )
 
+// ParseCredentialUID parses a colon-separated uppercase hex UID string
+// (e.g. "04:A3:2B:1C") into raw bytes.  This is the format the access module
+// puts in AccessRequest.credential_id via credential_uid_to_hex().
+func ParseCredentialUID(s string) ([]byte, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, errors.New("empty credential UID")
+	}
+	parts := strings.Split(s, ":")
+	if len(parts) < 1 || len(parts) > 10 {
+		return nil, fmt.Errorf("credential UID must be 1–10 colon-separated bytes, got %d", len(parts))
+	}
+	uid := make([]byte, len(parts))
+	for i, p := range parts {
+		b, err := hex.DecodeString(p)
+		if err != nil || len(b) != 1 {
+			return nil, fmt.Errorf("invalid byte at position %d: %q", i, p)
+		}
+		uid[i] = b[0]
+	}
+	return uid, nil
+}
+
 var (
 	ErrModuleIDRequired     = errors.New("module_id is required")
 	ErrCredentialIDRequired = errors.New("credential_id is required")
@@ -107,17 +130,18 @@ func (s *AdminService) DeleteModule(ctx context.Context, moduleID string) error 
 
 // ── Credentials ──────────────────────────────────────────────────────────────
 
-// HashCredentialID computes the credential hash used for storage and lookups.
-// When secret is non-empty, uses HMAC-SHA256(secret, credentialID).
-// Falls back to bare SHA-256 when secret is nil (dev/migration only).
-func HashCredentialID(credentialID string, secret []byte) []byte {
-	id := []byte(strings.TrimSpace(credentialID))
+// HashCredentialID computes the canonical credential hash for storage and lookup.
+// Algorithm: HMAC-SHA256(secret, rawUID) when secret is non-empty; SHA-256(rawUID) otherwise.
+// Input: rawUID must be the raw RFID UID bytes (e.g. {0x04, 0xA3, 0x2B, 0x1C}) — not a
+// formatted string.  Use ParseCredentialUID to convert a colon-hex string first.
+// This is the sole server-side hashing function; every enrollment and lookup path calls it.
+func HashCredentialID(rawUID []byte, secret []byte) []byte {
 	if len(secret) > 0 {
 		mac := hmac.New(sha256.New, secret)
-		mac.Write(id)
+		mac.Write(rawUID)
 		return mac.Sum(nil)
 	}
-	h := sha256.Sum256(id)
+	h := sha256.Sum256(rawUID)
 	return h[:]
 }
 
@@ -127,7 +151,11 @@ func (s *AdminService) RegisterCredential(ctx context.Context, req types.Registe
 		return nil, ErrCredentialIDRequired
 	}
 
-	hash := HashCredentialID(credentialID, s.credentialHashSecret)
+	rawUID, err := ParseCredentialUID(credentialID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid credential_id format: %w", err)
+	}
+	hash := HashCredentialID(rawUID, s.credentialHashSecret)
 	if err := s.credentialStore.RegisterCredential(ctx, hash, req.Tag); err != nil {
 		return nil, err
 	}

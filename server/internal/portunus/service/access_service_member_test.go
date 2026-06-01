@@ -131,10 +131,9 @@ func TestAccessService_MemberPath_Granted(t *testing.T) {
 
 	memberUUID := "aaaaaaaa-0000-4000-8000-000000000001"
 	moduleID := "module-a"
+	const uidStr = "04:01:00:01"
 
-	// Hash we'll store — must match what AccessService will compute.
-	// Use credentialID "testcred" with empty secret → SHA-256("testcred").
-	credHash := service.HashCredentialID("testcred", nil)
+	credHash := service.HashCredentialID([]byte{0x04, 0x01, 0x00, 0x01}, nil)
 
 	seedModule(t, dbConn, moduleID)
 	if err := maStore.CreateMember(ctx, memberUUID, "member", "", store.ProvisioningStatusActive, nil, nil); err != nil {
@@ -156,7 +155,7 @@ func TestAccessService_MemberPath_Granted(t *testing.T) {
 
 	resp, err := svc.Decide(ctx, types.AccessRequest{
 		ModuleID:     moduleID,
-		CredentialID: "testcred",
+		CredentialID: uidStr,
 	})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
@@ -176,7 +175,7 @@ func TestAccessService_MemberPath_NoAuthorization(t *testing.T) {
 	moStore := sqlitestore.NewModuleAuthorizationStore(dbConn, writer)
 
 	memberUUID := "aaaaaaaa-0000-4000-8000-000000000002"
-	credHash := service.HashCredentialID("testcred2", nil)
+	credHash := service.HashCredentialID([]byte{0x04, 0x01, 0x00, 0x02}, nil)
 
 	if err := maStore.CreateMember(ctx, memberUUID, "member", "", store.ProvisioningStatusActive, nil, nil); err != nil {
 		t.Fatalf("CreateMember: %v", err)
@@ -191,7 +190,7 @@ func TestAccessService_MemberPath_NoAuthorization(t *testing.T) {
 	svc.SetMemberAccessStore(maStore)
 	svc.SetModuleAuthStore(moStore)
 
-	resp, err := svc.Decide(ctx, types.AccessRequest{ModuleID: "module-a", CredentialID: "testcred2"})
+	resp, err := svc.Decide(ctx, types.AccessRequest{ModuleID: "module-a", CredentialID: "04:01:00:02"})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -211,7 +210,7 @@ func TestAccessService_MemberPath_RevokedAuthorization(t *testing.T) {
 
 	memberUUID := "aaaaaaaa-0000-4000-8000-000000000003"
 	moduleID := "module-a"
-	credHash := service.HashCredentialID("testcred3", nil)
+	credHash := service.HashCredentialID([]byte{0x04, 0x01, 0x00, 0x03}, nil)
 
 	seedModule(t, dbConn, moduleID)
 	if err := maStore.CreateMember(ctx, memberUUID, "member", "", store.ProvisioningStatusActive, nil, nil); err != nil {
@@ -232,7 +231,7 @@ func TestAccessService_MemberPath_RevokedAuthorization(t *testing.T) {
 	svc.SetMemberAccessStore(maStore)
 	svc.SetModuleAuthStore(moStore)
 
-	resp, err := svc.Decide(ctx, types.AccessRequest{ModuleID: moduleID, CredentialID: "testcred3"})
+	resp, err := svc.Decide(ctx, types.AccessRequest{ModuleID: moduleID, CredentialID: "04:01:00:03"})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -254,7 +253,7 @@ func TestAccessService_MemberPath_ExpiredAuthorization(t *testing.T) {
 
 	memberUUID := "aaaaaaaa-0000-4000-8000-000000000004"
 	moduleID := "module-a"
-	credHash := service.HashCredentialID("testcred4", nil)
+	credHash := service.HashCredentialID([]byte{0x04, 0x01, 0x00, 0x04}, nil)
 
 	pastExpiry := time.Now().UTC().Add(-24 * time.Hour)
 
@@ -274,7 +273,7 @@ func TestAccessService_MemberPath_ExpiredAuthorization(t *testing.T) {
 	svc.SetMemberAccessStore(maStore)
 	svc.SetModuleAuthStore(moStore)
 
-	resp, err := svc.Decide(ctx, types.AccessRequest{ModuleID: moduleID, CredentialID: "testcred4"})
+	resp, err := svc.Decide(ctx, types.AccessRequest{ModuleID: moduleID, CredentialID: "04:01:00:04"})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -294,7 +293,7 @@ func TestAccessService_MemberPath_ExpiredMember(t *testing.T) {
 
 	memberUUID := "aaaaaaaa-0000-4000-8000-000000000005"
 	moduleID := "module-a"
-	credHash := service.HashCredentialID("testcred5", nil)
+	credHash := service.HashCredentialID([]byte{0x04, 0x01, 0x00, 0x05}, nil)
 
 	seedModule(t, dbConn, moduleID)
 	if err := maStore.CreateMember(ctx, memberUUID, "member", "", store.ProvisioningStatusActive, nil, nil); err != nil {
@@ -316,7 +315,7 @@ func TestAccessService_MemberPath_ExpiredMember(t *testing.T) {
 	svc.SetMemberAccessStore(maStore)
 	svc.SetModuleAuthStore(moStore)
 
-	resp, err := svc.Decide(ctx, types.AccessRequest{ModuleID: moduleID, CredentialID: "testcred5"})
+	resp, err := svc.Decide(ctx, types.AccessRequest{ModuleID: moduleID, CredentialID: "04:01:00:05"})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -336,7 +335,7 @@ func TestAccessService_MemberPath_DisabledMember(t *testing.T) {
 
 	memberUUID := "aaaaaaaa-0000-4000-8000-000000000006"
 	moduleID := "module-a"
-	credHash := service.HashCredentialID("testcred6", nil)
+	credHash := service.HashCredentialID([]byte{0x04, 0x01, 0x00, 0x06}, nil)
 
 	seedModule(t, dbConn, moduleID)
 	if err := maStore.CreateMember(ctx, memberUUID, "member", "", store.ProvisioningStatusActive, nil, nil); err != nil {
@@ -357,7 +356,7 @@ func TestAccessService_MemberPath_DisabledMember(t *testing.T) {
 	svc.SetMemberAccessStore(maStore)
 	svc.SetModuleAuthStore(moStore)
 
-	resp, err := svc.Decide(ctx, types.AccessRequest{ModuleID: moduleID, CredentialID: "testcred6"})
+	resp, err := svc.Decide(ctx, types.AccessRequest{ModuleID: moduleID, CredentialID: "04:01:00:06"})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -380,7 +379,7 @@ func TestAccessService_MemberPath_UnknownCredential(t *testing.T) {
 	svc.SetMemberAccessStore(maStore)
 	svc.SetModuleAuthStore(moStore)
 
-	resp, err := svc.Decide(ctx, types.AccessRequest{ModuleID: "module-a", CredentialID: "nobody"})
+	resp, err := svc.Decide(ctx, types.AccessRequest{ModuleID: "module-a", CredentialID: "04:FF:FF:FF"})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -402,7 +401,7 @@ func TestAccessService_MemberPath_UpdatesLastAccess(t *testing.T) {
 
 	memberUUID := "aaaaaaaa-0000-4000-8000-000000000007"
 	moduleID := "module-a"
-	credHash := service.HashCredentialID("testcred7", nil)
+	credHash := service.HashCredentialID([]byte{0x04, 0x01, 0x00, 0x07}, nil)
 
 	seedModule(t, dbConn, moduleID)
 	if err := maStore.CreateMember(ctx, memberUUID, "member", "", store.ProvisioningStatusActive, nil, nil); err != nil {
@@ -425,7 +424,7 @@ func TestAccessService_MemberPath_UpdatesLastAccess(t *testing.T) {
 	svc.SetMemberAccessStore(maStore)
 	svc.SetModuleAuthStore(moStore)
 
-	resp, err := svc.Decide(ctx, types.AccessRequest{ModuleID: moduleID, CredentialID: "testcred7"})
+	resp, err := svc.Decide(ctx, types.AccessRequest{ModuleID: moduleID, CredentialID: "04:01:00:07"})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -568,7 +567,7 @@ func TestMemberAccessService_AttachCredential_DuplicateActive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProvisionMember m1: %v", err)
 	}
-	credHash := service.HashCredentialID("sharedcred", nil)
+	credHash := service.HashCredentialID([]byte{0x04, 0x01, 0x00, 0x08}, nil)
 	if err := svc.AttachCredential(ctx, m1.UUID, credHash); err != nil {
 		t.Fatalf("AttachCredential m1: %v", err)
 	}
@@ -603,7 +602,7 @@ func TestMemberAccessService_AttachCredential_DuplicateInactive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProvisionMember: %v", err)
 	}
-	credHash := service.HashCredentialID("expiredcred", nil)
+	credHash := service.HashCredentialID([]byte{0x04, 0x01, 0x00, 0x09}, nil)
 	if err := svc.AttachCredential(ctx, m1.UUID, credHash); err != nil {
 		t.Fatalf("AttachCredential: %v", err)
 	}
@@ -619,5 +618,61 @@ func TestMemberAccessService_AttachCredential_DuplicateInactive(t *testing.T) {
 	err = svc.AttachCredential(ctx, m2.UUID, credHash)
 	if err != service.ErrDuplicateCredentialInactive {
 		t.Errorf("expected ErrDuplicateCredentialInactive, got %v", err)
+	}
+}
+
+// ── cross-path test ───────────────────────────────────────────────────────────
+
+// TestAccess_FirmwareEnrolledCredential_IsGranted proves that a credential
+// enrolled the way the provisioning console enrolls it (server receives raw UID
+// bytes and applies HashCredentialID) is subsequently granted when the access
+// module taps the same card and sends the colon-formatted UID string.
+//
+// Keep the "firmware side" block annotated — it is the mirror of
+// provisioning_fsm.cpp handle_credential_read (Scan 2) + server_comm.cpp
+// handle_provision.  Any drift between that code and this block is a bug.
+func TestAccess_FirmwareEnrolledCredential_IsGranted(t *testing.T) {
+	ctx := context.Background()
+	dbConn, writer := openSvcTestDB(t)
+	maStore := sqlitestore.NewMemberAccessStore(dbConn, writer)
+	moStore := sqlitestore.NewModuleAuthorizationStore(dbConn, writer)
+	moduleID := "module-prov"
+	memberUUID := "bbbbbbbb-0000-4000-8000-000000000001"
+	secret := []byte("test-hmac-secret")
+
+	// ── Firmware side (mirrors provisioning_fsm.cpp Scan 2 + server_comm handle_provision) ──
+	// The device sends raw UID bytes in credential_uid; the server hashes them.
+	rawUID := []byte{0x04, 0xA3, 0x2B, 0x1C}
+	enrolledHash := service.HashCredentialID(rawUID, secret)
+	// ── End firmware side ──
+
+	seedModule(t, dbConn, moduleID)
+	if err := maStore.CreateMember(ctx, memberUUID, "member", "", store.ProvisioningStatusActive, nil, nil); err != nil {
+		t.Fatalf("CreateMember: %v", err)
+	}
+	if err := maStore.AttachCredential(ctx, memberUUID, enrolledHash); err != nil {
+		t.Fatalf("AttachCredential: %v", err)
+	}
+	if err := moStore.GrantAuthorization(ctx, memberUUID, moduleID, "", nil, ""); err != nil {
+		t.Fatalf("GrantAuthorization: %v", err)
+	}
+
+	deviceStore := memory.NewDeviceStore([]string{moduleID})
+	svc := service.NewAccessService(service.NewDeviceRegistry(deviceStore), service.AccessPolicy{}, memory.NewAccessEventStore())
+	svc.SetMemberAccessStore(maStore)
+	svc.SetModuleAuthStore(moStore)
+	svc.SetCredentialHashSecret(secret)
+
+	// ── Door side (mirrors system_fsm + server_comm credential_id encoding) ──
+	// credential_uid_to_hex produces "04:A3:2B:1C" for rawUID above.
+	resp, err := svc.Decide(ctx, types.AccessRequest{
+		ModuleID:     moduleID,
+		CredentialID: "04:A3:2B:1C",
+	})
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if !resp.Granted {
+		t.Errorf("expected granted=true for firmware-enrolled credential, got reason=%q", resp.Reason)
 	}
 }

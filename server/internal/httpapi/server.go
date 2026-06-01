@@ -29,42 +29,47 @@ type Dependencies struct {
 	// HMACSecret is the pre-shared key for X-Portunus-Sig verification.
 	// Leave empty to disable HMAC enforcement (not recommended for production).
 	HMACSecret string
+	// CredentialHashSecret is the HMAC key used to hash credential UIDs before storage.
+	// Must match the key used by AccessService.  Leave nil only in dev/test.
+	CredentialHashSecret []byte
 	// TLSEnabled controls whether the Secure cookie flag and HSTS header are set.
 	TLSEnabled bool
 }
 
 type Server struct {
-	httpServer          *http.Server
-	logger              *log.Logger
-	mux                 *http.ServeMux
-	heartbeatService    *service.HeartbeatService
-	accessService       *service.AccessService
-	provisionService    *service.ProvisionService
-	adminService        *service.AdminService
-	authService         *service.AuthService
-	adminUserService    *service.AdminUserService
-	roleService         *service.RoleService
-	memberAccessService *service.MemberAccessService
-	moduleAuthService   *service.ModuleAuthorizationService
-	tlsEnabled          bool
+	httpServer           *http.Server
+	logger               *log.Logger
+	mux                  *http.ServeMux
+	heartbeatService     *service.HeartbeatService
+	accessService        *service.AccessService
+	provisionService     *service.ProvisionService
+	adminService         *service.AdminService
+	authService          *service.AuthService
+	adminUserService     *service.AdminUserService
+	roleService          *service.RoleService
+	memberAccessService  *service.MemberAccessService
+	moduleAuthService    *service.ModuleAuthorizationService
+	credentialHashSecret []byte
+	tlsEnabled           bool
 }
 
 func NewServer(d Dependencies) *Server {
 	mux := http.NewServeMux()
 
 	s := &Server{
-		logger:              d.Logger,
-		mux:                 mux,
-		heartbeatService:    d.HeartbeatService,
-		accessService:       d.AccessService,
-		provisionService:    d.ProvisionService,
-		adminService:        d.AdminService,
-		authService:         d.AuthService,
-		adminUserService:    d.AdminUserService,
-		roleService:         d.RoleService,
-		memberAccessService: d.MemberAccessService,
-		moduleAuthService:   d.ModuleAuthService,
-		tlsEnabled:          d.TLSEnabled,
+		logger:               d.Logger,
+		mux:                  mux,
+		heartbeatService:     d.HeartbeatService,
+		accessService:        d.AccessService,
+		provisionService:     d.ProvisionService,
+		adminService:         d.AdminService,
+		authService:          d.AuthService,
+		adminUserService:     d.AdminUserService,
+		roleService:          d.RoleService,
+		memberAccessService:  d.MemberAccessService,
+		moduleAuthService:    d.ModuleAuthService,
+		credentialHashSecret: d.CredentialHashSecret,
+		tlsEnabled:           d.TLSEnabled,
 	}
 
 	// ── Device endpoints (ESP32 modules) ────────────────────────────────
@@ -337,8 +342,8 @@ func (s *Server) handleProvisionCredential(w http.ResponseWriter, r *http.Reques
 		case errors.Is(err, service.ErrInvalidModuleID):
 			writeError(w, http.StatusBadRequest, "invalid_module_id", err.Error())
 			return
-		case errors.Is(err, service.ErrProvisionCredentialHashRequired):
-			writeError(w, http.StatusBadRequest, "invalid_credential_hash", err.Error())
+		case errors.Is(err, service.ErrProvisionCredentialUIDRequired):
+			writeError(w, http.StatusBadRequest, "invalid_credential_uid", err.Error())
 			return
 		default:
 			s.logger.Printf("provision_credential error: %v", err)

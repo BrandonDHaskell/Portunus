@@ -135,10 +135,10 @@ func (s *Server) RequestAccess(ctx context.Context, req *pb.AccessRequest) (*pb.
 
 func (s *Server) ProvisionCredential(ctx context.Context, req *pb.ProvisionCredentialRequest) (*pb.ProvisionCredentialResponse, error) {
 	domainReq := types.ProvisionCredentialRequest{
-		OperatorUUID:   req.GetOperatorUuid(),
-		ModuleID:       req.GetModuleId(),
-		CredentialHash: req.GetCredentialHash(),
-		RoleID:         req.GetRoleId(),
+		OperatorUUID:  req.GetOperatorUuid(),
+		ModuleID:      req.GetModuleId(),
+		CredentialUID: req.GetCredentialUid(),
+		RoleID:        req.GetRoleId(),
 	}
 
 	resp, err := s.provisionService.Provision(ctx, domainReq)
@@ -146,8 +146,8 @@ func (s *Server) ProvisionCredential(ctx context.Context, req *pb.ProvisionCrede
 		switch {
 		case errors.Is(err, service.ErrInvalidModuleID):
 			return nil, status.Errorf(codes.InvalidArgument, "invalid module_id: %v", err)
-		case errors.Is(err, service.ErrProvisionCredentialHashRequired):
-			return nil, status.Errorf(codes.InvalidArgument, "invalid credential_hash: %v", err)
+		case errors.Is(err, service.ErrProvisionCredentialUIDRequired):
+			return nil, status.Errorf(codes.InvalidArgument, "invalid credential_uid: %v", err)
 		default:
 			s.logger.Printf("provision_credential gRPC error: %v", err)
 			return nil, status.Errorf(codes.Internal, "unexpected server error")

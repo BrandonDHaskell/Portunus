@@ -12,16 +12,17 @@ import (
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/types"
 )
 
-var ErrProvisionCredentialHashRequired = errors.New("credential_hash is required")
+var ErrProvisionCredentialUIDRequired = errors.New("credential_uid is required")
 
 // ProvisionService handles device-initiated member provisioning from the
 // PROVISIONING_CONSOLE firmware variant.  It creates a fully active member
 // record in a single flow — no pending_authorization step.
 type ProvisionService struct {
-	registry    *DeviceRegistry
-	memberStore store.MemberAccessStore
-	roleStore   store.RoleStore
-	adminUsers  store.AdminUserStore
+	registry             *DeviceRegistry
+	memberStore          store.MemberAccessStore
+	roleStore            store.RoleStore
+	adminUsers           store.AdminUserStore
+	credentialHashSecret []byte
 }
 
 func NewProvisionService(
@@ -29,12 +30,14 @@ func NewProvisionService(
 	memberStore store.MemberAccessStore,
 	roleStore store.RoleStore,
 	adminUsers store.AdminUserStore,
+	credentialHashSecret []byte,
 ) *ProvisionService {
 	return &ProvisionService{
-		registry:    registry,
-		memberStore: memberStore,
-		roleStore:   roleStore,
-		adminUsers:  adminUsers,
+		registry:             registry,
+		memberStore:          memberStore,
+		roleStore:            roleStore,
+		adminUsers:           adminUsers,
+		credentialHashSecret: credentialHashSecret,
 	}
 }
 
@@ -52,9 +55,12 @@ func (s *ProvisionService) Provision(
 	if moduleID == "" {
 		return types.ProvisionCredentialResponse{}, ErrInvalidModuleID
 	}
-	if len(req.CredentialHash) == 0 {
-		return types.ProvisionCredentialResponse{}, ErrProvisionCredentialHashRequired
+	if len(req.CredentialUID) == 0 {
+		return types.ProvisionCredentialResponse{}, ErrProvisionCredentialUIDRequired
 	}
+
+	// Hash the raw UID bytes server-side so enrollment and lookup use the same algorithm.
+	credHash := HashCredentialID(req.CredentialUID, s.credentialHashSecret)
 
 	// Check module is known.
 	known, err := s.registry.IsKnown(ctx, moduleID)
@@ -119,7 +125,7 @@ func (s *ProvisionService) Provision(
 	}
 
 	// Check credential uniqueness before attempting to create the member.
-	existing, err := s.memberStore.GetMemberByCredential(ctx, req.CredentialHash)
+	existing, err := s.memberStore.GetMemberByCredential(ctx, credHash)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return types.ProvisionCredentialResponse{}, fmt.Errorf("credential lookup: %w", err)
 	}
@@ -142,7 +148,7 @@ func (s *ProvisionService) Provision(
 	); err != nil {
 		return types.ProvisionCredentialResponse{}, fmt.Errorf("create member: %w", err)
 	}
-	if err := s.memberStore.AttachCredential(ctx, memberUUID, req.CredentialHash); err != nil {
+	if err := s.memberStore.AttachCredential(ctx, memberUUID, credHash); err != nil {
 		if errors.Is(err, store.ErrMemberCredentialConflict) {
 			return types.ProvisionCredentialResponse{
 				OK:     true,

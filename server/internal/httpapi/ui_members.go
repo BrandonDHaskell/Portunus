@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"encoding/hex"
 	"errors"
 	"net/http"
 	"time"
@@ -192,12 +191,13 @@ func (s *Server) handleUIMembersAttachCredential(w http.ResponseWriter, r *http.
 		return
 	}
 
-	hashHex := r.FormValue("credential_hash")
-	credHash, err := hex.DecodeString(hashHex)
-	if err != nil || len(credHash) != 32 {
-		flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Credential hash must be 64 hex characters (32 bytes).", "error")
+	credentialID := r.FormValue("credential_id")
+	rawUID, err := service.ParseCredentialUID(credentialID)
+	if err != nil {
+		flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Invalid credential UID — use colon-separated hex, e.g. 04:A3:2B:1C.", "error")
 		return
 	}
+	credHash := service.HashCredentialID(rawUID, s.credentialHashSecret)
 
 	if err := s.memberAccessService.AttachCredential(r.Context(), memberUUID, credHash); err != nil {
 		msg := "Failed to attach credential."
