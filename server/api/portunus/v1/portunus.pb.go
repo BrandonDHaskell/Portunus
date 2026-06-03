@@ -395,8 +395,21 @@ type AccessResponse struct {
 	Known bool `protobuf:"varint,2,opt,name=known,proto3" json:"known,omitempty"`
 	// The access decision: true = unlock, false = deny.
 	Granted bool `protobuf:"varint,3,opt,name=granted,proto3" json:"granted,omitempty"`
-	// Human-readable reason code: "allow_all", "credential_allowed",
-	// "credential_not_allowed", "unknown_module", "denied".
+	// Human-readable reason code included in the wire response.
+	// Grant: "allow_all" | "credential_allowed"
+	// Deny:  "denied" | "unknown_module" | "invalid_credential_format"
+	//
+	//	| "credential_not_found"
+	//	| "member_expired" | "member_suspended" | "member_archived"
+	//	| "member_disabled"
+	//	| "module_not_authorized"
+	//	| "authorization_revoked" | "authorization_expired"
+	//
+	// Longest value: "invalid_credential_format" (25 chars).
+	// Nanopb max_size:33 (32 chars + NUL) — never add a reason longer than 32.
+	// Note: "member_lookup_error" and "service_misconfigured" appear in the
+	// audit log only; the service returns an error to the transport in those
+	// cases and does not populate this field.
 	Reason string `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
 	// Echoed module_id.
 	ModuleId string `protobuf:"bytes,5,opt,name=module_id,json=moduleId,proto3" json:"module_id,omitempty"`

@@ -68,11 +68,6 @@ func main() {
 	memberAccessStore := sqlitestore.NewMemberAccessStore(dbConn, writer)
 	moduleAuthStore := sqlitestore.NewModuleAuthorizationStore(dbConn, writer)
 
-	// Stores (Memory for dev testing with no DB)
-	// deviceStore := memory.NewDeviceStore(cfg.KnownModules)
-	// heartbeatStore := memory.New()
-	// accessEventStore := memory.NewAccessEventStore()
-
 	// Services
 	registry := service.NewDeviceRegistry(deviceStore)
 	heartbeatSvc := service.NewHeartbeatService(heartbeatStore, registry)
@@ -96,7 +91,7 @@ func main() {
 	accessSvc.SetCredentialHashSecret(credentialHashSecret)
 	accessSvc.SetLogger(logger)
 
-	// Member access + module authorization services (PR 4).
+	// Member access + module authorization services.
 	memberAccessSvc := service.NewMemberAccessService(memberAccessStore, roleStore)
 	moduleAuthSvc := service.NewModuleAuthorizationService(moduleAuthStore)
 
@@ -126,7 +121,7 @@ func main() {
 		logger.Fatalf("auth bootstrap error: %v", err)
 	}
 
-	// Admin user and role management services (PR 5 — Admin UI).
+	// Admin user and role management services.
 	adminUserSvc := service.NewAdminUserService(adminUserStore, roleStore)
 	roleSvc := service.NewRoleService(roleStore)
 

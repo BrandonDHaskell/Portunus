@@ -1,3 +1,6 @@
+// Package memory provides in-memory store implementations used exclusively by
+// tests.  It is intentionally incomplete (only the stores tests need) and must
+// never be wired into main.go — use the sqlite stores for all non-test code.
 package memory
 
 import (

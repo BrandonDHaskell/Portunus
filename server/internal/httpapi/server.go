@@ -170,7 +170,7 @@ func NewServer(d Dependencies) *Server {
 		s.uiMemberRoutes(mux)
 	}
 
-	// Build middleware chain: logging → HSTS (if TLS) → session → HMAC → mux
+	// Build middleware chain: logging → HMAC (if set) → HSTS (if TLS) → session → mux
 	var handler http.Handler = mux
 
 	if d.AuthService != nil {

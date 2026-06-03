@@ -33,16 +33,17 @@ This matches the current server design and reduces lock contention in a single-p
 
 ## Current database responsibilities
 
-Today the database is responsible for eight main concerns:
+Today the database is responsible for nine main concerns:
 
 1. **Inventory of doors and modules**
 2. **Current module snapshot data** such as last seen time, last firmware version, and last RSSI
 3. **Append-only heartbeat history**
-4. **Registered credential storage** using keyed HMAC-SHA256 hashes rather than raw credential IDs
+4. **Member and admin credential hashes** stored as HMAC-SHA256 values in `member_access` (door-access members) and `admin_user_credentials` (admin RFID badges used for operator identification on the provisioning path)
 5. **Append-only access audit events** for grant and deny decisions
 6. **RBAC roles and permissions** defining what actions admin users are authorized to perform
 7. **Member lifecycle state** including enrollment status, expiry, and module authorization grants
 8. **Admin user accounts and server-side sessions** for the session-cookie-based admin API
+9. **Admin action audit log** recording every state-changing action performed through the admin API
 
 It is also used by the admin API for module, door, credential, member, and authorization management.
 
@@ -167,46 +168,6 @@ So the schema is slightly ahead of the data actually being written.
 
 ---
 
-### `credentials`
-
-Stores registered RFID credentials as keyed HMAC-SHA256 hashes rather than raw credential IDs. Renamed from `cards` in migration `0004`.
-
-| Column | Type | Constraints | Notes |
-|---|---|---|---|
-| `credential_hash` | BLOB | PRIMARY KEY, CHECK length = 32 | HMAC-SHA256 hash bytes |
-| `credential_tag` | TEXT | nullable | Human-readable label |
-| `status` | TEXT | NOT NULL, default `active`, CHECK in `active`, `disabled`, `lost` | Current credential state |
-| `created_at_ms` | INTEGER | NOT NULL | Registration time |
-| `updated_at_ms` | INTEGER | NOT NULL | Last modification time |
-| `last_seen_at_ms` | INTEGER | nullable | Updated asynchronously when an active credential is checked |
-
-#### Current credential behavior
-
-- Admin credential registration hashes the supplied credential ID with HMAC-SHA256 (keyed with `PORTUNUS_CREDENTIAL_HASH_SECRET`) before insertion.
-- `IsCredentialAllowed()` looks up the hash and returns `true` only when `status = 'active'`.
-- When an active credential is checked, `last_seen_at_ms` is updated asynchronously via a background goroutine dispatched to `writer.Do()` with a 5-second timeout.
-
-#### Hash algorithm depends on server configuration
-
-The 32-byte value stored in `credential_hash` is produced by `HashCredentialID`, whose output depends on whether `PORTUNUS_CREDENTIAL_HASH_SECRET` is set:
-
-| Configuration | Hash stored |
-|---|---|
-| `PORTUNUS_CREDENTIAL_HASH_SECRET` set (prod / recommended) | `HMAC-SHA256(secret, credential_id)` |
-| `PORTUNUS_CREDENTIAL_HASH_SECRET` not set (dev fallback only) | `SHA-256(credential_id)` |
-
-These two variants produce different 32-byte values for the same credential ID and are **not interchangeable**. A database populated without the secret cannot be queried correctly once the secret is added — all stored hashes will fail to match. Re-registering all credentials is required if the secret is introduced to an existing database.
-
-The server logs a warning at startup when the bare SHA-256 fallback is active. The `prod` environment enforces that `PORTUNUS_CREDENTIAL_HASH_SECRET` is set via config validation.
-
-#### Current status semantics
-
-- `active`: eligible to grant access
-- `disabled`: present but denied
-- `lost`: present but denied
-
----
-
 ### `roles`
 
 Defines named RBAC roles that can be assigned to members and admin users. Added in migration `0005`.
@@ -320,6 +281,53 @@ Server-side session store for cookie-based admin authentication. Added in migrat
 
 ---
 
+### `audit_log`
+
+Records every state-changing action performed through the admin API. Added in migration `0013`.
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | TEXT | PRIMARY KEY | Opaque event identifier |
+| `occurred_at_ms` | INTEGER | NOT NULL | Unix epoch milliseconds |
+| `actor_uuid` | TEXT | nullable, FK → `admin_users(uuid)` ON DELETE SET NULL | Admin who performed the action; null accommodates future system-generated events |
+| `action` | TEXT | NOT NULL | Name of the action performed |
+| `resource_type` | TEXT | nullable | Category of the affected resource (e.g. `member`, `module`) |
+| `resource_id` | TEXT | nullable | Identifier of the affected resource |
+| `details` | TEXT | nullable | JSON blob with action-specific context such as changed fields or previous values |
+| `ip_address` | TEXT | nullable | Client IP address when available |
+| `result` | TEXT | NOT NULL, default `success`, CHECK in `success`, `failure` | Whether the action succeeded or was rejected (e.g. denied by RBAC) |
+
+Four indexes support queries by time, actor, action name, and resource:
+
+| Index | Columns |
+|---|---|
+| `idx_audit_log_occurred` | `occurred_at_ms` |
+| `idx_audit_log_actor` | `actor_uuid` |
+| `idx_audit_log_action` | `action` |
+| `idx_audit_log_resource` | `resource_type, resource_id` |
+
+---
+
+### `admin_user_credentials`
+
+Maps RFID badge hashes to admin user accounts. Added in migration `0017`.
+
+This is **not** the old `credentials` table. It stores HMAC-SHA256 hashes of admin RFID badges so the provisioning FSM can identify the operator on scan 1 of the two-scan enrollment flow, replacing the prior compile-time `CONFIG_PORTUNUS_OPERATOR_UUID` constant. Uses the same `HashCredentialID(secret, raw_UID_bytes)` algorithm as `member_access.credential_hash`.
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `credential_hash` | BLOB | PRIMARY KEY, CHECK length = 32 | HMAC-SHA256 hash of the admin's RFID badge raw UID |
+| `admin_user_uuid` | TEXT | NOT NULL, FK → `admin_users(uuid)` ON DELETE CASCADE | Owning admin account |
+| `created_at_ms` | INTEGER | NOT NULL | Unix epoch milliseconds |
+
+One index supports lookups by admin account:
+
+| Index | Columns |
+|---|---|
+| `idx_admin_user_credentials_uuid` | `admin_user_uuid` |
+
+---
+
 ### `access_events`
 
 Append-only audit log of access decisions.
@@ -332,7 +340,7 @@ Append-only audit log of access decisions.
 | `received_at_ms` | INTEGER | NOT NULL | Server-side event time |
 | `requested_at_ms` | INTEGER | nullable | Optional device-reported timestamp when parseable |
 | `door_closed` | INTEGER | nullable, CHECK 0/1 | Door state from the access request when provided |
-| `credential_hash` | BLOB | nullable, FK → `credentials(credential_hash)` ON DELETE SET NULL, CHECK null or length=32 | HMAC-SHA256 of the credential ID used in the request |
+| `credential_hash` | BLOB | nullable, no FK (audit column only), CHECK null or length=32 | HMAC-SHA256 of the credential ID used in the request; kept for audit history — the FK to the dropped `credentials` table was removed in migration `0016` |
 | `decision_granted` | INTEGER | NOT NULL, CHECK 0/1 | Grant/deny flag |
 | `decision_reason` | TEXT | NOT NULL | Reason string from the decision path |
 | `policy_version` | INTEGER | nullable | Present in schema but not currently written by `AccessEventStore` |
@@ -355,22 +363,22 @@ Append-only audit log of access decisions.
 
 #### Current decision reasons seen in code
 
-The reason string depends on which access path handled the request:
+The reason string is produced by `AccessService.Decide()` and `AccessService.decideMemberAccess()`:
 
-| Reason | Path |
+| Reason | Condition |
 |---|---|
-| `unknown_module` | All paths — module not known |
+| `unknown_module` | Module not found in registry or not commissioned |
 | `allow_all` | `AllowAll=true` dev override |
-| `credential_allowed` | Credential store or member path — access granted |
-| `credential_not_allowed` | Credential store — hash not found or not active |
-| `credential_lookup_error` | Credential store — database error |
-| `credential_not_found` | Member path — no member row with this credential hash |
-| `member_<status>` | Member path — member status is not `active` (e.g. `member_suspended`) |
-| `member_disabled` | Member path — member `enabled=0` |
-| `module_not_authorized` | Member path — no active authorization row for this member+module |
-| `authorization_revoked` | Member path — authorization exists but `revoked_at_ms` is set |
-| `authorization_expired` | Member path — authorization `expires_at_ms` is in the past |
-| `member_lookup_error` | Member path — database error during member or authorization lookup |
+| `invalid_credential_format` | Credential ID did not parse as a colon-hex UID |
+| `credential_not_found` | No `member_access` row has this credential hash |
+| `member_<status>` | Member status is not `active` (e.g. `member_suspended`, `member_expired`, `member_archived`) |
+| `member_disabled` | Member `enabled=0` |
+| `module_not_authorized` | No active `module_authorizations` row for this member + module |
+| `authorization_revoked` | Authorization row exists but `revoked_at_ms` is set |
+| `authorization_expired` | Authorization `expires_at_ms` is in the past |
+| `credential_allowed` | Access granted — member active and module authorized |
+| `member_lookup_error` | Database error during member or authorization lookup |
+| `service_misconfigured` | `AccessService` not fully wired; `Validate()` was not called before serving traffic |
 
 ---
 
@@ -396,10 +404,11 @@ Current foreign key behavior in the schema:
 - Deleting a `module` cascades to `module_heartbeats`
 - Deleting a `module` cascades to `access_events`
 - Deleting a `module` cascades to `module_authorizations`
-- Deleting a `credential` sets `access_events.credential_hash` to `NULL`
 - Deleting a `role` cascades to `role_permissions`
 - Deleting a `member_access` row cascades to `module_authorizations`
 - Deleting an `admin_users` row cascades to `sessions`
+- Deleting an `admin_users` row sets `audit_log.actor_uuid` to `NULL`
+- Deleting an `admin_users` row cascades to `admin_user_credentials`
 
 This preserves audit history where practical while still allowing entities to be removed.
 
@@ -419,12 +428,12 @@ This preserves audit history where practical while still allowing entities to be
 
 ### Migration `0004` — credential rename
 
-Replaced the `cards` indexes dropped with that table:
+Replaced the `cards` indexes dropped with that table. Migration `0016` later dropped the `credentials` table, removing `idx_credentials_last_seen` with it; `idx_access_credential_time` was recreated on the rebuilt `access_events` table in that same migration.
 
-| Index | Table | Columns | Current purpose |
+| Index | Table | Columns | Notes |
 |---|---|---|---|
-| `idx_credentials_last_seen` | `credentials` | `last_seen_at_ms` | Credential usage lookups |
-| `idx_access_credential_time` | `access_events` | `credential_hash, received_at_ms` | Per-credential audit history |
+| `idx_credentials_last_seen` | `credentials` | `last_seen_at_ms` | **Historical** — dropped when migration `0016` removed the `credentials` table |
+| `idx_access_credential_time` | `access_events` | `credential_hash, received_at_ms` | Per-credential audit history — active; recreated in migration `0016` |
 
 ### Migration `0005` — RBAC
 
@@ -497,6 +506,12 @@ If a migration fails, the transaction is rolled back and server startup fails.
 | `0009` | `0009_admin_users_sessions.sql` | Adds `admin_users` and `sessions` tables for session-cookie-based admin auth |
 | `0010` | `0010_seed_admin_role_permissions.sql` | Seeds 29 named permissions into the `admin` role |
 | `0011` | `0011_admin_users_add_role.sql` | Adds `role_id` FK and `enabled` column to `admin_users`; backfills existing users to `admin` role |
+| `0012` | `0012_seed_operator_viewer_permissions.sql` | Seeds permissions for the `operator` and `viewer` system roles |
+| `0013` | `0013_audit_log.sql` | Adds `audit_log` table with four indexes for time, actor, action, and resource queries |
+| `0014` | `0014_seed_audit_log_permissions.sql` | Seeds `audit_log.list` permission for `admin`, `operator`, and `viewer` roles |
+| `0015` | `0015_clear_credential_hashes.sql` | Clears pre-existing `credential_hash` values in `member_access` that were computed under broken schemes; affected members must re-enroll |
+| `0016` | `0016_drop_credentials_table.sql` | Drops the `credentials` table, removes its `credential.*` role permissions rows, and rebuilds `access_events` without the FK to `credentials` |
+| `0017` | `0017_admin_user_credentials.sql` | Adds `admin_user_credentials` table mapping admin RFID badge hashes to admin users for provisioning-operator identification |
 
 ### Current compatibility note
 
@@ -516,9 +531,6 @@ This is the current pattern used by:
 - `HeartbeatStore.PruneOlderThan()`
 - `AccessEventStore.RecordEvent()`
 - `ModuleAdminStore` write methods
-- `CredentialStore.RegisterCredential()`
-- `CredentialStore.SetCredentialStatus()`
-- `CredentialStore.DeleteCredential()`
 - `DeviceStore.MarkSeen()`
 - `MemberAccessStore` write methods
 - `ModuleAuthorizationStore` write methods
@@ -531,13 +543,12 @@ This design reduces SQLite write contention and keeps multi-step writes grouped 
 
 Not every write in the codebase uses the worker.
 
-1. **`CredentialStore.IsCredentialAllowed()` updates `credentials.last_seen_at_ms`** via a background goroutine that dispatches to `writer.Do()` with a 5-second timeout. The update is fire-and-forget relative to the access decision path — a timeout or cancellation is logged but does not fail the access check.
-2. **`db.SeedDev()` writes directly** during startup seeding in dev mode before normal request handling begins.
-3. Reads query the shared `*sql.DB` directly.
+1. **`db.SeedDev()` writes directly** during startup seeding in dev mode before normal request handling begins.
+2. Reads query the shared `*sql.DB` directly.
 
 So the most accurate statement for the current codebase is:
 
-> Portunus serializes nearly all runtime writes through a single worker. The one notable exception is the `last_seen_at_ms` update in the hot access-check path, which is dispatched asynchronously to the worker so it cannot delay the access response.
+> Portunus serializes nearly all runtime writes through a single worker. `db.SeedDev()` writes directly during startup before normal request handling begins.
 
 ### Current worker semantics
 
@@ -771,15 +782,32 @@ ORDER BY received_at_ms DESC;
 
 ### Registered credentials
 
+Member RFID badges enrolled via `member_access`:
+
 ```sql
 SELECT
-  hex(credential_hash) AS credential_hash,
-  credential_tag,
-  status,
-  datetime(created_at_ms / 1000, 'unixepoch') AS created_at,
-  datetime(last_seen_at_ms / 1000, 'unixepoch') AS last_seen
-FROM credentials
-ORDER BY created_at_ms DESC;
+  m.uuid AS member_uuid,
+  hex(m.credential_hash) AS credential_hash,
+  m.status,
+  m.provisioning_status,
+  datetime(m.created_at_ms / 1000, 'unixepoch') AS created_at,
+  datetime(m.last_access_at_ms / 1000, 'unixepoch') AS last_access
+FROM member_access m
+WHERE m.credential_hash IS NOT NULL
+ORDER BY m.created_at_ms DESC;
+```
+
+Admin RFID badges registered in `admin_user_credentials`:
+
+```sql
+SELECT
+  auc.admin_user_uuid,
+  au.username,
+  hex(auc.credential_hash) AS credential_hash,
+  datetime(auc.created_at_ms / 1000, 'unixepoch') AS created_at
+FROM admin_user_credentials auc
+JOIN admin_users au ON au.uuid = auc.admin_user_uuid
+ORDER BY auc.created_at_ms DESC;
 ```
 
 ### All members with role and credential status
@@ -862,7 +890,6 @@ ORDER BY last_seen_at_ms ASC;
 SELECT 'doors' AS table_name, COUNT(*) AS rows FROM doors
 UNION ALL SELECT 'modules', COUNT(*) FROM modules
 UNION ALL SELECT 'module_heartbeats', COUNT(*) FROM module_heartbeats
-UNION ALL SELECT 'credentials', COUNT(*) FROM credentials
 UNION ALL SELECT 'access_events', COUNT(*) FROM access_events
 UNION ALL SELECT 'roles', COUNT(*) FROM roles
 UNION ALL SELECT 'role_permissions', COUNT(*) FROM role_permissions
@@ -870,6 +897,8 @@ UNION ALL SELECT 'member_access', COUNT(*) FROM member_access
 UNION ALL SELECT 'module_authorizations', COUNT(*) FROM module_authorizations
 UNION ALL SELECT 'admin_users', COUNT(*) FROM admin_users
 UNION ALL SELECT 'sessions', COUNT(*) FROM sessions
+UNION ALL SELECT 'audit_log', COUNT(*) FROM audit_log
+UNION ALL SELECT 'admin_user_credentials', COUNT(*) FROM admin_user_credentials
 UNION ALL SELECT 'schema_migrations', COUNT(*) FROM schema_migrations;
 ```
 

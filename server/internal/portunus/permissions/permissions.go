@@ -30,7 +30,7 @@ const (
 	RoleDelete           = "role.delete"
 	RoleAssignPermission = "role.assign_permissions"
 
-	// Member access management (used from PR 4 onward)
+	// Member access management
 	MemberProvision  = "member.provision"
 	MemberList       = "member.list"
 	MemberView       = "member.view"
@@ -38,7 +38,7 @@ const (
 	MemberDisable    = "member.disable"
 	MemberArchive    = "member.archive"
 
-	// Module authorization management (used from PR 4 onward)
+	// Module authorization management
 	ModuleAuthGrant  = "module_auth.grant"
 	ModuleAuthRevoke = "module_auth.revoke"
 	ModuleAuthList   = "module_auth.list"

@@ -153,7 +153,7 @@ func (s *AccessService) Decide(ctx context.Context, req types.AccessRequest) (ty
 		granted = true
 		reason = "allow_all"
 	} else if s.memberAccessStore != nil && s.moduleAuthStore != nil {
-		// Member access + module authorization path (production path from PR 4 onward).
+		// Member access + module authorization path (production path).
 		rawUID, parseErr := ParseCredentialUID(credentialID)
 		if parseErr != nil {
 			s.recordEvent(ctx, req, false, "invalid_credential_format", now)

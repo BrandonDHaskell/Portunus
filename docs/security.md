@@ -2,7 +2,7 @@
 
 Current security model, implemented controls, and known limitations for the Portunus snapshot in this repository.
 
-**Last updated:** April 2026
+**Last updated:** June 2, 2026
 
 ---
 
@@ -18,7 +18,7 @@ In the current codebase, Portunus uses a layered security model:
 1. **TLS** protects traffic in transit when enabled.
 2. **HMAC-SHA256 request signing** authenticates device-originated requests when configured.
 3. **Module registry checks** ensure only commissioned, enabled, non-revoked modules are treated as known.
-4. **Credential and member policy checks** ensure only authorized credentials are granted access. The production path checks member status, enrollment state, and per-module authorization; legacy paths fall back to a credential allowlist or an env-var allowlist.
+4. **Credential and member policy checks** ensure only authorized credentials are granted access. The production path checks member status, enrollment state, and per-module authorization against `member_access` and `module_authorizations`, with default-deny and fail-closed behavior.
 5. **Session-based admin auth** protects the admin API through cookie-backed server-side sessions.
 
 A key detail in the current implementation: several controls are **configuration-dependent**. In development, the server can run without TLS, without HMAC enforcement, and without a credential hash secret. In production-style deployments, those should all be enabled explicitly.
@@ -257,14 +257,13 @@ WARNING: PORTUNUS_CREDENTIAL_HASH_SECRET not set — credential IDs hashed witho
 
 This fallback exists only for local development and integration testing. It must never be used in a deployment where credential data is expected to persist or migrate.
 
-### Admin registration flow
+### Admin enrollment flows
 
-When a credential is registered through the admin API, the server:
+There are two admin-side credential enrollment paths.
 
-1. receives the raw `credential_id`
-2. computes `HMAC-SHA256(secret, credential_id)`
-3. stores the 32-byte hash in the `credentials` table
-4. returns the hex form of that hash in the API response
+**Member credential attachment** (`POST /admin/v1/members/{member_uuid}/credential`): the caller supplies the pre-computed `credential_hash` as a 64-character hex string. The server stores the 32-byte hash in `member_access`. The admin web UI accepts a raw credential UID and hashes it server-side with `HMAC-SHA256(secret, rawUID)` before forwarding to this path.
+
+**Admin-badge registration** (`POST /admin/v1/admin-users/{admin_uuid}/credential`): the server receives a raw `credential_id`, parses the colon-separated UID, computes `HMAC-SHA256(secret, rawUID)`, and stores the 32-byte hash in `admin_user_credentials` (migration 0017). Admin badges are resolved at provisioning time: PROVISIONING_CONSOLE scan-1 identifies the operator by looking up the hash in `admin_user_credentials`.
 
 ### PROVISIONING_CONSOLE enrollment flow
 
@@ -280,9 +279,12 @@ The server then re-hashes using HMAC-SHA256 to produce the stored hash. Raw cred
 
 When an access request arrives:
 
-1. the server extracts the raw `credential_id` from the request
-2. computes `HMAC-SHA256(secret, credential_id)`
-3. checks the hash against the `credentials` table (legacy path) or `member_access` (production path)
+1. the server extracts the `credential_id` from the request
+2. parses the colon-separated UID and computes `HMAC-SHA256(secret, rawUID)`
+3. looks up the hash in `member_access`; verifies the member is active and enabled
+4. checks that the member holds a non-expired, non-revoked authorization for the requesting module in `module_authorizations`
+
+Access is default-deny at every step: a missing credential, inactive member, or missing/revoked module authorization all produce a denied result. If either store (`MemberAccessStore` or `ModuleAuthorizationStore`) is not wired at startup, `Validate()` returns a fatal error and the service never falls through to a less strict path.
 
 ### Audit trail
 
@@ -317,6 +319,8 @@ The `admin_users.must_change_pw` flag is set to `1` on new accounts. An account 
 ### Admin accounts and RBAC
 
 Admin users are linked to RBAC roles via `admin_users.role_id`. The role controls which named permissions the account holds. An account with `enabled = 0` cannot log in regardless of credentials or session state.
+
+The admin role is seeded (migration 0010) with every permission defined in the `permissions` package — currently **27 permissions** across module, door, admin-user, role, member, module-auth, and audit-log groups. The `permissions.All()` function is the single authoritative list. Migration 0016 removed the obsolete `credential.*` permission rows that were present in earlier snapshots.
 
 ### Admin web UI
 
@@ -421,7 +425,7 @@ For the current codebase, the strongest practical setup is:
 - leave `PORTUNUS_ALLOW_ALL` unset or `false`
 - commission modules through the admin API
 - change the bootstrap admin password on first login (enforced by `must_change_pw`)
-- enroll members and grant per-module authorizations instead of relying on legacy credential or env-var allowlists
+- enroll members and grant per-module authorizations through the admin API
 
 ### Firmware
 

@@ -9,7 +9,7 @@
 #   firmware_version – "0.1.0-mvp" is 9; 24 chars leaves room for growth
 #   ip               – IPv6 worst case "xxxx:…:xxxx%zone" ≤ 46
 #   credential_id    – 10-byte UID as "XX:XX:…:XX" = 29 + NUL = 30
-#   reason           – longest known value "credential_not_allowed" = 22; 32 + NUL
+#   reason           – longest emitted value "invalid_credential_format" = 25; 32 + NUL
 #   server_time      – RFC 3339 nano "2025-01-15T12:34:56.123456789Z" ≤ 40
 #   requested_at     – same format as server_time
 #
