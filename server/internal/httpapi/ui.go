@@ -123,7 +123,6 @@ func permGroups() []PermGroup {
 		prefix string
 	}{
 		{"Module Management", "module."},
-		{"Credential Management", "credential."},
 		{"Door Management", "door."},
 		{"Admin User Management", "admin_user."},
 		{"Role Management", "role."},

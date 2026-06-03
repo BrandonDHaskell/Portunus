@@ -39,7 +39,7 @@ func hmacAuthMiddleware(logger *log.Logger, secret string, next http.Handler) ht
 			return
 		}
 
-		// Admin endpoints are protected by Bearer token auth, not HMAC.
+		// Admin endpoints are protected by session cookie auth, not HMAC.
 		// They originate from curl/browser, not from ESP32 firmware.
 		if strings.HasPrefix(r.URL.Path, "/admin/") {
 			next.ServeHTTP(w, r)

@@ -63,7 +63,7 @@ ACCESS_POINT runtime flow:
 - Admin web UI at `/admin/ui/` for managing members, credentials, modules, and authorizations
 - Session-cookie-based admin authentication (login, logout, change-password) with forced first-login reset
 - Member and role-based access control (RBAC) — members, roles, permissions, and per-module authorization grants
-- SQLite persistence with auto-migration (11 migrations), serialized writes, and heartbeat pruning
+- SQLite persistence with auto-migration (17 migrations), serialized writes, and heartbeat pruning
 - Credential registration with keyed HMAC-SHA256 hashing (raw UIDs never stored)
 - Module commissioning, revocation, and door management via admin API
 - Full Kconfig-driven configuration (module variant, pins, timing, security, network settings)
@@ -132,7 +132,7 @@ Portunus/
 │   ├── api/portunus/v1/       Generated protobuf + gRPC Go stubs
 │   └── internal/
 │       ├── config/            Environment variable config
-│       ├── db/                SQLite open, migrate, write worker (11 migrations)
+│       ├── db/                SQLite open, migrate, write worker (17 migrations)
 │       ├── httpapi/           HTTP handlers, middleware, admin API, admin web UI
 │       ├── grpcapi/           gRPC handlers, interceptors
 │       └── portunus/
