@@ -1,62 +1,24 @@
-# Prerequisites
-*.d
+# ── Secrets & environment ──
+.env*
+!.env*.example
 
-# Compiled Object files
-*.slo
-*.lo
+# ── TLS material ──
+certs/
+
+# ── Archives / AI / editor scratch ──
+*.tar.gz
+.claude/
+
+# ── Generic compiled artifacts (cross-cutting safety net) ──
 *.o
 *.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Linker files
-*.ilk
-
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
 *.so
 *.dylib
 *.dll
-
-# Fortran module files - Commented out fo GoLang
-# *.mod
-# *.smod
-
-# Compiled Static libraries
-*.lai
-*.la
 *.a
 *.lib
-
-# Executables
 *.exe
 *.out
-*.app
-
-# debug information files
-*.dwo
-
-# ESP-IDF
-sdkconfig
-sdkconfig.defaults.dev
-sdkconfig.defaults.prod
-sdkconfig.defaults.secret
-sdkconfig.old
-build/
-
-# Go
-server/bin/
-server/coverage.out
-server/data/
-
-# Generic
-access_module.tar.gz
-*.env
-certs/
-
-# For now, ignore AI
-.claude/
+*.d
+*.gch
+*.pch

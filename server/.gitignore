@@ -1,0 +1,5 @@
+# Go build output, coverage, local SQLite database
+bin/
+coverage.out
+data/
+*.test
