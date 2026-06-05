@@ -1,5 +1,19 @@
-secure_boot_signing_key.pem
+# ESP-IDF build output + active (generated) config
+build/
+managed_components/
+sdkconfig
 sdkconfig.old
 
-managed_components/
-build/
+# Secrets overlay
+sdkconfig.defaults.secret
+
+# Per-device local settings (WiFi credentials, GPIO pins, stack sizes).
+# Generated automatically by firmware:build:prod before a clean sdkconfig rebuild.
+# Never commit — contains passwords.
+sdkconfig.defaults.local
+
+# Secure-boot / flash-encryption signing key
+secure_boot_signing_key.pem
+
+# Local CA / cert material copied in by generate_certs.sh
+certs/

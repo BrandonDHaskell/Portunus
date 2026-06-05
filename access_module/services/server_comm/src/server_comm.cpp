@@ -647,8 +647,18 @@ static void handle_provision(const event_provision_request_t *req)
     int resp_len = 0;
 
 #if PORTUNUS_USE_GRPC
+    /* Hex-encode operator_credential_uid for the HMAC projection.
+     * operator_uuid is empty here — the server resolves it after verifying the
+     * operator credential. Both sides must agree on this field. */
+    char uid_hex[64] = {};
+    for (size_t i = 0;
+         i < pb_req.operator_credential_uid.size && i * 2 + 2 < sizeof(uid_hex);
+         ++i) {
+        snprintf(&uid_hex[i * 2], 3, "%02x",
+                 static_cast<unsigned>(pb_req.operator_credential_uid.bytes[i]));
+    }
     char proj[128];
-    snprintf(proj, sizeof(proj), "provision|%s|%s", pb_req.module_id, pb_req.operator_uuid);
+    snprintf(proj, sizeof(proj), "provision|%s|%s", pb_req.module_id, uid_hex);
     int grpc_status = 0;
     portunus_err_t err = grpc_post_proto(
         "/portunus.v1.PortunusService/ProvisionCredential",

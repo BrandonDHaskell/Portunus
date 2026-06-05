@@ -133,6 +133,20 @@ tasks:
     cmds:
       - go build -o bin/portunus-server-linux-arm64 ./cmd/portunus-server
 
+  run:server:dev:
+    desc: Run the server with the dev profile (server/.env.dev)
+    dir: "{{.SERVER_DIR}}"
+    dotenv: ['.env.dev']
+    cmds:
+      - go run ./cmd/portunus-server
+
+  run:server:prod:
+    desc: Run the server with the prod profile (root .env + server/.env.prod)
+    dir: "{{.SERVER_DIR}}"
+    dotenv: ['../.env', '.env.prod']
+    cmds:
+      - go run ./cmd/portunus-server
+
   clean:server:
     desc: Clean server build artifacts
     dir: "{{.SERVER_DIR}}"
@@ -185,8 +199,11 @@ tasks:
 
   certs:generate:
     desc: Generate private CA + server TLS certs for LAN deployment
+    vars:
+      PROD_HOST:
+        sh: grep 'CONFIG_PORTUNUS_SERVER_HOST' access_module/sdkconfig.defaults.prod | sed 's/.*="\(.*\)"/\1/'
     cmds:
-      - bash scripts/generate_certs.sh {{.CLI_ARGS}}
+      - bash scripts/generate_certs.sh --ip {{.PROD_HOST}} {{.CLI_ARGS}}
 
   certs:verify:
     desc: Verify the cert chain (ca.pem → server.pem)
@@ -213,7 +230,10 @@ tasks:
     cmds:
       - |
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
-        idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.dev" build
+        DEFAULTS="sdkconfig.defaults"
+        [ -f sdkconfig.defaults.local ] && DEFAULTS="${DEFAULTS};sdkconfig.defaults.local"
+        DEFAULTS="${DEFAULTS};sdkconfig.defaults.dev"
+        idf.py -D SDKCONFIG_DEFAULTS="${DEFAULTS}" build
 
   firmware:build:prod:
     desc: Build firmware with prod sdkconfig overlay (requires PORTUNUS_HMAC_SECRET in .env)
@@ -223,10 +243,30 @@ tasks:
     cmds:
       - |
         : "${PORTUNUS_HMAC_SECRET:?PORTUNUS_HMAC_SECRET must be set in .env}"
+        PROD_HOST=$(grep 'CONFIG_PORTUNUS_SERVER_HOST' sdkconfig.defaults.prod | sed 's/.*="\(.*\)"/\1/')
+        if ! openssl x509 -noout -text -in ../certs/server.pem 2>/dev/null | grep -q "IP Address:${PROD_HOST}"; then
+          echo "ERROR: certs/server.pem SAN does not contain IP:${PROD_HOST} — run: task certs:generate"
+          exit 1
+        fi
+        # Snapshot device-specific settings (WiFi, GPIO, stack sizes) before the
+        # clean sdkconfig deletion. These are not in any profile defaults file and
+        # would otherwise be lost on every prod build.
+        if [ -f sdkconfig ]; then
+          grep -E "^CONFIG_PORTUNUS_(WIFI_|SPI_|MFRC522_|DOOR_STRIKE_PIN=|REED_SWITCH_PIN=|MODULE_TYPE_|ENABLE_|SERVER_REQUEST_TIMEOUT)" \
+            sdkconfig > sdkconfig.defaults.local 2>/dev/null || true
+        else
+          : > sdkconfig.defaults.local
+        fi
         printf 'CONFIG_PORTUNUS_HMAC_SECRET="%s"\n' "$PORTUNUS_HMAC_SECRET" > sdkconfig.defaults.secret
-        trap "rm -f sdkconfig.defaults.secret" EXIT
+        rm -f sdkconfig
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
-        idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.prod;sdkconfig.defaults.secret" build
+        idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.local;sdkconfig.defaults.prod;sdkconfig.defaults.secret" build
+        BUILD_STATUS=$?
+        rm -f sdkconfig.defaults.secret
+        if [ $BUILD_STATUS -eq 0 ]; then
+          idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.local;sdkconfig.defaults.prod" reconfigure > /dev/null 2>&1 || true
+        fi
+        exit $BUILD_STATUS
 
   firmware:flash:
     desc: Flash firmware to connected ESP32
