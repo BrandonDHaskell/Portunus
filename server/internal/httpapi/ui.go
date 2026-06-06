@@ -44,7 +44,11 @@ type UIPageData struct {
 	Member         *types.MemberInfo
 	Authorizations []types.ModuleAuthorizationInfo
 	AccessEvents   []UIAccessEventInfo
-	Modules        []types.ModuleInfo
+
+	// Module and door management pages.
+	Modules []types.ModuleInfo
+	Module  *types.ModuleInfo
+	Doors   []types.DoorInfo
 }
 
 // UIAccessEventInfo is a display-ready view of a single access event.

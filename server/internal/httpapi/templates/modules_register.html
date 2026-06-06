@@ -1,0 +1,39 @@
+{{define "title"}}Register Module — Portunus Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h1>Register Module</h1>
+  <a class="btn btn-secondary" href="/admin/ui/modules">← Modules</a>
+</div>
+
+<div class="card">
+  <p class="hint" style="margin-top:0">
+    Register a new module by its firmware-configured ID, or commission a module that has already
+    been discovered (auto-created on first heartbeat). The module ID must match
+    <code>CONFIG_PORTUNUS_MODULE_ID</code> in the firmware Kconfig.
+  </p>
+  <form method="POST" action="/admin/ui/modules" style="max-width:32rem">
+    <div class="form-group">
+      <label for="module_id">Module ID <span style="color:var(--danger)">*</span></label>
+      <input id="module_id" name="module_id" type="text" class="font-mono"
+        placeholder="e.g. front-door-reader" required autofocus>
+      <p class="hint">Must match the ID set in the module firmware exactly.</p>
+    </div>
+    <div class="form-group">
+      <label for="display_name">Display Name</label>
+      <input id="display_name" name="display_name" type="text"
+        placeholder="e.g. Front Door Reader">
+    </div>
+    <div class="form-group">
+      <label for="door_id">Assign to Door (optional)</label>
+      <select id="door_id" name="door_id">
+        <option value="">— Not assigned —</option>
+        {{range .Doors}}
+        <option value="{{.DoorID}}">{{.Name}} ({{.DoorID}})</option>
+        {{end}}
+      </select>
+      <p class="hint">You can assign or reassign the door later from the module detail page.</p>
+    </div>
+    <button class="btn btn-primary" type="submit">Register Module</button>
+  </form>
+</div>
+{{end}}

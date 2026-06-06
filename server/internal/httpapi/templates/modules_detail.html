@@ -1,0 +1,206 @@
+{{define "title"}}Module — Portunus Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h1>Module Detail</h1>
+  <a class="btn btn-secondary" href="/admin/ui/modules">← Modules</a>
+</div>
+
+{{with .Module}}
+<!-- ── Identity ──────────────────────────────────────────────────────────── -->
+<div class="card" style="margin-bottom:1.5rem">
+  <h2 style="margin-top:0">Identity</h2>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+    <div class="form-group">
+      <label>Module ID</label>
+      <div style="display:flex;align-items:center;gap:.5rem">
+        <input type="text" class="font-mono" value="{{.ModuleID}}" readonly style="flex:1">
+        <button class="btn btn-secondary btn-sm"
+          onclick="navigator.clipboard.writeText('{{.ModuleID}}').then(()=>this.textContent='Copied!').catch(()=>{})"
+          title="Copy Module ID to clipboard">Copy</button>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Display Name</label>
+      <input type="text" value="{{if .DisplayName}}{{.DisplayName}}{{else}}—{{end}}" readonly>
+    </div>
+    <div class="form-group">
+      <label>Status</label>
+      <div style="margin-top:.25rem">
+        {{if eq (print .Status) "active"}}
+          <span class="badge badge-green">Active</span>
+        {{else if eq (print .Status) "discovered"}}
+          <span class="badge badge-yellow">Discovered — not yet commissioned</span>
+        {{else if eq (print .Status) "revoked"}}
+          <span class="badge badge-red">Revoked</span>
+        {{else}}
+          <span class="badge">{{.Status}}</span>
+        {{end}}
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Door</label>
+      <input type="text" class="font-mono" value="{{if .DoorID}}{{.DoorID}}{{else}}— not assigned —{{end}}" readonly>
+    </div>
+    <div class="form-group">
+      <label>Commissioned</label>
+      <input type="text" value="{{if .CommissionedAt}}{{.CommissionedAt}}{{else}}—{{end}}" readonly>
+    </div>
+    <div class="form-group">
+      <label>Revoked</label>
+      <input type="text" value="{{if .RevokedAt}}{{.RevokedAt}}{{else}}—{{end}}" readonly>
+    </div>
+    <div class="form-group">
+      <label>Created</label>
+      <input type="text" value="{{.CreatedAt}}" readonly>
+    </div>
+  </div>
+</div>
+
+<!-- ── Live status ────────────────────────────────────────────────────────── -->
+<div class="card" style="margin-bottom:1.5rem">
+  <h2 style="margin-top:0">Live Status</h2>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+    <div class="form-group">
+      <label>Last Seen</label>
+      <input type="text" value="{{if .LastSeenAt}}{{.LastSeenAt}}{{else}}Never{{end}}" readonly>
+    </div>
+    <div class="form-group">
+      <label>Last IP</label>
+      <input type="text" class="font-mono" value="{{if .LastIP}}{{.LastIP}}{{else}}—{{end}}" readonly>
+    </div>
+    <div class="form-group">
+      <label>Firmware Version</label>
+      <input type="text" class="font-mono" value="{{if .LastFWVersion}}{{.LastFWVersion}}{{else}}—{{end}}" readonly>
+    </div>
+    <div class="form-group">
+      <label>Wi-Fi RSSI</label>
+      <input type="text" value="{{if .LastWiFiRSSI}}{{derefInt .LastWiFiRSSI}} dBm{{else}}—{{end}}" readonly>
+    </div>
+  </div>
+</div>
+
+<!-- ── Actions ───────────────────────────────────────────────────────────── -->
+<div class="card" style="margin-bottom:1.5rem">
+  <h2 style="margin-top:0">Actions</h2>
+  <div style="display:flex;flex-wrap:wrap;gap:.75rem;align-items:flex-start">
+
+    <!-- Assign to door -->
+    {{if $.Doors}}
+    <form method="POST" action="/admin/ui/modules" style="display:flex;gap:.5rem;align-items:flex-end">
+      <input type="hidden" name="module_id" value="{{.ModuleID}}">
+      <input type="hidden" name="display_name" value="{{.DisplayName}}">
+      <div class="form-group" style="margin:0">
+        <label for="door_id">Assign to Door</label>
+        <select id="door_id" name="door_id">
+          <option value="">— Unassigned —</option>
+          {{range $.Doors}}
+          <option value="{{.DoorID}}" {{if eq .DoorID $.Module.DoorID}}selected{{end}}>
+            {{.Name}} ({{.DoorID}})
+          </option>
+          {{end}}
+        </select>
+      </div>
+      <button class="btn btn-secondary" type="submit">Save</button>
+    </form>
+    {{end}}
+
+    <!-- Revoke -->
+    {{if not (eq (print .Status) "revoked")}}
+    <form method="POST" action="/admin/ui/modules/{{.ModuleID}}/revoke">
+      <button class="btn btn-danger" type="submit"
+        onclick="return confirm('Revoke this module? It will no longer be trusted for access decisions.')">Revoke</button>
+    </form>
+    {{end}}
+
+    <!-- Delete -->
+    <form method="POST" action="/admin/ui/modules/{{.ModuleID}}/delete">
+      <button class="btn btn-danger" type="submit"
+        onclick="return confirm('Delete this module permanently? All associated access events will be orphaned.')">Delete</button>
+    </form>
+  </div>
+</div>
+{{end}}{{/* end with .Module */}}
+
+<!-- ── Authorizations ────────────────────────────────────────────────────── -->
+<div class="card" style="margin-bottom:1.5rem">
+  <h2 style="margin-top:0">Member Authorizations</h2>
+
+  {{if .Authorizations}}
+  <table style="margin-bottom:1rem">
+    <thead>
+      <tr>
+        <th>Member UUID</th>
+        <th>Granted</th>
+        <th>Granted By</th>
+        <th>Expires</th>
+        <th>Status</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+    {{range .Authorizations}}
+      <tr>
+        <td class="font-mono" style="font-size:.8rem">{{.MemberUUID}}</td>
+        <td class="text-muted" style="font-size:.85rem">{{.GrantedAt}}</td>
+        <td class="font-mono text-muted" style="font-size:.8rem">
+          {{if .GrantedByUUID}}{{.GrantedByUUID}}{{else}}<em>system</em>{{end}}
+        </td>
+        <td class="text-muted" style="font-size:.85rem">
+          {{if .ExpiresAt}}{{.ExpiresAt}}{{else}}—{{end}}
+        </td>
+        <td>
+          {{if .RevokedAt}}
+            <span class="badge badge-red">Revoked</span>
+          {{else}}
+            <span class="badge badge-green">Active</span>
+          {{end}}
+        </td>
+        <td>
+          {{if not .RevokedAt}}
+          {{if $.Module}}
+          <form method="POST" action="/admin/ui/modules/{{$.Module.ModuleID}}/authorizations/{{.MemberUUID}}/revoke">
+            <button class="btn btn-danger btn-sm" type="submit"
+              onclick="return confirm('Revoke access for this member?')">Revoke</button>
+          </form>
+          {{end}}
+          {{end}}
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="text-muted">No member authorizations yet.</p>
+  {{end}}
+
+  <!-- Grant authorization form -->
+  {{if and .Members .Module}}
+  {{if not (eq (print .Module.Status) "revoked")}}
+  <details style="margin-top:1rem">
+    <summary class="btn btn-secondary" style="display:inline-block;cursor:pointer">+ Grant Authorization</summary>
+    <form method="POST" action="/admin/ui/modules/{{.Module.ModuleID}}/authorizations"
+          style="margin-top:1rem;display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap">
+      <div class="form-group" style="margin:0">
+        <label for="member_uuid">Member</label>
+        <select id="member_uuid" name="member_uuid" required>
+          <option value="">— Select member —</option>
+          {{range .Members}}
+          {{if eq .Status "active"}}
+          <option value="{{.UUID}}">
+            {{.UUID}}{{if .RoleID}} ({{.RoleID}}){{end}}
+          </option>
+          {{end}}
+          {{end}}
+        </select>
+      </div>
+      <div class="form-group" style="margin:0">
+        <label for="auth_expires_at">Expires (optional)</label>
+        <input id="auth_expires_at" name="expires_at" type="date">
+      </div>
+      <button class="btn btn-primary" type="submit">Grant</button>
+    </form>
+  </details>
+  {{end}}
+  {{end}}
+</div>
+{{end}}
