@@ -1,0 +1,34 @@
+{{define "title"}}Register Door — Portunus Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h1>Register Door</h1>
+  <a class="btn btn-secondary" href="/admin/ui/doors">← Doors</a>
+</div>
+
+<div class="card">
+  <p class="hint" style="margin-top:0">
+    A door is a logical entry point (e.g. "Server Room", "Front Entrance").
+    One or more access modules can be assigned to it. The door ID is a
+    stable identifier used in access event logs and authorization records.
+  </p>
+  <form method="POST" action="/admin/ui/doors" style="max-width:32rem">
+    <div class="form-group">
+      <label for="door_id">Door ID <span style="color:var(--danger)">*</span></label>
+      <input id="door_id" name="door_id" type="text" class="font-mono"
+        placeholder="e.g. front-entrance" required autofocus>
+      <p class="hint">Lowercase letters, numbers, and hyphens. Cannot be changed after creation.</p>
+    </div>
+    <div class="form-group">
+      <label for="name">Name <span style="color:var(--danger)">*</span></label>
+      <input id="name" name="name" type="text"
+        placeholder="e.g. Front Entrance" required>
+    </div>
+    <div class="form-group">
+      <label for="location">Location (optional)</label>
+      <input id="location" name="location" type="text"
+        placeholder="e.g. Building A, Ground Floor">
+    </div>
+    <button class="btn btn-primary" type="submit">Register Door</button>
+  </form>
+</div>
+{{end}}

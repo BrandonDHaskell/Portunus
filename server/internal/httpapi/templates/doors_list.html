@@ -1,0 +1,36 @@
+{{define "title"}}Doors — Portunus Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h1>Doors</h1>
+  <a class="btn btn-primary" href="/admin/ui/doors/new">+ Register Door</a>
+</div>
+<table>
+  <thead>
+    <tr>
+      <th>Door ID</th>
+      <th>Name</th>
+      <th>Location</th>
+      <th>Created</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+  {{range .Doors}}
+    <tr>
+      <td class="font-mono" style="font-size:.85rem">{{.DoorID}}</td>
+      <td>{{.Name}}</td>
+      <td class="text-muted">{{if .Location}}{{.Location}}{{else}}<em>—</em>{{end}}</td>
+      <td class="text-muted" style="font-size:.85rem">{{.CreatedAt}}</td>
+      <td>
+        <form method="POST" action="/admin/ui/doors/{{.DoorID}}/delete" style="display:inline">
+          <button class="btn btn-danger btn-sm" type="submit"
+            onclick="return confirm('Delete door {{.DoorID}}? Any modules assigned to it will become unassigned.')">Delete</button>
+        </form>
+      </td>
+    </tr>
+  {{else}}
+    <tr><td colspan="5" class="text-muted" style="text-align:center;padding:2rem">No doors registered.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}

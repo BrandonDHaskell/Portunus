@@ -1,0 +1,47 @@
+{{define "title"}}Modules — Portunus Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h1>Modules</h1>
+  <a class="btn btn-primary" href="/admin/ui/modules/new">+ Register Module</a>
+</div>
+<table>
+  <thead>
+    <tr>
+      <th>Module ID</th>
+      <th>Display Name</th>
+      <th>Door</th>
+      <th>Status</th>
+      <th>Last Seen</th>
+      <th>Firmware</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+  {{range .Modules}}
+    <tr>
+      <td class="font-mono" style="font-size:.85rem">{{.ModuleID}}</td>
+      <td>{{if .DisplayName}}{{.DisplayName}}{{else}}<em class="text-muted">—</em>{{end}}</td>
+      <td class="font-mono text-muted" style="font-size:.8rem">{{if .DoorID}}{{.DoorID}}{{else}}<em>—</em>{{end}}</td>
+      <td>
+        {{if eq (print .Status) "active"}}
+          <span class="badge badge-green">Active</span>
+        {{else if eq (print .Status) "discovered"}}
+          <span class="badge badge-yellow">Discovered</span>
+        {{else if eq (print .Status) "revoked"}}
+          <span class="badge badge-red">Revoked</span>
+        {{else}}
+          <span class="badge">{{.Status}}</span>
+        {{end}}
+      </td>
+      <td class="text-muted" style="font-size:.85rem">{{if .LastSeenAt}}{{.LastSeenAt}}{{else}}<em>Never</em>{{end}}</td>
+      <td class="text-muted" style="font-size:.85rem">{{if .LastFWVersion}}{{.LastFWVersion}}{{else}}<em>—</em>{{end}}</td>
+      <td>
+        <a class="btn btn-secondary btn-sm" href="/admin/ui/modules/{{.ModuleID}}">View</a>
+      </td>
+    </tr>
+  {{else}}
+    <tr><td colspan="7" class="text-muted" style="text-align:center;padding:2rem">No modules found.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
