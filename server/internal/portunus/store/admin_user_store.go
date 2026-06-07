@@ -56,5 +56,4 @@ type AdminUserStore interface {
 
 	// AnyAdminExists returns true if at least one admin_user row exists.
 	AnyAdminExists(ctx context.Context) (bool, error)
-
 }
