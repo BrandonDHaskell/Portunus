@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
-	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/types"
 )
 
@@ -171,50 +170,6 @@ func (s *Server) handleAdminDeleteDoor(w http.ResponseWriter, r *http.Request) {
 
 	s.logger.Printf("admin: deleted door %q", doorID)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "door_id": doorID, "deleted": true})
-}
-
-// ── Admin user credentials ───────────────────────────────────────────────────
-
-// handleAdminRegisterAdminCredential registers an RFID badge for an admin user.
-// The badge is identified at provisioning time via scan-1 (operator tap).
-func (s *Server) handleAdminRegisterAdminCredential(w http.ResponseWriter, r *http.Request) {
-	adminUUID := r.PathValue("admin_uuid")
-	if adminUUID == "" {
-		writeError(w, http.StatusBadRequest, "missing_admin_uuid", "admin_uuid path parameter is required")
-		return
-	}
-
-	var body struct {
-		CredentialID string `json:"credential_id"`
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxAdminBody)
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "bad_json", "invalid JSON body")
-		return
-	}
-
-	rawUID, err := service.ParseCredentialUID(body.CredentialID)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_credential_id", "credential_id must be a colon-separated hex UID (e.g. \"04:A3:2B:1C\")")
-		return
-	}
-	credHash := service.HashCredentialID(rawUID, s.credentialHashSecret)
-
-	if err := s.adminUserService.RegisterCredential(r.Context(), adminUUID, credHash); err != nil {
-		switch {
-		case errors.Is(err, service.ErrAdminUserNotFound):
-			writeError(w, http.StatusNotFound, "not_found", "admin user not found")
-		case errors.Is(err, store.ErrAdminCredentialConflict):
-			writeError(w, http.StatusConflict, "duplicate_credential", "credential is already registered to an admin user")
-		default:
-			s.logger.Printf("admin register admin credential: %v", err)
-			writeError(w, http.StatusInternalServerError, "internal_error", "failed to register credential")
-		}
-		return
-	}
-
-	s.logger.Printf("admin: registered credential for admin user %s", adminUUID)
-	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "admin_user_uuid": adminUUID})
 }
 
 // ── System health ────────────────────────────────────────────────────────────

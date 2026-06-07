@@ -128,22 +128,6 @@ func (s *AdminUserService) SetEnabled(ctx context.Context, uuid, callerUUID stri
 	return nil
 }
 
-// RegisterCredential registers a credential hash for an admin user so they can
-// be identified via scan-1 during provisioning.  credentialHash must be the
-// canonical HMAC-SHA256(secret, rawUID) value produced by HashCredentialID.
-func (s *AdminUserService) RegisterCredential(ctx context.Context, adminUUID string, credentialHash []byte) error {
-	if err := s.users.RegisterAdminCredential(ctx, adminUUID, credentialHash); err != nil {
-		switch {
-		case errors.Is(err, store.ErrNotFound):
-			return ErrAdminUserNotFound
-		case errors.Is(err, store.ErrAdminCredentialConflict):
-			return err
-		}
-		return fmt.Errorf("register credential: %w", err)
-	}
-	return nil
-}
-
 // AssignRole assigns a role to an admin user.
 func (s *AdminUserService) AssignRole(ctx context.Context, uuid, roleID string) error {
 	roleID = strings.TrimSpace(roleID)

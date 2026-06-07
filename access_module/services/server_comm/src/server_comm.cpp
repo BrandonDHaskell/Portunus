@@ -202,7 +202,7 @@ static bool get_rssi(int32_t *out)
  * Projection formats (must match hmacProjection() in grpcapi/interceptors.go):
  *   Heartbeat:   "heartbeat|{module_id}|{sequence}"
  *   Access:      "access|{module_id}|{credential_id}"
- *   Provision:   "provision|{module_id}|{operator_uuid}"
+ *   Provision:   "provision|{module_id}|{hex(operator_credential_uid)}"
  *
  * @param method         gRPC method path (e.g. "/portunus.v1.PortunusService/SendHeartbeat")
  * @param req_buf        Nanopb-encoded protobuf request body
@@ -373,12 +373,14 @@ static void on_heartbeat_event(const portunus_event_t *event, void *ctx)
     xQueueSend(s_comm_queue, event, 0);
 }
 
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
 static void on_credential_event(const portunus_event_t *event, void *ctx)
 {
     (void)ctx;
     if (s_comm_queue == NULL) { return; }
     xQueueSend(s_comm_queue, event, 0);
 }
+#endif /* CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT */
 
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
 static void on_provision_event(const portunus_event_t *event, void *ctx)
@@ -499,6 +501,7 @@ static void handle_heartbeat(const event_heartbeat_t *hb)
              resp.known, resp.server_time);
 }
 
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
 static void handle_credential(const event_credential_read_t *cred)
 {
     /* Build protobuf request */
@@ -585,6 +588,7 @@ static void handle_credential(const event_credential_read_t *cred)
 
     event_bus_publish(&decision);
 }
+#endif /* CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT */
 
 /* ── Provisioning handler (PROVISIONING_CONSOLE only) ──────────────────────── */
 
