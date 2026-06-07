@@ -99,5 +99,6 @@ func (s *Server) handleAdminChangePassword(w http.ResponseWriter, r *http.Reques
 	}
 
 	s.logger.Printf("admin: password changed for user %q", sess.Username)
+	clearSessionCookie(w)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

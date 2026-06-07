@@ -207,7 +207,16 @@ func (s *AuthService) ChangePassword(ctx context.Context, adminUUID, currentPass
 		return fmt.Errorf("change password: hash: %w", err)
 	}
 
-	return s.users.UpdatePasswordHash(ctx, adminUUID, string(hash))
+	if err := s.users.UpdatePasswordHash(ctx, adminUUID, string(hash)); err != nil {
+		return err
+	}
+
+	// Revoke all sessions so the new password takes effect everywhere and any
+	// previously issued (or stolen) token is invalidated. The user must log in again.
+	if err := s.sessions.DeleteSessionsForAdmin(ctx, adminUUID); err != nil {
+		return fmt.Errorf("change password: revoke sessions: %w", err)
+	}
+	return nil
 }
 
 func generateSessionID() (string, error) {

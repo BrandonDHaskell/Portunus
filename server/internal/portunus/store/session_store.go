@@ -28,4 +28,8 @@ type SessionStore interface {
 
 	// DeleteExpiredSessions removes all rows whose expires_at_ms is in the past.
 	DeleteExpiredSessions(ctx context.Context) error
+
+	// DeleteSessionsForAdmin removes all sessions belonging to the given admin
+	// user. Used to force re-authentication after a password change.
+	DeleteSessionsForAdmin(ctx context.Context, adminUUID string) error
 }
