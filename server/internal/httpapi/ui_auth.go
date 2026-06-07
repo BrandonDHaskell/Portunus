@@ -128,7 +128,8 @@ func (s *Server) handleUIChangePassword(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	http.Redirect(w, r, "/admin/ui/?flash=Password+changed+successfully&ft=success", http.StatusSeeOther)
+	clearSessionCookie(w)
+	http.Redirect(w, r, "/admin/ui/login?flash=Password+changed.+Please+sign+in.&ft=success", http.StatusSeeOther)
 }
 
 // handleUIDashboard serves GET /admin/ui/.

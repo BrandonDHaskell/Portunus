@@ -116,6 +116,10 @@ func (s *Server) handleUIUsersAssignRole(w http.ResponseWriter, r *http.Request)
 			http.NotFound(w, r)
 			return
 		}
+		if errors.Is(err, service.ErrLastAdmin) {
+			flashRedirect(w, r, "/admin/ui/users/"+uuid, "Cannot move the last admin user off the admin role.", "error")
+			return
+		}
 		s.logger.Printf("ui assign role: %v", err)
 		flashRedirect(w, r, "/admin/ui/users/"+uuid, err.Error(), "error")
 		return
@@ -137,6 +141,10 @@ func (s *Server) handleUIUsersDisable(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, service.ErrAdminUserNotFound) {
 			http.NotFound(w, r)
+			return
+		}
+		if errors.Is(err, service.ErrLastAdmin) {
+			flashRedirect(w, r, "/admin/ui/users", "Cannot disable the last enabled admin user.", "error")
 			return
 		}
 		s.logger.Printf("ui disable user: %v", err)

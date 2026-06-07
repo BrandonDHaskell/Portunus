@@ -67,6 +67,16 @@ func (s *SessionStore) DeleteSession(ctx context.Context, sessionID string) erro
 	})
 }
 
+func (s *SessionStore) DeleteSessionsForAdmin(ctx context.Context, adminUUID string) error {
+	return s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE admin_uuid = ?;`, adminUUID)
+		if err != nil {
+			return fmt.Errorf("DeleteSessionsForAdmin: %w", err)
+		}
+		return nil
+	})
+}
+
 func (s *SessionStore) DeleteExpiredSessions(ctx context.Context) error {
 	now := time.Now().UTC().UnixMilli()
 	return s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {

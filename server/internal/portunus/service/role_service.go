@@ -11,7 +11,14 @@ import (
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store"
 )
 
-var ErrRoleNotFound = errors.New("role not found")
+// adminRoleID is the built-in superuser role. Its permission set is immutable
+// so an administrator can never be locked out of the system.
+const adminRoleID = "admin"
+
+var (
+	ErrRoleNotFound       = errors.New("role not found")
+	ErrAdminRoleImmutable = errors.New("the admin role's permissions cannot be modified")
+)
 
 // RoleInfo is the view type for role management pages.
 type RoleInfo struct {
@@ -124,6 +131,9 @@ func (s *RoleService) DeleteRole(ctx context.Context, roleID string) error {
 
 // SetPermissions replaces the full permission set for a role.
 func (s *RoleService) SetPermissions(ctx context.Context, roleID string, permissions []string) error {
+	if roleID == adminRoleID {
+		return ErrAdminRoleImmutable
+	}
 	if err := s.roles.SetRolePermissions(ctx, roleID, permissions); err != nil {
 		return fmt.Errorf("set permissions: %w", err)
 	}

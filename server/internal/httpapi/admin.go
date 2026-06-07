@@ -58,12 +58,17 @@ func (s *Server) handleAdminRegisterModule(w http.ResponseWriter, r *http.Reques
 
 	info, err := s.adminService.RegisterModule(r.Context(), req)
 	if err != nil {
-		if errors.Is(err, service.ErrModuleIDRequired) {
+		switch {
+		case errors.Is(err, service.ErrModuleIDRequired):
 			writeError(w, http.StatusBadRequest, "missing_module_id", err.Error())
-			return
+		case errors.Is(err, service.ErrModuleDoorRequired):
+			writeError(w, http.StatusBadRequest, "module_door_required", err.Error())
+		case errors.Is(err, service.ErrDoorNotFound):
+			writeError(w, http.StatusBadRequest, "door_not_found", "the specified door does not exist")
+		default:
+			s.logger.Printf("admin register module: %v", err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "failed to register module")
 		}
-		s.logger.Printf("admin register module: %v", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "failed to register module")
 		return
 	}
 
