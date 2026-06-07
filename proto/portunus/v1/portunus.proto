@@ -153,15 +153,15 @@ message AccessResponse {
 
 // Sent by a provisioning console after a successful two-scan flow.
 // The device sends raw RFID UID bytes for both scans; the server applies
-// HMAC-SHA256 and resolves the scan-1 UID to an admin user for attribution.
+// HMAC-SHA256 and resolves the scan-1 UID to a member_access record for
+// attribution.
 //
 // Server Go equivalent: types.ProvisionCredentialRequest
 message ProvisionCredentialRequest {
-  // UUID of the admin operator.  Populated by the server after resolving
-  // operator_credential_uid (field 6) to an admin_users record.
-  // When field 6 is absent (legacy firmware), the device supplies this
-  // directly from Kconfig CONFIG_PORTUNUS_OPERATOR_UUID.
-  string operator_uuid          = 1;
+  // Retired: was the admin operator UUID sent directly from Kconfig firmware.
+  // Replaced by operator_credential_uid (field 6).  Must not be reused.
+  reserved 1;
+  reserved "operator_uuid";
 
   // Module ID of the provisioning console.
   string module_id              = 2;
@@ -179,9 +179,8 @@ message ProvisionCredentialRequest {
   bytes  credential_uid         = 5;
 
   // Raw RFID UID bytes read from the operator's card (scan 1, 1–10 bytes).
-  // The server hashes this and looks up the matching admin_user_credentials
-  // row to determine the true operator identity.  When present, this takes
-  // precedence over operator_uuid (field 1).
+  // The server hashes this and resolves the operator against member_access,
+  // checking that the member's role carries member.provision permission.
   bytes  operator_credential_uid = 6;
 }
 

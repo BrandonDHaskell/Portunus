@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/permissions"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/types"
 )
@@ -15,13 +17,21 @@ import (
 var ErrProvisionCredentialUIDRequired = errors.New("credential_uid is required")
 
 // ProvisionService handles device-initiated member provisioning from the
-// PROVISIONING_CONSOLE firmware variant.  It creates a fully active member
-// record in a single flow — no pending_authorization step.
+// PROVISIONING_CONSOLE firmware variant.
+//
+// Operator resolution (scan-1):
+//  1. Hash the raw UID from OperatorCredentialUID.
+//  2. Look up the credential in member_access. If not found, create a
+//     pending_authorization record so an admin can resolve it via the UI,
+//     then return UNAUTHORIZED.
+//  3. If found: the member must be active, enabled, and their role must carry
+//     the member.provision permission. Anything else returns UNAUTHORIZED and
+//     records the attempt in the access event log.
 type ProvisionService struct {
 	registry             *DeviceRegistry
 	memberStore          store.MemberAccessStore
 	roleStore            store.RoleStore
-	adminUsers           store.AdminUserStore
+	accessEvents         store.AccessEventStore
 	credentialHashSecret []byte
 }
 
@@ -29,14 +39,14 @@ func NewProvisionService(
 	registry *DeviceRegistry,
 	memberStore store.MemberAccessStore,
 	roleStore store.RoleStore,
-	adminUsers store.AdminUserStore,
+	accessEvents store.AccessEventStore,
 	credentialHashSecret []byte,
 ) *ProvisionService {
 	return &ProvisionService{
 		registry:             registry,
 		memberStore:          memberStore,
 		roleStore:            roleStore,
-		adminUsers:           adminUsers,
+		accessEvents:         accessEvents,
 		credentialHashSecret: credentialHashSecret,
 	}
 }
@@ -44,12 +54,6 @@ func NewProvisionService(
 // Provision handles a ProvisionCredentialRequest from a PROVISIONING_CONSOLE module.
 // It returns a domain error only for internal failures; all provisioning outcomes
 // (duplicate, unauthorized, invalid_role) are encoded in the response Status.
-//
-// Operator resolution order:
-//  1. If OperatorCredentialUID is non-empty: hash it, look up via
-//     admin_user_credentials, and use that admin as the operator.
-//  2. If OperatorCredentialUID is empty: fall back to OperatorUUID directly
-//     (legacy firmware that sends the Kconfig UUID in field 1).
 func (s *ProvisionService) Provision(
 	ctx context.Context,
 	req types.ProvisionCredentialRequest,
@@ -78,7 +82,7 @@ func (s *ProvisionService) Provision(
 		return types.ProvisionCredentialResponse{OK: false, Known: false}, nil
 	}
 
-	// Resolve operator identity.
+	// Validate operator (scan-1).
 	operatorUUID, resp, err := s.resolveOperator(ctx, req)
 	if err != nil {
 		return types.ProvisionCredentialResponse{}, err
@@ -123,8 +127,7 @@ func (s *ProvisionService) Provision(
 		}, nil
 	}
 
-	// Create member and attach credential. Using ProvisioningStatusActive skips
-	// the pending_authorization workflow used in admin-initiated flows.
+	// Create member and attach credential.
 	memberUUID := uuid.New().String()
 	if err := s.memberStore.CreateMember(
 		ctx, memberUUID, roleID, operatorUUID,
@@ -152,55 +155,97 @@ func (s *ProvisionService) Provision(
 	}, nil
 }
 
-// resolveOperator determines the operator UUID from the request.
+// resolveOperator validates the scan-1 operator credential.
 // Returns (uuid, nil, nil) on success.
-// Returns ("", &unauthorizedResponse, nil) when the operator is not valid.
+// Returns ("", &unauthorizedResponse, nil) when the operator is not authorized.
 // Returns ("", nil, err) on an internal error.
 func (s *ProvisionService) resolveOperator(
 	ctx context.Context,
 	req types.ProvisionCredentialRequest,
 ) (string, *types.ProvisionCredentialResponse, error) {
-	unauthorized := func(detail string) *types.ProvisionCredentialResponse {
-		return &types.ProvisionCredentialResponse{
-			OK:     true,
-			Known:  true,
-			Status: types.ProvisionStatusUnauthorized,
-			Detail: detail,
-		}
+	if len(req.OperatorCredentialUID) == 0 {
+		return "", unauthorizedResponse("operator credential is required"), nil
 	}
 
-	if len(req.OperatorCredentialUID) > 0 {
-		// Preferred path (new firmware): resolve scan-1 UID to an admin user.
-		opHash := HashCredentialID(req.OperatorCredentialUID, s.credentialHashSecret)
-		operator, err := s.adminUsers.GetAdminUserByCredential(ctx, opHash)
-		if err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				return "", unauthorized("operator badge not registered"), nil
-			}
+	opHash := HashCredentialID(req.OperatorCredentialUID, s.credentialHashSecret)
+
+	member, err := s.memberStore.GetMemberByCredential(ctx, opHash)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
 			return "", nil, fmt.Errorf("operator credential lookup: %w", err)
 		}
-		if !operator.Enabled {
-			return "", unauthorized("operator account is disabled"), nil
+		// Unknown credential: create a pending_authorization record so an admin
+		// can resolve it via the UI, then reject this request.
+		if createErr := s.createPendingOperator(ctx, opHash); createErr != nil {
+			return "", nil, fmt.Errorf("create pending operator: %w", createErr)
 		}
-		return operator.UUID, nil, nil
+		return "", unauthorizedResponse("operator credential not found — pending authorization created"), nil
 	}
 
-	// Legacy path: operator_uuid supplied directly in field 1 (Kconfig firmware).
-	operatorUUID := strings.TrimSpace(req.OperatorUUID)
-	if operatorUUID == "" {
-		return "", unauthorized("operator_uuid is required"), nil
+	// Member must be active and enabled.
+	if !member.Enabled || member.Status != store.MemberStatusActive ||
+		member.ProvisioningStatus != store.ProvisioningStatusActive {
+		s.recordProvisionAttempt(ctx, req.ModuleID, opHash, "provision_unauthorized:operator_inactive")
+		return "", unauthorizedResponse("operator account is not active"), nil
 	}
-	operator, err := s.adminUsers.GetAdminUserByUUID(ctx, operatorUUID)
+
+	// Role must carry member.provision.
+	perms, err := s.roleStore.GetRolePermissions(ctx, member.RoleID)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return "", unauthorized("operator not found"), nil
+		return "", nil, fmt.Errorf("get operator role permissions: %w", err)
+	}
+	if !hasPermission(perms, permissions.MemberProvision) {
+		s.recordProvisionAttempt(ctx, req.ModuleID, opHash, "provision_unauthorized:no_member_provision_permission")
+		return "", unauthorizedResponse("operator does not have member.provision permission"), nil
+	}
+
+	return member.UUID, nil, nil
+}
+
+// createPendingOperator inserts a pending_authorization member record for an
+// unknown scan-1 credential so it surfaces in the admin UI pending queue.
+func (s *ProvisionService) createPendingOperator(ctx context.Context, credHash []byte) error {
+	memberUUID := uuid.New().String()
+	if err := s.memberStore.CreateMember(
+		ctx, memberUUID, "guest", "",
+		store.ProvisioningStatusPendingAuthorization, nil, nil,
+	); err != nil {
+		return err
+	}
+	return s.memberStore.AttachCredential(ctx, memberUUID, credHash)
+}
+
+// recordProvisionAttempt writes a denied access event to the audit log.
+// Errors are swallowed — the primary response path must not fail because of logging.
+func (s *ProvisionService) recordProvisionAttempt(ctx context.Context, moduleID string, credHash []byte, reason string) {
+	now := time.Now().UTC()
+	_ = s.accessEvents.RecordEvent(ctx, store.AccessEventRecord{
+		ModuleID:       moduleID,
+		ReceivedAt:     now,
+		CredentialHash: credHash,
+		Granted:        false,
+		Reason:         reason,
+		DecidedAt:      now,
+	})
+}
+
+func unauthorizedResponse(detail string) *types.ProvisionCredentialResponse {
+	return &types.ProvisionCredentialResponse{
+		OK:     true,
+		Known:  true,
+		Status: types.ProvisionStatusUnauthorized,
+		Detail: detail,
+	}
+}
+
+// hasPermission returns true if perm is present in the sorted permissions slice.
+func hasPermission(perms []string, perm string) bool {
+	for _, p := range perms {
+		if p == perm {
+			return true
 		}
-		return "", nil, fmt.Errorf("operator lookup: %w", err)
 	}
-	if !operator.Enabled {
-		return "", unauthorized("operator account is disabled"), nil
-	}
-	return operator.UUID, nil, nil
+	return false
 }
 
 // provisionDuplicateStatus maps an existing member record to the appropriate

@@ -251,14 +251,16 @@ access service.
 
 `ProvisionCredentialRequest` is sent by the PROVISIONING_CONSOLE firmware
 variant after a successful two-scan flow.  Raw RFID UID bytes are sent for
-both scans; the server applies HMAC-SHA256 and resolves scan-1 to an admin
-user for attribution.  It carries:
+both scans; the server applies HMAC-SHA256 and resolves scan-1 to a
+`member_access` record, checking that the member's role carries the
+`member.provision` permission.  It carries:
 
-- `operator_credential_uid` (field 6) — raw RFID UID bytes from scan-1 (operator's badge). The server hashes this and looks up the matching `admin_user_credentials` row to determine the operator identity.
-- `operator_uuid` (field 1, legacy) — only used by firmware that does not send field 6. When field 6 is present, field 1 is ignored. The server resolves the operator from field 6 and records the resolved UUID in `member_access.created_by_uuid`.
+- `operator_credential_uid` (field 6) — raw RFID UID bytes from scan-1 (operator's badge). The server hashes this and resolves the operator against `member_access`, verifying the `member.provision` permission.
 - `module_id` — module ID of the provisioning console
 - `credential_uid` (field 5) — raw RFID UID bytes from scan-2 (new member card). The server computes HMAC-SHA256(secret, credential_uid) before storing.
 - `role_id` — role to assign to the new member (must already exist on the server)
+
+Fields 1 (`operator_uuid`) and 3 (`credential_hash`) are retired and reserved.
 
 The server responds with `ProvisionCredentialResponse`:
 

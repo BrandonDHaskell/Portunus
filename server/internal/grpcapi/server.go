@@ -136,7 +136,6 @@ func (s *Server) RequestAccess(ctx context.Context, req *pb.AccessRequest) (*pb.
 
 func (s *Server) ProvisionCredential(ctx context.Context, req *pb.ProvisionCredentialRequest) (*pb.ProvisionCredentialResponse, error) {
 	domainReq := types.ProvisionCredentialRequest{
-		OperatorUUID:          req.GetOperatorUuid(),
 		OperatorCredentialUID: req.GetOperatorCredentialUid(),
 		ModuleID:              req.GetModuleId(),
 		CredentialUID:         req.GetCredentialUid(),

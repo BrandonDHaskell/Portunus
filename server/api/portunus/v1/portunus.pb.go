@@ -493,16 +493,12 @@ func (x *AccessResponse) GetServerTime() string {
 
 // Sent by a provisioning console after a successful two-scan flow.
 // The device sends raw RFID UID bytes for both scans; the server applies
-// HMAC-SHA256 and resolves the scan-1 UID to an admin user for attribution.
+// HMAC-SHA256 and resolves the scan-1 UID to a member_access record for
+// attribution.
 //
 // Server Go equivalent: types.ProvisionCredentialRequest
 type ProvisionCredentialRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// UUID of the admin operator.  Populated by the server after resolving
-	// operator_credential_uid (field 6) to an admin_users record.
-	// When field 6 is absent (legacy firmware), the device supplies this
-	// directly from Kconfig CONFIG_PORTUNUS_OPERATOR_UUID.
-	OperatorUuid string `protobuf:"bytes,1,opt,name=operator_uuid,json=operatorUuid,proto3" json:"operator_uuid,omitempty"`
 	// Module ID of the provisioning console.
 	ModuleId string `protobuf:"bytes,2,opt,name=module_id,json=moduleId,proto3" json:"module_id,omitempty"`
 	// Role ID to assign to the new member.  Must already exist on the server.
@@ -511,9 +507,8 @@ type ProvisionCredentialRequest struct {
 	// The server computes HMAC-SHA256(secret, credential_uid) before storing.
 	CredentialUid []byte `protobuf:"bytes,5,opt,name=credential_uid,json=credentialUid,proto3" json:"credential_uid,omitempty"`
 	// Raw RFID UID bytes read from the operator's card (scan 1, 1–10 bytes).
-	// The server hashes this and looks up the matching admin_user_credentials
-	// row to determine the true operator identity.  When present, this takes
-	// precedence over operator_uuid (field 1).
+	// The server hashes this and resolves the operator against member_access,
+	// checking that the member's role carries member.provision permission.
 	OperatorCredentialUid []byte `protobuf:"bytes,6,opt,name=operator_credential_uid,json=operatorCredentialUid,proto3" json:"operator_credential_uid,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
@@ -547,13 +542,6 @@ func (x *ProvisionCredentialRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ProvisionCredentialRequest.ProtoReflect.Descriptor instead.
 func (*ProvisionCredentialRequest) Descriptor() ([]byte, []int) {
 	return file_portunus_v1_portunus_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *ProvisionCredentialRequest) GetOperatorUuid() string {
-	if x != nil {
-		return x.OperatorUuid
-	}
-	return ""
 }
 
 func (x *ProvisionCredentialRequest) GetModuleId() string {
@@ -686,13 +674,12 @@ const file_portunus_v1_portunus_proto_rawDesc = "" +
 	"\x06reason\x18\x04 \x01(\tR\x06reason\x12\x1b\n" +
 	"\tmodule_id\x18\x05 \x01(\tR\bmoduleId\x12\x1f\n" +
 	"\vserver_time\x18\x06 \x01(\tR\n" +
-	"serverTime\"\xed\x01\n" +
-	"\x1aProvisionCredentialRequest\x12#\n" +
-	"\roperator_uuid\x18\x01 \x01(\tR\foperatorUuid\x12\x1b\n" +
+	"serverTime\"\xdd\x01\n" +
+	"\x1aProvisionCredentialRequest\x12\x1b\n" +
 	"\tmodule_id\x18\x02 \x01(\tR\bmoduleId\x12\x17\n" +
 	"\arole_id\x18\x04 \x01(\tR\x06roleId\x12%\n" +
 	"\x0ecredential_uid\x18\x05 \x01(\fR\rcredentialUid\x126\n" +
-	"\x17operator_credential_uid\x18\x06 \x01(\fR\x15operatorCredentialUidJ\x04\b\x03\x10\x04R\x0fcredential_hash\"\x8c\x01\n" +
+	"\x17operator_credential_uid\x18\x06 \x01(\fR\x15operatorCredentialUidJ\x04\b\x01\x10\x02J\x04\b\x03\x10\x04R\roperator_uuidR\x0fcredential_hash\"\x8c\x01\n" +
 	"\x1bProvisionCredentialResponse\x12\x1f\n" +
 	"\vmember_uuid\x18\x01 \x01(\tR\n" +
 	"memberUuid\x124\n" +

@@ -45,12 +45,12 @@ jobs:
 
       - name: Install Go proto plugins
         run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.1
         working-directory: server
 
       - name: Install nanopb
-        run: pip install nanopb
+        run: pip install nanopb==0.4.9.1
 
       - uses: arduino/setup-task@v2
         with:

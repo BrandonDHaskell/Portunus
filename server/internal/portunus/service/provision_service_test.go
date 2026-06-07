@@ -1,18 +1,18 @@
 package service_test
 
-// Integration tests for ProvisionService operator-resolution logic (P1-3).
+// Integration tests for ProvisionService operator-resolution logic.
 //
-// These tests verify that:
-//   - scan-1 UID (OperatorCredentialUID) resolves to an admin user (preferred path)
-//   - an unregistered scan-1 UID returns UNAUTHORIZED
-//   - a disabled admin user's badge returns UNAUTHORIZED
-//   - empty OperatorCredentialUID falls back to OperatorUUID (legacy Kconfig path)
-//   - empty both fields returns UNAUTHORIZED
+// Operator (scan-1) resolution now goes through member_access, not admin_users:
+//   - operator credential not in DB         → UNAUTHORIZED + pending_authorization created
+//   - operator credential found, no perms   → UNAUTHORIZED + event recorded
+//   - operator credential found, inactive   → UNAUTHORIZED + event recorded
+//   - operator credential found, has perms  → provisioning succeeds
 
 import (
 	"context"
 	"testing"
 
+	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/permissions"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store/memory"
@@ -23,49 +23,65 @@ import (
 // testSecret is a fixed HMAC key used throughout these tests.
 var testSecret = []byte("test-secret-key-32-bytes-padding!!")
 
-// seedAdminUser creates an admin user and returns their UUID.
-func seedAdminUser(t *testing.T, adminStore *sqlitestore.AdminUserStore, username string, enabled bool) string {
-	t.Helper()
-	ctx := context.Background()
-	adminUUID := "admin-" + username
-	if err := adminStore.CreateAdminUser(ctx, adminUUID, username, "$2a$04$irrelevant", "admin"); err != nil {
-		t.Fatalf("seedAdminUser %q: CreateAdminUser: %v", username, err)
-	}
-	if !enabled {
-		if err := adminStore.SetAdminUserEnabled(ctx, adminUUID, false); err != nil {
-			t.Fatalf("seedAdminUser %q: SetAdminUserEnabled: %v", username, err)
-		}
-	}
-	return adminUUID
-}
-
-// registerAdminBadge registers rawUID as the badge for adminUUID.
-func registerAdminBadge(t *testing.T, adminStore *sqlitestore.AdminUserStore, adminUUID string, rawUID []byte) {
-	t.Helper()
-	hash := service.HashCredentialID(rawUID, testSecret)
-	if err := adminStore.RegisterAdminCredential(context.Background(), adminUUID, hash); err != nil {
-		t.Fatalf("registerAdminBadge: %v", err)
-	}
-}
-
 // newProvisionSvc builds a ProvisionService backed by real migrated SQLite.
 func newProvisionSvc(t *testing.T) (
 	*service.ProvisionService,
-	*sqlitestore.AdminUserStore,
 	store.MemberAccessStore,
+	store.RoleStore,
+	*memory.AccessEventStore,
 ) {
 	t.Helper()
 	conn, writer := openSvcTestDB(t)
 	seedModule(t, conn, "prov-module-001")
 
-	adminStore := sqlitestore.NewAdminUserStore(conn, writer)
 	maStore := sqlitestore.NewMemberAccessStore(conn, writer)
 	roleStore := sqlitestore.NewRoleStore(conn, writer)
-
+	eventStore := memory.NewAccessEventStore()
 	registry := service.NewDeviceRegistry(memory.NewDeviceStore([]string{"prov-module-001"}))
 
-	svc := service.NewProvisionService(registry, maStore, roleStore, adminStore, testSecret)
-	return svc, adminStore, maStore
+	svc := service.NewProvisionService(registry, maStore, roleStore, eventStore, testSecret)
+	return svc, maStore, roleStore, eventStore
+}
+
+// seedOperatorMember creates a member_access record with an attached credential
+// and returns the member UUID. The role's permissions are set by the caller.
+func seedOperatorMember(
+	t *testing.T,
+	maStore store.MemberAccessStore,
+	rawUID []byte,
+	roleID string,
+	enabled bool,
+	active bool,
+) string {
+	t.Helper()
+	ctx := context.Background()
+
+	memberUUID := "op-" + string(rawUID)
+	provStatus := store.ProvisioningStatusActive
+	if !active {
+		provStatus = store.ProvisioningStatusPendingAuthorization
+	}
+	if err := maStore.CreateMember(ctx, memberUUID, roleID, "", provStatus, nil, nil); err != nil {
+		t.Fatalf("seedOperatorMember CreateMember: %v", err)
+	}
+	if !enabled {
+		if err := maStore.SetEnabled(ctx, memberUUID, false); err != nil {
+			t.Fatalf("seedOperatorMember SetEnabled: %v", err)
+		}
+	}
+	credHash := service.HashCredentialID(rawUID, testSecret)
+	if err := maStore.AttachCredential(ctx, memberUUID, credHash); err != nil {
+		t.Fatalf("seedOperatorMember AttachCredential: %v", err)
+	}
+	return memberUUID
+}
+
+// grantProvisionPermission assigns member.provision to the given role.
+func grantProvisionPermission(t *testing.T, roleStore store.RoleStore, roleID string) {
+	t.Helper()
+	if err := roleStore.SetRolePermissions(context.Background(), roleID, []string{permissions.MemberProvision}); err != nil {
+		t.Fatalf("grantProvisionPermission: %v", err)
+	}
 }
 
 func provisionReq(operatorUID, credUID []byte) types.ProvisionCredentialRequest {
@@ -77,14 +93,117 @@ func provisionReq(operatorUID, credUID []byte) types.ProvisionCredentialRequest 
 	}
 }
 
-// ── scan-1 credential path ────────────────────────────────────────────────────
+// ── scan-1 not found → pending_authorization created ─────────────────────────
 
-func TestProvision_Scan1CredentialResolvesToAdmin_Success(t *testing.T) {
-	svc, adminStore, _ := newProvisionSvc(t)
-	adminUUID := seedAdminUser(t, adminStore, "alice", true)
+func TestProvision_OperatorNotFound_CreatesPlaceholderAndReturnsUnauthorized(t *testing.T) {
+	svc, maStore, _, _ := newProvisionSvc(t)
+	operatorUID := []byte{0x04, 0xFF, 0xFF, 0xFF}
+	memberUID := []byte{0x04, 0x01, 0x02, 0x03}
+
+	resp, err := svc.Provision(context.Background(), provisionReq(operatorUID, memberUID))
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if resp.Status != types.ProvisionStatusUnauthorized {
+		t.Errorf("expected unauthorized, got status=%q detail=%q", resp.Status, resp.Detail)
+	}
+
+	// A pending_authorization record must have been created for the unknown credential.
+	pending, err := maStore.ListPendingAuthorizations(context.Background())
+	if err != nil {
+		t.Fatalf("ListPendingAuthorizations: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending record, got %d", len(pending))
+	}
+	opHash := service.HashCredentialID(operatorUID, testSecret)
+	rec, err := maStore.GetMemberByCredential(context.Background(), opHash)
+	if err != nil {
+		t.Fatalf("GetMemberByCredential for pending op: %v", err)
+	}
+	if rec.ProvisioningStatus != store.ProvisioningStatusPendingAuthorization {
+		t.Errorf("pending record provisioning_status = %q, want pending_authorization", rec.ProvisioningStatus)
+	}
+}
+
+// ── scan-1 found but role lacks member.provision ──────────────────────────────
+
+func TestProvision_OperatorNoProvisionPermission_Unauthorized(t *testing.T) {
+	svc, maStore, _, eventStore := newProvisionSvc(t)
 	operatorUID := []byte{0x04, 0xAA, 0xBB, 0xCC}
 	memberUID := []byte{0x04, 0x01, 0x02, 0x03}
-	registerAdminBadge(t, adminStore, adminUUID, operatorUID)
+	// guest role has no permissions by default
+	seedOperatorMember(t, maStore, operatorUID, "guest", true, true)
+
+	resp, err := svc.Provision(context.Background(), provisionReq(operatorUID, memberUID))
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if resp.Status != types.ProvisionStatusUnauthorized {
+		t.Errorf("expected unauthorized, got status=%q detail=%q", resp.Status, resp.Detail)
+	}
+
+	// Failed attempt must be recorded in the event log.
+	events := eventStore.Events()
+	if len(events) != 1 || events[0].Granted {
+		t.Errorf("expected 1 denied event, got %d events", len(events))
+	}
+}
+
+// ── scan-1 found but member is inactive ───────────────────────────────────────
+
+func TestProvision_OperatorInactive_Unauthorized(t *testing.T) {
+	svc, maStore, roleStore, eventStore := newProvisionSvc(t)
+	operatorUID := []byte{0x04, 0x11, 0x22, 0x33}
+	memberUID := []byte{0x04, 0x01, 0x02, 0x03}
+	grantProvisionPermission(t, roleStore, "operator")
+	// active=false → provisioning_status = pending_authorization
+	seedOperatorMember(t, maStore, operatorUID, "operator", true, false)
+
+	resp, err := svc.Provision(context.Background(), provisionReq(operatorUID, memberUID))
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if resp.Status != types.ProvisionStatusUnauthorized {
+		t.Errorf("expected unauthorized for inactive operator, got status=%q detail=%q", resp.Status, resp.Detail)
+	}
+
+	events := eventStore.Events()
+	if len(events) != 1 || events[0].Granted {
+		t.Errorf("expected 1 denied event, got %d events", len(events))
+	}
+}
+
+func TestProvision_OperatorDisabled_Unauthorized(t *testing.T) {
+	svc, maStore, roleStore, eventStore := newProvisionSvc(t)
+	operatorUID := []byte{0x04, 0x44, 0x55, 0x66}
+	memberUID := []byte{0x04, 0x01, 0x02, 0x03}
+	grantProvisionPermission(t, roleStore, "operator")
+	// enabled=false
+	seedOperatorMember(t, maStore, operatorUID, "operator", false, true)
+
+	resp, err := svc.Provision(context.Background(), provisionReq(operatorUID, memberUID))
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if resp.Status != types.ProvisionStatusUnauthorized {
+		t.Errorf("expected unauthorized for disabled operator, got status=%q detail=%q", resp.Status, resp.Detail)
+	}
+
+	events := eventStore.Events()
+	if len(events) != 1 || events[0].Granted {
+		t.Errorf("expected 1 denied event, got %d events", len(events))
+	}
+}
+
+// ── scan-1 valid → provisioning succeeds ─────────────────────────────────────
+
+func TestProvision_ValidOperator_Success(t *testing.T) {
+	svc, maStore, roleStore, _ := newProvisionSvc(t)
+	operatorUID := []byte{0x04, 0xDE, 0xAD, 0xBE}
+	memberUID := []byte{0x04, 0x99, 0x88, 0x77}
+	grantProvisionPermission(t, roleStore, "operator")
+	opMemberUUID := seedOperatorMember(t, maStore, operatorUID, "operator", true, true)
 
 	resp, err := svc.Provision(context.Background(), provisionReq(operatorUID, memberUID))
 	if err != nil {
@@ -96,64 +215,22 @@ func TestProvision_Scan1CredentialResolvesToAdmin_Success(t *testing.T) {
 	if resp.MemberUUID == "" {
 		t.Error("expected non-empty MemberUUID on success")
 	}
-}
 
-func TestProvision_Scan1CredentialUnregistered_Unauthorized(t *testing.T) {
-	svc, _, _ := newProvisionSvc(t)
-	// No badge registered — any scan-1 UID should be rejected.
-	operatorUID := []byte{0x04, 0xFF, 0xFF, 0xFF}
-	memberUID := []byte{0x04, 0x01, 0x02, 0x03}
-
-	resp, err := svc.Provision(context.Background(), provisionReq(operatorUID, memberUID))
+	// Verify created_by_uuid is the operator's member UUID.
+	credHash := service.HashCredentialID(memberUID, testSecret)
+	newMember, err := maStore.GetMemberByCredential(context.Background(), credHash)
 	if err != nil {
-		t.Fatalf("Provision: %v", err)
+		t.Fatalf("GetMemberByCredential for new member: %v", err)
 	}
-	if resp.Status != types.ProvisionStatusUnauthorized {
-		t.Errorf("expected unauthorized, got status=%q detail=%q", resp.Status, resp.Detail)
-	}
-}
-
-func TestProvision_Scan1CredentialDisabledAdmin_Unauthorized(t *testing.T) {
-	svc, adminStore, _ := newProvisionSvc(t)
-	adminUUID := seedAdminUser(t, adminStore, "bob", false) // disabled
-	operatorUID := []byte{0x04, 0x11, 0x22, 0x33}
-	memberUID := []byte{0x04, 0x01, 0x02, 0x03}
-	registerAdminBadge(t, adminStore, adminUUID, operatorUID)
-
-	resp, err := svc.Provision(context.Background(), provisionReq(operatorUID, memberUID))
-	if err != nil {
-		t.Fatalf("Provision: %v", err)
-	}
-	if resp.Status != types.ProvisionStatusUnauthorized {
-		t.Errorf("expected unauthorized for disabled admin, got status=%q detail=%q", resp.Status, resp.Detail)
+	if newMember.CreatedByUUID != opMemberUUID {
+		t.Errorf("created_by_uuid = %q, want %q", newMember.CreatedByUUID, opMemberUUID)
 	}
 }
 
-// ── legacy operator_uuid fallback path ───────────────────────────────────────
+// ── no operator credential provided ──────────────────────────────────────────
 
-func TestProvision_LegacyOperatorUUID_Success(t *testing.T) {
-	svc, adminStore, _ := newProvisionSvc(t)
-	adminUUID := seedAdminUser(t, adminStore, "carol", true)
-	memberUID := []byte{0x04, 0x0A, 0x0B, 0x0C}
-
-	// No operator_credential_uid — use legacy operator_uuid directly.
-	req := types.ProvisionCredentialRequest{
-		OperatorUUID:  adminUUID,
-		ModuleID:      "prov-module-001",
-		CredentialUID: memberUID,
-		RoleID:        "guest",
-	}
-	resp, err := svc.Provision(context.Background(), req)
-	if err != nil {
-		t.Fatalf("Provision: %v", err)
-	}
-	if resp.Status != types.ProvisionStatusSuccess {
-		t.Errorf("expected success on legacy path, got status=%q detail=%q", resp.Status, resp.Detail)
-	}
-}
-
-func TestProvision_BothFieldsEmpty_Unauthorized(t *testing.T) {
-	svc, _, _ := newProvisionSvc(t)
+func TestProvision_NoOperatorCredential_Unauthorized(t *testing.T) {
+	svc, _, _, _ := newProvisionSvc(t)
 	req := types.ProvisionCredentialRequest{
 		ModuleID:      "prov-module-001",
 		CredentialUID: []byte{0x04, 0x01, 0x02, 0x03},
@@ -168,38 +245,31 @@ func TestProvision_BothFieldsEmpty_Unauthorized(t *testing.T) {
 	}
 }
 
-// ── operator_uuid recorded in member_access.created_by_uuid ─────────────────
+// ── second scan with already-pending operator credential ─────────────────────
+// Ensures scanning an already-pending credential again returns a duplicate
+// response (not a second pending record).
 
-func TestProvision_Scan1Credential_RecordsOperatorUUID(t *testing.T) {
-	conn, writer := openSvcTestDB(t)
-	seedModule(t, conn, "prov-module-001")
+func TestProvision_OperatorAlreadyPending_ReturnsDuplicate(t *testing.T) {
+	svc, _, _, _ := newProvisionSvc(t)
+	operatorUID := []byte{0x04, 0xCC, 0xDD, 0xEE}
+	memberUID := []byte{0x04, 0x01, 0x02, 0x03}
 
-	adminStore := sqlitestore.NewAdminUserStore(conn, writer)
-	maStore := sqlitestore.NewMemberAccessStore(conn, writer)
-	roleStore := sqlitestore.NewRoleStore(conn, writer)
-	registry := service.NewDeviceRegistry(memory.NewDeviceStore([]string{"prov-module-001"}))
-	svc := service.NewProvisionService(registry, maStore, roleStore, adminStore, testSecret)
-
-	adminUUID := seedAdminUser(t, adminStore, "dave", true)
-	operatorUID := []byte{0x04, 0xDE, 0xAD, 0xBE}
-	memberUID := []byte{0x04, 0x99, 0x88, 0x77}
-	registerAdminBadge(t, adminStore, adminUUID, operatorUID)
-
-	resp, err := svc.Provision(context.Background(), provisionReq(operatorUID, memberUID))
+	// First scan: creates pending record, returns UNAUTHORIZED.
+	resp1, err := svc.Provision(context.Background(), provisionReq(operatorUID, memberUID))
 	if err != nil {
-		t.Fatalf("Provision: %v", err)
+		t.Fatalf("first Provision: %v", err)
 	}
-	if resp.Status != types.ProvisionStatusSuccess {
-		t.Fatalf("expected success, got %q / %q", resp.Status, resp.Detail)
+	if resp1.Status != types.ProvisionStatusUnauthorized {
+		t.Fatalf("first call: expected unauthorized, got %q", resp1.Status)
 	}
 
-	// Verify the member was created with the resolved admin UUID.
-	credHash := service.HashCredentialID(memberUID, testSecret)
-	member, err := maStore.GetMemberByCredential(context.Background(), credHash)
+	// Second scan with the same credential: member exists as pending, so the
+	// pending record is found and returned (no second pending created).
+	resp2, err := svc.Provision(context.Background(), provisionReq(operatorUID, memberUID))
 	if err != nil {
-		t.Fatalf("GetMemberByCredential: %v", err)
+		t.Fatalf("second Provision: %v", err)
 	}
-	if member.CreatedByUUID != adminUUID {
-		t.Errorf("created_by_uuid = %q, want %q", member.CreatedByUUID, adminUUID)
+	if resp2.Status != types.ProvisionStatusUnauthorized {
+		t.Errorf("second call: expected unauthorized (still no permission), got %q", resp2.Status)
 	}
 }
