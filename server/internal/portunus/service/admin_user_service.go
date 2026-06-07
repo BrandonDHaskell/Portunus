@@ -15,6 +15,7 @@ import (
 var (
 	ErrAdminUserNotFound = errors.New("admin user not found")
 	ErrCannotSelfDisable = errors.New("cannot disable your own account")
+	ErrLastAdmin         = errors.New("at least one enabled admin user must retain the admin role")
 )
 
 // AdminUserInfo is the view type for admin user management pages.
@@ -119,6 +120,24 @@ func (s *AdminUserService) SetEnabled(ctx context.Context, uuid, callerUUID stri
 	if !enabled && uuid == callerUUID {
 		return ErrCannotSelfDisable
 	}
+	if !enabled {
+		target, err := s.users.GetAdminUserByUUID(ctx, uuid)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return ErrAdminUserNotFound
+			}
+			return fmt.Errorf("set enabled: load user: %w", err)
+		}
+		if target.RoleID == adminRoleID {
+			n, err := s.users.CountEnabledAdminsWithRole(ctx, adminRoleID)
+			if err != nil {
+				return fmt.Errorf("set enabled: count admins: %w", err)
+			}
+			if n <= 1 {
+				return ErrLastAdmin
+			}
+		}
+	}
 	if err := s.users.SetAdminUserEnabled(ctx, uuid, enabled); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return ErrAdminUserNotFound
@@ -140,6 +159,26 @@ func (s *AdminUserService) AssignRole(ctx context.Context, uuid, roleID string) 
 		}
 		return fmt.Errorf("assign role: verify role: %w", err)
 	}
+
+	if roleID != adminRoleID {
+		target, err := s.users.GetAdminUserByUUID(ctx, uuid)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return ErrAdminUserNotFound
+			}
+			return fmt.Errorf("assign role: load user: %w", err)
+		}
+		if target.RoleID == adminRoleID {
+			n, err := s.users.CountEnabledAdminsWithRole(ctx, adminRoleID)
+			if err != nil {
+				return fmt.Errorf("assign role: count admins: %w", err)
+			}
+			if n <= 1 {
+				return ErrLastAdmin
+			}
+		}
+	}
+
 	if err := s.users.SetAdminUserRole(ctx, uuid, roleID); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return ErrAdminUserNotFound

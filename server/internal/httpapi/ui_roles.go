@@ -143,6 +143,10 @@ func (s *Server) handleUIRolesSetPermissions(w http.ResponseWriter, r *http.Requ
 	}
 
 	if err := s.roleService.SetPermissions(r.Context(), roleID, valid); err != nil {
+		if errors.Is(err, service.ErrAdminRoleImmutable) {
+			flashRedirect(w, r, "/admin/ui/roles/"+roleID, "The admin role's permissions cannot be modified.", "error")
+			return
+		}
 		s.logger.Printf("ui set permissions: %v", err)
 		flashRedirect(w, r, "/admin/ui/roles/"+roleID, "Failed to save permissions.", "error")
 		return

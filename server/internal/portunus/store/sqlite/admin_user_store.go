@@ -170,6 +170,17 @@ func (s *AdminUserStore) AnyAdminExists(ctx context.Context) (bool, error) {
 	return n > 0, nil
 }
 
+func (s *AdminUserStore) CountEnabledAdminsWithRole(ctx context.Context, roleID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM admin_users WHERE enabled = 1 AND COALESCE(role_id,'admin') = ?;`,
+		roleID).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("CountEnabledAdminsWithRole: %w", err)
+	}
+	return n, nil
+}
+
 // scanAdminUser scans a single *sql.Row.
 func scanAdminUser(row *sql.Row) (*store.AdminUserRecord, error) {
 	var (
