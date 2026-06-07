@@ -172,8 +172,16 @@ func TestAdminModules_RegisterRevokeDelete(t *testing.T) {
 	ts, cookie := newAdminTestServer(t)
 	base := ts.URL
 
-	resp := do(t, adminReq(t, http.MethodPost, base+"/admin/v1/modules",
-		map[string]string{"module_id": "door-001"}, cookie))
+	// Register the door that the module will be assigned to.
+	resp := do(t, adminReq(t, http.MethodPost, base+"/admin/v1/doors",
+		map[string]string{"door_id": "d-test", "name": "Test Door"}, cookie))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("register door: expected 201, got %d", resp.StatusCode)
+	}
+
+	resp = do(t, adminReq(t, http.MethodPost, base+"/admin/v1/modules",
+		map[string]string{"module_id": "door-001", "door_id": "d-test"}, cookie))
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("register: expected 201, got %d", resp.StatusCode)

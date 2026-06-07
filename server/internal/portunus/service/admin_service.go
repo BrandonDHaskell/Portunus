@@ -38,11 +38,12 @@ func ParseCredentialUID(s string) ([]byte, error) {
 }
 
 var (
-	ErrModuleIDRequired = errors.New("module_id is required")
-	ErrDoorIDRequired   = errors.New("door_id is required")
-	ErrDoorNameRequired = errors.New("door name is required")
-	ErrModuleNotFound   = errors.New("module not found")
-	ErrDoorNotFound     = errors.New("door not found")
+	ErrModuleIDRequired   = errors.New("module_id is required")
+	ErrModuleDoorRequired = errors.New("a door must be assigned to commission a module")
+	ErrDoorIDRequired     = errors.New("door_id is required")
+	ErrDoorNameRequired   = errors.New("door name is required")
+	ErrModuleNotFound     = errors.New("module not found")
+	ErrDoorNotFound       = errors.New("door not found")
 )
 
 type AdminService struct {
@@ -62,7 +63,19 @@ func (s *AdminService) RegisterModule(ctx context.Context, req types.RegisterMod
 		return nil, ErrModuleIDRequired
 	}
 
-	if err := s.moduleStore.CommissionModule(ctx, moduleID, req.DoorID, req.DisplayName); err != nil {
+	doorID := strings.TrimSpace(req.DoorID)
+	if doorID == "" {
+		return nil, ErrModuleDoorRequired
+	}
+
+	if _, err := s.moduleStore.GetDoor(ctx, doorID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, ErrDoorNotFound
+		}
+		return nil, fmt.Errorf("commission module: verify door: %w", err)
+	}
+
+	if err := s.moduleStore.CommissionModule(ctx, moduleID, doorID, req.DisplayName); err != nil {
 		return nil, fmt.Errorf("commission module: %w", err)
 	}
 

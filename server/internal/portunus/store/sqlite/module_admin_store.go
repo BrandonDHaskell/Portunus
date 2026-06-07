@@ -150,6 +150,29 @@ ON CONFLICT(door_id) DO UPDATE SET
 	})
 }
 
+func (s *ModuleAdminStore) GetDoor(ctx context.Context, doorID string) (*store.DoorRecord, error) {
+	var (
+		id, name, loc string
+		createdMs     int64
+	)
+	err := s.db.QueryRowContext(ctx, `
+SELECT door_id, name, COALESCE(location,''), created_at_ms
+FROM doors WHERE door_id = ?;
+`, doorID).Scan(&id, &name, &loc, &createdMs)
+	if err == sql.ErrNoRows {
+		return nil, store.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("GetDoor: %w", err)
+	}
+	return &store.DoorRecord{
+		DoorID:    id,
+		Name:      name,
+		Location:  loc,
+		CreatedAt: time.UnixMilli(createdMs).UTC(),
+	}, nil
+}
+
 func (s *ModuleAdminStore) ListDoors(ctx context.Context) ([]store.DoorRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT door_id, name, location, created_at_ms

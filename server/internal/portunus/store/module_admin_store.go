@@ -32,7 +32,7 @@ type DoorRecord struct {
 type ModuleAdminStore interface {
 	// CommissionModule registers a module as enabled and commissioned.
 	// If the module row already exists (from an auto-created ensureModule),
-	// it is promoted to commissioned. doorID may be empty.
+	// it is promoted to commissioned. doorID must reference an existing door; callers validate before calling.
 	CommissionModule(ctx context.Context, moduleID, doorID, displayName string) error
 
 	// RevokeModule marks a module as revoked (sets revoked_at_ms, enabled=0).
@@ -49,6 +49,9 @@ type ModuleAdminStore interface {
 
 	// RegisterDoor creates a door entry.
 	RegisterDoor(ctx context.Context, doorID, name, location string) error
+
+	// GetDoor returns a single door by ID, or ErrNotFound.
+	GetDoor(ctx context.Context, doorID string) (*DoorRecord, error)
 
 	// ListDoors returns all doors.
 	ListDoors(ctx context.Context) ([]DoorRecord, error)

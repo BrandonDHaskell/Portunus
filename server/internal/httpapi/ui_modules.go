@@ -111,10 +111,16 @@ func (s *Server) handleUIModulesRegister(w http.ResponseWriter, r *http.Request)
 	mod, err := s.adminService.RegisterModule(r.Context(), req)
 	if err != nil {
 		msg := "Failed to register module."
-		if errors.Is(err, service.ErrModuleIDRequired) {
+		switch {
+		case errors.Is(err, service.ErrModuleIDRequired):
 			msg = "Module ID is required."
+		case errors.Is(err, service.ErrModuleDoorRequired):
+			msg = "Select a door to commission this module."
+		case errors.Is(err, service.ErrDoorNotFound):
+			msg = "The selected door no longer exists."
+		default:
+			s.logger.Printf("ui register module: %v", err)
 		}
-		s.logger.Printf("ui register module: %v", err)
 		flashRedirect(w, r, "/admin/ui/modules/new", msg, "error")
 		return
 	}

@@ -33,12 +33,14 @@ func (f *fakeModuleAdminStore) CommissionModule(_ context.Context, moduleID, doo
 	if f.returnErr != nil {
 		return f.returnErr
 	}
+	now := time.Now().UTC()
 	f.modules[moduleID] = &store.ModuleRecord{
-		ModuleID:    moduleID,
-		DoorID:      doorID,
-		DisplayName: displayName,
-		Enabled:     true,
-		CreatedAt:   time.Now().UTC(),
+		ModuleID:       moduleID,
+		DoorID:         doorID,
+		DisplayName:    displayName,
+		Enabled:        true,
+		CommissionedAt: &now,
+		CreatedAt:      now,
 	}
 	return nil
 }
@@ -109,6 +111,17 @@ func (f *fakeModuleAdminStore) ListDoors(_ context.Context) ([]store.DoorRecord,
 		recs = append(recs, *r)
 	}
 	return recs, nil
+}
+
+func (f *fakeModuleAdminStore) GetDoor(_ context.Context, doorID string) (*store.DoorRecord, error) {
+	if f.returnErr != nil {
+		return nil, f.returnErr
+	}
+	rec, ok := f.doors[doorID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return rec, nil
 }
 
 func (f *fakeModuleAdminStore) DeleteDoor(_ context.Context, doorID string) error {
@@ -196,10 +209,15 @@ func TestDeleteDoor_DBError_Propagated(t *testing.T) {
 // ── register → mutate lifecycle ───────────────────────────────────────────────
 
 func TestAdminService_RegisterRevokeDeleteModule(t *testing.T) {
-	svc := newTestAdminService(newFakeModuleStore())
+	ms := newFakeModuleStore()
+	svc := newTestAdminService(ms)
 	ctx := context.Background()
 
-	info, err := svc.RegisterModule(ctx, types.RegisterModuleRequest{ModuleID: "door-001"})
+	if err := ms.RegisterDoor(ctx, "door-main", "Main Door", ""); err != nil {
+		t.Fatalf("RegisterDoor: %v", err)
+	}
+
+	info, err := svc.RegisterModule(ctx, types.RegisterModuleRequest{ModuleID: "door-001", DoorID: "door-main"})
 	if err != nil {
 		t.Fatalf("RegisterModule: %v", err)
 	}
@@ -217,5 +235,44 @@ func TestAdminService_RegisterRevokeDeleteModule(t *testing.T) {
 	// Second delete must return not-found, not a panic.
 	if err := svc.DeleteModule(ctx, "door-001"); !errors.Is(err, service.ErrModuleNotFound) {
 		t.Errorf("expected ErrModuleNotFound on second delete, got: %v", err)
+	}
+}
+
+// ── Chunk 2: door validation on RegisterModule ────────────────────────────────
+
+func TestRegisterModule_EmptyDoor_ReturnsErrModuleDoorRequired(t *testing.T) {
+	svc := newTestAdminService(newFakeModuleStore())
+	_, err := svc.RegisterModule(context.Background(), types.RegisterModuleRequest{ModuleID: "m1", DoorID: ""})
+	if !errors.Is(err, service.ErrModuleDoorRequired) {
+		t.Fatalf("expected ErrModuleDoorRequired, got: %v", err)
+	}
+}
+
+func TestRegisterModule_MissingDoor_ReturnsErrDoorNotFound(t *testing.T) {
+	svc := newTestAdminService(newFakeModuleStore())
+	_, err := svc.RegisterModule(context.Background(), types.RegisterModuleRequest{ModuleID: "m1", DoorID: "nonexistent"})
+	if !errors.Is(err, service.ErrDoorNotFound) {
+		t.Fatalf("expected ErrDoorNotFound, got: %v", err)
+	}
+}
+
+func TestRegisterModule_ValidDoor_ReachesActiveStatus(t *testing.T) {
+	ms := newFakeModuleStore()
+	svc := newTestAdminService(ms)
+	ctx := context.Background()
+
+	if err := ms.RegisterDoor(ctx, "door-a", "Door A", ""); err != nil {
+		t.Fatalf("RegisterDoor: %v", err)
+	}
+
+	info, err := svc.RegisterModule(ctx, types.RegisterModuleRequest{ModuleID: "m1", DoorID: "door-a"})
+	if err != nil {
+		t.Fatalf("RegisterModule: %v", err)
+	}
+	if info.DoorID != "door-a" {
+		t.Errorf("expected door_id=door-a, got %q", info.DoorID)
+	}
+	if info.Status != types.ModuleStatusActive {
+		t.Errorf("expected status=active, got %v", info.Status)
 	}
 }
