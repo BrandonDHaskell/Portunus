@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store"
 )
 
 type DeviceStore struct {
@@ -42,4 +44,15 @@ func (s *DeviceStore) MarkSeen(_ context.Context, moduleID string, _ bool, t tim
 	defer s.mu.Unlock()
 	s.seen[moduleID] = t
 	return nil
+}
+
+// GetModuleType returns PEU for all known modules — the memory store is only
+// used in provision-service tests, which always need PEU modules.
+func (s *DeviceStore) GetModuleType(_ context.Context, moduleID string) (store.ModuleType, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, ok := s.known[moduleID]; ok {
+		return store.ModuleTypePEU, nil
+	}
+	return "", store.ErrNotFound
 }

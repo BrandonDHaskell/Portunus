@@ -253,6 +253,68 @@ func (s *Server) handleUIMembersAssignRole(w http.ResponseWriter, r *http.Reques
 	flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Role updated.", "success")
 }
 
+// handleUIMembersApprove handles POST /admin/ui/members/{member_uuid}/approve.
+func (s *Server) handleUIMembersApprove(w http.ResponseWriter, r *http.Request) {
+	memberUUID := r.PathValue("member_uuid")
+	if err := r.ParseForm(); err != nil {
+		flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Invalid form submission.", "error")
+		return
+	}
+
+	roleID := r.FormValue("role_id")
+	expiresAtStr := r.FormValue("expires_at")
+	inactivityStr := r.FormValue("inactivity_limit_days")
+
+	var expiresAt *time.Time
+	if expiresAtStr != "" {
+		t, err := time.Parse("2006-01-02", expiresAtStr)
+		if err != nil {
+			flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Invalid expiry date format (use YYYY-MM-DD).", "error")
+			return
+		}
+		u := t.UTC()
+		expiresAt = &u
+	}
+
+	var inactivityDays *int
+	if inactivityStr != "" {
+		var n int
+		if _, err := parseIntFormValue(inactivityStr, &n); err != nil || n < 1 {
+			flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Inactivity limit must be a positive number.", "error")
+			return
+		}
+		inactivityDays = &n
+	}
+
+	sess := sessionFromContext(r.Context())
+	approvedBy := ""
+	if sess != nil {
+		approvedBy = sess.AdminUUID
+	}
+
+	if err := s.memberAccessService.ApprovePending(r.Context(), memberUUID, roleID, approvedBy, expiresAt, inactivityDays); err != nil {
+		msg := "Failed to approve member."
+		switch {
+		case errors.Is(err, service.ErrMemberNotFound):
+			http.NotFound(w, r)
+			return
+		case errors.Is(err, service.ErrMemberNotPending):
+			msg = "Member is not pending authorization."
+		case errors.Is(err, service.ErrRoleIDRequired):
+			msg = "A role is required."
+		case errors.Is(err, store.ErrNotFound):
+			msg = "Selected role does not exist."
+		default:
+			s.logger.Printf("ui approve pending member %s: %v", memberUUID, err)
+		}
+		flashRedirect(w, r, "/admin/ui/members/"+memberUUID, msg, "error")
+		return
+	}
+
+	s.logger.Printf("admin ui: approved pending member %s by %s", memberUUID, approvedBy)
+	flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Member approved and activated.", "success")
+}
+
 // handleUIMembersDisable handles POST /admin/ui/members/{member_uuid}/disable.
 func (s *Server) handleUIMembersDisable(w http.ResponseWriter, r *http.Request) {
 	memberUUID := r.PathValue("member_uuid")
@@ -401,6 +463,8 @@ func (s *Server) uiMemberRoutes(mux *http.ServeMux) {
 	// Member detail + actions
 	mux.HandleFunc("GET /admin/ui/members/{member_uuid}",
 		perm(permissions.MemberView, s.handleUIMembersDetail))
+	mux.HandleFunc("POST /admin/ui/members/{member_uuid}/approve",
+		perm(permissions.MemberProvision, s.handleUIMembersApprove))
 	mux.HandleFunc("POST /admin/ui/members/{member_uuid}/credential",
 		perm(permissions.MemberProvision, s.handleUIMembersAttachCredential))
 	mux.HandleFunc("POST /admin/ui/members/{member_uuid}/role",

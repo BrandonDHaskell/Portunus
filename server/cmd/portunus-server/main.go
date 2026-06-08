@@ -67,6 +67,7 @@ func main() {
 	roleStore := sqlitestore.NewRoleStore(dbConn, writer)
 	memberAccessStore := sqlitestore.NewMemberAccessStore(dbConn, writer)
 	moduleAuthStore := sqlitestore.NewModuleAuthorizationStore(dbConn, writer)
+	auditStore := sqlitestore.NewAuditStore(dbConn, writer)
 
 	// Services
 	registry := service.NewDeviceRegistry(deviceStore)
@@ -110,7 +111,7 @@ func main() {
 	defer expiryWorker.Stop()
 
 	// Provisioning service: handles device-initiated provisioning from PROVISIONING_CONSOLE modules.
-	provisionSvc := service.NewProvisionService(registry, memberAccessStore, roleStore, accessEventStore, credentialHashSecret)
+	provisionSvc := service.NewProvisionService(registry, memberAccessStore, roleStore, accessEventStore, credentialHashSecret, cfg.OperatorProvisioningEnabled, auditStore)
 
 	// Admin service for module and door management via REST API.
 	adminSvc := service.NewAdminService(moduleAdminStore, credentialHashSecret)
@@ -140,6 +141,7 @@ func main() {
 		RoleService:          roleSvc,
 		MemberAccessService:  memberAccessSvc,
 		ModuleAuthService:    moduleAuthSvc,
+		AuditStore:           auditStore,
 		HMACSecret:           cfg.HMACSecret,
 		CredentialHashSecret: credentialHashSecret,
 		TLSEnabled:           tlsEnabled,

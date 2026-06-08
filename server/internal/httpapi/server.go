@@ -11,6 +11,7 @@ import (
 	pb "github.com/BrandonDHaskell/Portunus/server/api/portunus/v1"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/permissions"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
+	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/types"
 )
 
@@ -26,6 +27,7 @@ type Dependencies struct {
 	RoleService         *service.RoleService
 	MemberAccessService *service.MemberAccessService
 	ModuleAuthService   *service.ModuleAuthorizationService
+	AuditStore          store.AuditStore
 	// HMACSecret is the pre-shared key for X-Portunus-Sig verification.
 	// Leave empty to disable HMAC enforcement (not recommended for production).
 	HMACSecret string
@@ -49,6 +51,7 @@ type Server struct {
 	roleService          *service.RoleService
 	memberAccessService  *service.MemberAccessService
 	moduleAuthService    *service.ModuleAuthorizationService
+	auditStore           store.AuditStore
 	credentialHashSecret []byte
 	tlsEnabled           bool
 }
@@ -68,6 +71,7 @@ func NewServer(d Dependencies) *Server {
 		roleService:          d.RoleService,
 		memberAccessService:  d.MemberAccessService,
 		moduleAuthService:    d.ModuleAuthService,
+		auditStore:           d.AuditStore,
 		credentialHashSecret: d.CredentialHashSecret,
 		tlsEnabled:           d.TLSEnabled,
 	}
@@ -126,6 +130,8 @@ func NewServer(d Dependencies) *Server {
 			requirePermission(permissions.MemberProvision, s.handleAdminAttachCredential))
 		mux.HandleFunc("PUT /admin/v1/members/{member_uuid}/role",
 			requirePermission(permissions.MemberAssignRole, s.handleAdminAssignRole))
+		mux.HandleFunc("POST /admin/v1/members/{member_uuid}/approve",
+			requirePermission(permissions.MemberProvision, s.handleAdminApprovePending))
 		mux.HandleFunc("POST /admin/v1/members/{member_uuid}/disable",
 			requirePermission(permissions.MemberDisable, s.handleAdminDisableMember))
 		mux.HandleFunc("POST /admin/v1/members/{member_uuid}/archive",
@@ -200,6 +206,30 @@ func NewServer(d Dependencies) *Server {
 }
 
 func (s *Server) Handler() http.Handler { return s.httpServer.Handler }
+
+// audit records one audit_log entry, sourcing the actor from the request
+// session. Best-effort: errors are logged but do not affect the response.
+func (s *Server) audit(r *http.Request, action, resourceType, resourceID, result, details string) {
+	if s.auditStore == nil {
+		return
+	}
+	e := store.AuditEntry{
+		Action:       action,
+		ResourceType: resourceType,
+		ResourceID:   resourceID,
+		Result:       result,
+		Details:      details,
+		IPAddress:    r.RemoteAddr,
+		ActorType:    store.ActorTypeSystem,
+	}
+	if sess := sessionFromContext(r.Context()); sess != nil {
+		e.ActorUUID = sess.AdminUUID
+		e.ActorType = store.ActorTypeAdmin
+	}
+	if err := s.auditStore.RecordAuditEntry(r.Context(), e); err != nil {
+		s.logger.Printf("WARN audit write failed (action=%s): %v", action, err)
+	}
+}
 
 // Start starts the server in plain HTTP mode.
 func (s *Server) Start() error {

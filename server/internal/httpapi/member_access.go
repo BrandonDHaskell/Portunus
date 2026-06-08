@@ -80,7 +80,13 @@ func (s *Server) handleAdminProvisionMember(w http.ResponseWriter, r *http.Reque
 		expiresAt = &u
 	}
 
-	rec, err := s.memberAccessService.ProvisionMember(r.Context(), req.RoleID, req.CreatedByUUID, expiresAt, req.InactivityLimitDays)
+	sess := sessionFromContext(r.Context())
+	createdByUUID := ""
+	if sess != nil {
+		createdByUUID = sess.AdminUUID
+	}
+
+	rec, err := s.memberAccessService.ProvisionMember(r.Context(), req.RoleID, createdByUUID, expiresAt, req.InactivityLimitDays)
 	if err != nil {
 		if errors.Is(err, service.ErrRoleIDRequired) {
 			writeError(w, http.StatusBadRequest, "missing_role_id", err.Error())
@@ -96,7 +102,61 @@ func (s *Server) handleAdminProvisionMember(w http.ResponseWriter, r *http.Reque
 	}
 
 	s.logger.Printf("admin: provisioned member uuid=%s role=%s", rec.UUID, rec.RoleID)
+	s.audit(r, "member.create", "member", rec.UUID, "success", "")
 	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "member": memberRecordToInfo(rec)})
+}
+
+func (s *Server) handleAdminApprovePending(w http.ResponseWriter, r *http.Request) {
+	memberUUID := r.PathValue("member_uuid")
+	if memberUUID == "" {
+		writeError(w, http.StatusBadRequest, "missing_member_uuid", "member_uuid path parameter is required")
+		return
+	}
+
+	var req types.ApprovePendingRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminBody)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_json", "invalid JSON body")
+		return
+	}
+
+	var expiresAt *time.Time
+	if req.ExpiresAt != "" {
+		t, err := time.Parse(time.RFC3339, req.ExpiresAt)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_expires_at", "expires_at must be RFC 3339")
+			return
+		}
+		u := t.UTC()
+		expiresAt = &u
+	}
+
+	sess := sessionFromContext(r.Context())
+	approvedByUUID := ""
+	if sess != nil {
+		approvedByUUID = sess.AdminUUID
+	}
+
+	if err := s.memberAccessService.ApprovePending(r.Context(), memberUUID, req.RoleID, approvedByUUID, expiresAt, req.InactivityLimitDays); err != nil {
+		switch {
+		case errors.Is(err, service.ErrMemberNotFound):
+			writeError(w, http.StatusNotFound, "not_found", "member not found")
+		case errors.Is(err, service.ErrMemberNotPending):
+			writeError(w, http.StatusConflict, "not_pending", "member is not pending authorization")
+		case errors.Is(err, service.ErrRoleIDRequired):
+			writeError(w, http.StatusBadRequest, "missing_role_id", err.Error())
+		case errors.Is(err, store.ErrNotFound):
+			writeError(w, http.StatusBadRequest, "role_not_found", "the specified role does not exist")
+		default:
+			s.logger.Printf("admin approve pending: %v", err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "failed to approve member")
+		}
+		return
+	}
+
+	s.logger.Printf("admin: approved pending member %s by %s", memberUUID, approvedByUUID)
+	s.audit(r, "member.approve", "member", memberUUID, "success", "")
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "member_uuid": memberUUID})
 }
 
 func (s *Server) handleAdminAttachCredential(w http.ResponseWriter, r *http.Request) {

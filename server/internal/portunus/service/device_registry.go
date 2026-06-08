@@ -31,3 +31,8 @@ func (r *DeviceRegistry) NoteSeen(ctx context.Context, moduleID string, known bo
 	}
 	return r.store.MarkSeen(ctx, moduleID, known, time.Now().UTC())
 }
+
+// ModuleType returns the module's type, or ErrNotFound.
+func (r *DeviceRegistry) ModuleType(ctx context.Context, moduleID string) (store.ModuleType, error) {
+	return r.store.GetModuleType(ctx, moduleID)
+}

@@ -23,12 +23,14 @@ type RegisterModuleRequest struct {
 	ModuleID    string `json:"module_id"`
 	DoorID      string `json:"door_id,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
+	ModuleType  string `json:"module_type,omitempty"`
 }
 
 type ModuleInfo struct {
 	ModuleID       string       `json:"module_id"`
 	DoorID         string       `json:"door_id,omitempty"`
 	DisplayName    string       `json:"display_name,omitempty"`
+	ModuleType     string       `json:"module_type"`
 	Status         ModuleStatus `json:"status"`
 	Enabled        bool         `json:"enabled"`
 	Commissioned   bool         `json:"commissioned"`

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -424,6 +425,83 @@ func TestMigration_CredentialHashUniqueConstraint(t *testing.T) {
 		`UPDATE member_access SET credential_hash = ? WHERE uuid = ?`, hash, uuid2)
 	if err == nil {
 		t.Error("expected UNIQUE constraint violation when assigning same hash to second member")
+	}
+}
+
+// ── ApprovePending ────────────────────────────────────────────────────────────
+
+func TestMemberAccessStore_ApprovePending_HappyPath(t *testing.T) {
+	conn := openTestDB(t)
+	w := newTestWriter(t, conn)
+	ms := sqlitestore.NewMemberAccessStore(conn, w)
+	ctx := context.Background()
+
+	memberUUID := "approve-001"
+	if err := ms.CreateMember(ctx, memberUUID, "guest", "",
+		store.ProvisioningStatusPendingAuthorization, nil, nil); err != nil {
+		t.Fatalf("CreateMember: %v", err)
+	}
+
+	expiresAt := time.Now().UTC().Add(48 * time.Hour).Truncate(time.Millisecond)
+	inactivity := 10
+	if err := ms.ApprovePending(ctx, memberUUID, "operator", "admin-001", &expiresAt, &inactivity); err != nil {
+		t.Fatalf("ApprovePending: %v", err)
+	}
+
+	rec, err := ms.GetMember(ctx, memberUUID)
+	if err != nil {
+		t.Fatalf("GetMember: %v", err)
+	}
+	if rec.ProvisioningStatus != store.ProvisioningStatusActive {
+		t.Errorf("provisioning_status = %q, want active", rec.ProvisioningStatus)
+	}
+	if rec.Status != store.MemberStatusActive {
+		t.Errorf("status = %q, want active", rec.Status)
+	}
+	if rec.RoleID != "operator" {
+		t.Errorf("role_id = %q, want operator", rec.RoleID)
+	}
+	if rec.CreatedByUUID != "admin-001" {
+		t.Errorf("created_by_uuid = %q, want admin-001", rec.CreatedByUUID)
+	}
+	if rec.ExpiresAt == nil {
+		t.Fatal("ExpiresAt should not be nil")
+	}
+	diff := rec.ExpiresAt.Sub(expiresAt)
+	if diff < -time.Millisecond || diff > time.Millisecond {
+		t.Errorf("ExpiresAt = %v, want ~%v", rec.ExpiresAt, expiresAt)
+	}
+	if rec.InactivityLimitDays == nil || *rec.InactivityLimitDays != 10 {
+		t.Errorf("inactivity_limit_days = %v, want 10", rec.InactivityLimitDays)
+	}
+}
+
+func TestMemberAccessStore_ApprovePending_NotFound(t *testing.T) {
+	conn := openTestDB(t)
+	w := newTestWriter(t, conn)
+	ms := sqlitestore.NewMemberAccessStore(conn, w)
+
+	err := ms.ApprovePending(context.Background(), "no-such-uuid", "operator", "", nil, nil)
+	if err == nil || !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("expected store.ErrNotFound, got %v", err)
+	}
+}
+
+func TestMemberAccessStore_ApprovePending_NotPending(t *testing.T) {
+	conn := openTestDB(t)
+	w := newTestWriter(t, conn)
+	ms := sqlitestore.NewMemberAccessStore(conn, w)
+	ctx := context.Background()
+
+	memberUUID := "approve-active-001"
+	if err := ms.CreateMember(ctx, memberUUID, "guest", "",
+		store.ProvisioningStatusActive, nil, nil); err != nil {
+		t.Fatalf("CreateMember: %v", err)
+	}
+
+	err := ms.ApprovePending(ctx, memberUUID, "operator", "", nil, nil)
+	if err == nil || !errors.Is(err, store.ErrMemberNotPending) {
+		t.Errorf("expected store.ErrMemberNotPending, got %v", err)
 	}
 }
 

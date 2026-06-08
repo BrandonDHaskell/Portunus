@@ -4,9 +4,15 @@ package types
 
 type ProvisionMemberRequest struct {
 	RoleID              string `json:"role_id"`
-	CreatedByUUID       string `json:"created_by_uuid,omitempty"`
 	ExpiresAt           string `json:"expires_at,omitempty"`            // RFC 3339; omit for no hard deadline
 	InactivityLimitDays *int   `json:"inactivity_limit_days,omitempty"` // nil = no inactivity policy
+}
+
+// ApprovePendingRequest promotes a pending_authorization member to active.
+type ApprovePendingRequest struct {
+	RoleID              string `json:"role_id"`
+	ExpiresAt           string `json:"expires_at,omitempty"`            // RFC 3339; omit to use role default
+	InactivityLimitDays *int   `json:"inactivity_limit_days,omitempty"` // nil = use role default
 }
 
 type AttachCredentialRequest struct {
@@ -48,7 +54,6 @@ type ListPendingAuthorizationsResponse struct {
 
 type GrantAuthorizationRequest struct {
 	MemberUUID      string `json:"member_uuid"`
-	GrantedByUUID   string `json:"granted_by_uuid,omitempty"`
 	ExpiresAt       string `json:"expires_at,omitempty"`       // RFC 3339; omit for no expiry
 	TimeRestriction string `json:"time_restriction,omitempty"` // JSON policy; omit for none
 }

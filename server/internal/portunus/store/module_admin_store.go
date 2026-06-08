@@ -5,11 +5,24 @@ import (
 	"time"
 )
 
+// ModuleType is the server-set classification of a commissioned module.
+type ModuleType string
+
+const (
+	// ModuleTypeACU is an Access Control Unit: a door unit that runs the
+	// access decision and writes access_events.
+	ModuleTypeACU ModuleType = "access_control_unit"
+	// ModuleTypePEU is a Provisioning & Enrollment Unit: an enrolment console
+	// that drives the two-scan provisioning flow.
+	ModuleTypePEU ModuleType = "provisioning_enrollment_unit"
+)
+
 // ModuleRecord represents a full row from the modules table.
 type ModuleRecord struct {
 	ModuleID       string
 	DoorID         string
 	DisplayName    string
+	ModuleType     ModuleType
 	Enabled        bool
 	CommissionedAt *time.Time
 	RevokedAt      *time.Time
@@ -30,10 +43,10 @@ type DoorRecord struct {
 
 // ModuleAdminStore extends DeviceStore with admin CRUD operations.
 type ModuleAdminStore interface {
-	// CommissionModule registers a module as enabled and commissioned.
-	// If the module row already exists (from an auto-created ensureModule),
-	// it is promoted to commissioned. doorID must reference an existing door; callers validate before calling.
-	CommissionModule(ctx context.Context, moduleID, doorID, displayName string) error
+	// CommissionModule registers a module as enabled and commissioned with
+	// the given type. doorID must reference an existing door (validated by
+	// the caller). If the module row already exists it is promoted.
+	CommissionModule(ctx context.Context, moduleID, doorID, displayName string, moduleType ModuleType) error
 
 	// RevokeModule marks a module as revoked (sets revoked_at_ms, enabled=0).
 	RevokeModule(ctx context.Context, moduleID string) error
