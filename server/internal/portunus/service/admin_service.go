@@ -38,13 +38,13 @@ func ParseCredentialUID(s string) ([]byte, error) {
 }
 
 var (
-	ErrModuleIDRequired     = errors.New("module_id is required")
-	ErrModuleDoorRequired   = errors.New("a door must be assigned to commission a module")
-	ErrDoorIDRequired       = errors.New("door_id is required")
-	ErrDoorNameRequired     = errors.New("door name is required")
-	ErrModuleNotFound       = errors.New("module not found")
-	ErrDoorNotFound         = errors.New("door not found")
-	ErrInvalidModuleType    = errors.New("module_type must be 'access_control_unit' or 'provisioning_enrollment_unit'")
+	ErrModuleIDRequired   = errors.New("module_id is required")
+	ErrModuleDoorRequired = errors.New("a door must be assigned to commission a module")
+	ErrDoorIDRequired     = errors.New("door_id is required")
+	ErrDoorNameRequired   = errors.New("door name is required")
+	ErrModuleNotFound     = errors.New("module not found")
+	ErrDoorNotFound       = errors.New("door not found")
+	ErrInvalidModuleType  = errors.New("module_type must be 'access_control_unit' or 'provisioning_enrollment_unit'")
 )
 
 type AdminService struct {

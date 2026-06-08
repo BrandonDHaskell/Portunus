@@ -86,7 +86,7 @@ LIMIT ?;
 	var entries []store.AuditEntry
 	for rows.Next() {
 		var (
-			e         store.AuditEntry
+			e          store.AuditEntry
 			occurredMs int64
 			actorType  string
 		)
