@@ -20,7 +20,7 @@ func NewModuleAdminStore(db *sql.DB, writer *dbpkg.Worker) *ModuleAdminStore {
 	return &ModuleAdminStore{db: db, writer: writer}
 }
 
-func (s *ModuleAdminStore) CommissionModule(ctx context.Context, moduleID, doorID, displayName string) error {
+func (s *ModuleAdminStore) CommissionModule(ctx context.Context, moduleID, doorID, displayName string, moduleType store.ModuleType) error {
 	moduleID = strings.TrimSpace(moduleID)
 	if moduleID == "" {
 		return fmt.Errorf("module_id is required")
@@ -39,17 +39,18 @@ func (s *ModuleAdminStore) CommissionModule(ctx context.Context, moduleID, doorI
 		if _, err := tx.ExecContext(ctx, `
 INSERT INTO modules(
   module_id, door_id, display_name,
-  enabled, commissioned_at_ms,
+  module_type, enabled, commissioned_at_ms,
   created_at_ms, updated_at_ms
-) VALUES (?, ?, ?, 1, ?, ?, ?)
+) VALUES (?, ?, ?, ?, 1, ?, ?, ?)
 ON CONFLICT(module_id) DO UPDATE SET
   door_id              = excluded.door_id,
   display_name         = excluded.display_name,
+  module_type          = excluded.module_type,
   enabled              = 1,
   commissioned_at_ms   = COALESCE(modules.commissioned_at_ms, excluded.commissioned_at_ms),
   revoked_at_ms        = NULL,
   updated_at_ms        = excluded.updated_at_ms;
-`, moduleID, doorIDVal, displayName, now, now, now); err != nil {
+`, moduleID, doorIDVal, displayName, string(moduleType), now, now, now); err != nil {
 			return fmt.Errorf("CommissionModule %s: %w", moduleID, err)
 		}
 
@@ -98,7 +99,7 @@ DELETE FROM modules WHERE module_id = ?;
 
 func (s *ModuleAdminStore) GetModule(ctx context.Context, moduleID string) (*store.ModuleRecord, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT module_id, door_id, display_name, enabled,
+SELECT module_id, door_id, display_name, module_type, enabled,
        commissioned_at_ms, revoked_at_ms, last_seen_at_ms,
        last_ip, last_fw_version, last_wifi_rssi, created_at_ms
 FROM modules
@@ -110,7 +111,7 @@ WHERE module_id = ?;
 
 func (s *ModuleAdminStore) ListModules(ctx context.Context) ([]store.ModuleRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT module_id, door_id, display_name, enabled,
+SELECT module_id, door_id, display_name, module_type, enabled,
        commissioned_at_ms, revoked_at_ms, last_seen_at_ms,
        last_ip, last_fw_version, last_wifi_rssi, created_at_ms
 FROM modules
@@ -229,6 +230,7 @@ func scanModuleRow(row *sql.Row) (*store.ModuleRecord, error) {
 		moduleID       string
 		doorID         sql.NullString
 		displayName    sql.NullString
+		moduleType     string
 		enabled        int
 		commissionedMs sql.NullInt64
 		revokedMs      sql.NullInt64
@@ -240,7 +242,7 @@ func scanModuleRow(row *sql.Row) (*store.ModuleRecord, error) {
 	)
 
 	err := row.Scan(
-		&moduleID, &doorID, &displayName, &enabled,
+		&moduleID, &doorID, &displayName, &moduleType, &enabled,
 		&commissionedMs, &revokedMs, &seenMs,
 		&lastIP, &lastFW, &lastRSSI, &createdMs,
 	)
@@ -252,7 +254,7 @@ func scanModuleRow(row *sql.Row) (*store.ModuleRecord, error) {
 	}
 
 	return buildModuleRecord(
-		moduleID, doorID, displayName, enabled,
+		moduleID, doorID, displayName, moduleType, enabled,
 		commissionedMs, revokedMs, seenMs,
 		lastIP, lastFW, lastRSSI, createdMs,
 	), nil
@@ -264,6 +266,7 @@ func scanModuleRows(rows *sql.Rows) (*store.ModuleRecord, error) {
 		moduleID       string
 		doorID         sql.NullString
 		displayName    sql.NullString
+		moduleType     string
 		enabled        int
 		commissionedMs sql.NullInt64
 		revokedMs      sql.NullInt64
@@ -275,7 +278,7 @@ func scanModuleRows(rows *sql.Rows) (*store.ModuleRecord, error) {
 	)
 
 	if err := rows.Scan(
-		&moduleID, &doorID, &displayName, &enabled,
+		&moduleID, &doorID, &displayName, &moduleType, &enabled,
 		&commissionedMs, &revokedMs, &seenMs,
 		&lastIP, &lastFW, &lastRSSI, &createdMs,
 	); err != nil {
@@ -283,7 +286,7 @@ func scanModuleRows(rows *sql.Rows) (*store.ModuleRecord, error) {
 	}
 
 	return buildModuleRecord(
-		moduleID, doorID, displayName, enabled,
+		moduleID, doorID, displayName, moduleType, enabled,
 		commissionedMs, revokedMs, seenMs,
 		lastIP, lastFW, lastRSSI, createdMs,
 	), nil
@@ -293,6 +296,7 @@ func buildModuleRecord(
 	moduleID string,
 	doorID sql.NullString,
 	displayName sql.NullString,
+	moduleType string,
 	enabled int,
 	commissionedMs, revokedMs, seenMs sql.NullInt64,
 	lastIP, lastFW sql.NullString,
@@ -303,6 +307,7 @@ func buildModuleRecord(
 		ModuleID:      moduleID,
 		DoorID:        doorID.String,
 		DisplayName:   displayName.String,
+		ModuleType:    store.ModuleType(moduleType),
 		Enabled:       enabled == 1,
 		CreatedAt:     time.UnixMilli(createdMs).UTC(),
 		LastIP:        lastIP.String,

@@ -46,6 +46,10 @@ type Config struct {
 	// Generate with: openssl rand -hex 32
 	// Required in prod mode.
 	CredentialHashSecret string
+
+	// OperatorProvisioningEnabled enables Path 2 (two-scan operator enrolment)
+	// in the provisioning service. Default off — set PORTUNUS_OPERATOR_PROVISIONING_ENABLED=true.
+	OperatorProvisioningEnabled bool
 }
 
 // Validate returns an error if the config is unsafe for prod mode.
@@ -97,6 +101,8 @@ func FromEnv() (Config, error) {
 	hmacSecret := os.Getenv("PORTUNUS_HMAC_SECRET")
 	grpcAddr := strings.TrimSpace(os.Getenv("PORTUNUS_GRPC_ADDR"))
 	credentialHashSecret := os.Getenv("PORTUNUS_CREDENTIAL_HASH_SECRET")
+	operatorProvisioning := strings.EqualFold(os.Getenv("PORTUNUS_OPERATOR_PROVISIONING_ENABLED"), "true") ||
+		os.Getenv("PORTUNUS_OPERATOR_PROVISIONING_ENABLED") == "1"
 
 	return Config{
 		HTTPAddr: addr,
@@ -115,6 +121,8 @@ func FromEnv() (Config, error) {
 		TLSKeyFile:           tlsKey,
 		HMACSecret:           hmacSecret,
 		CredentialHashSecret: credentialHashSecret,
+
+		OperatorProvisioningEnabled: operatorProvisioning,
 	}, nil
 }
 

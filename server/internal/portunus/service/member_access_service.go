@@ -20,6 +20,7 @@ var (
 	ErrDuplicateCredentialActive   = errors.New("credential already assigned to an active member")
 	ErrDuplicateCredentialPending  = errors.New("credential already attached to a pending_authorization member")
 	ErrDuplicateCredentialInactive = errors.New("credential already assigned to an expired or archived member")
+	ErrMemberNotPending            = errors.New("member is not pending authorization")
 )
 
 type MemberAccessService struct {
@@ -227,4 +228,55 @@ func (s *MemberAccessService) ListMembers(ctx context.Context) ([]store.MemberAc
 // ListPendingAuthorizations returns members with provisioning_status = 'pending_authorization'.
 func (s *MemberAccessService) ListPendingAuthorizations(ctx context.Context) ([]store.MemberAccessRecord, error) {
 	return s.memberStore.ListPendingAuthorizations(ctx)
+}
+
+// ApprovePending assigns a role to a pending_authorization member and activates it.
+// The approver UUID comes from the authenticated admin session, never the client.
+func (s *MemberAccessService) ApprovePending(
+	ctx context.Context,
+	memberUUID, roleID, approvedByUUID string,
+	expiresAt *time.Time,
+	inactivityLimitDays *int,
+) error {
+	memberUUID = strings.TrimSpace(memberUUID)
+	roleID = strings.TrimSpace(roleID)
+	if memberUUID == "" {
+		return ErrMemberUUIDRequired
+	}
+	if roleID == "" {
+		return ErrRoleIDRequired
+	}
+	role, err := s.roleStore.GetRole(ctx, roleID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("role %q not found: %w", roleID, store.ErrNotFound)
+		}
+		return fmt.Errorf("get role: %w", err)
+	}
+	expiresAt, inactivityLimitDays = applyRoleDefaults(role, expiresAt, inactivityLimitDays)
+
+	if err := s.memberStore.ApprovePending(ctx, memberUUID, roleID, approvedByUUID, expiresAt, inactivityLimitDays); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return ErrMemberNotFound
+		}
+		if errors.Is(err, store.ErrMemberNotPending) {
+			return ErrMemberNotPending
+		}
+		return fmt.Errorf("approve pending: %w", err)
+	}
+	return nil
+}
+
+// applyRoleDefaults fills expiry/inactivity from the role's defaults when the
+// caller did not specify them. Shared by ApprovePending and operatorEnroll.
+func applyRoleDefaults(role *store.RoleRecord, expiresAt *time.Time, inactivityLimitDays *int) (*time.Time, *int) {
+	if expiresAt == nil && role.DefaultExpiryDays != nil {
+		t := time.Now().UTC().AddDate(0, 0, *role.DefaultExpiryDays)
+		expiresAt = &t
+	}
+	if inactivityLimitDays == nil && role.DefaultInactivityDays != nil {
+		v := *role.DefaultInactivityDays
+		inactivityLimitDays = &v
+	}
+	return expiresAt, inactivityLimitDays
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	dbpkg "github.com/BrandonDHaskell/Portunus/server/internal/db"
+	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store"
 )
 
 type DeviceStore struct {
@@ -46,6 +47,20 @@ WHERE module_id = ?;
 
 	known := enabled == 1 && commissioned.Valid && !revoked.Valid
 	return known, nil
+}
+
+// GetModuleType returns the module_type for an existing module row.
+func (s *DeviceStore) GetModuleType(ctx context.Context, moduleID string) (store.ModuleType, error) {
+	var mt string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT module_type FROM modules WHERE module_id = ?;`, moduleID).Scan(&mt)
+	if err == sql.ErrNoRows {
+		return "", store.ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("GetModuleType: %w", err)
+	}
+	return store.ModuleType(mt), nil
 }
 
 // MarkSeen: ensure module row exists (even if unknown) and update last_seen.

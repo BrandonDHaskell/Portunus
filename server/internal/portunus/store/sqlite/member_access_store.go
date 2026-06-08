@@ -225,6 +225,40 @@ UPDATE member_access
 	return count, err
 }
 
+func (s *MemberAccessStore) ApprovePending(ctx context.Context, uuid, roleID, approvedByUUID string,
+	expiresAt *time.Time, inactivityLimitDays *int,
+) error {
+	var expiresAtMs *int64
+	if expiresAt != nil {
+		ms := expiresAt.UTC().UnixMilli()
+		expiresAtMs = &ms
+	}
+	return s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		var provStatus string
+		err := tx.QueryRowContext(ctx,
+			`SELECT provisioning_status FROM member_access WHERE uuid = ?;`, uuid).Scan(&provStatus)
+		if err == sql.ErrNoRows {
+			return store.ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("ApprovePending lookup: %w", err)
+		}
+		if provStatus != string(store.ProvisioningStatusPendingAuthorization) {
+			return store.ErrMemberNotPending
+		}
+		_, err = tx.ExecContext(ctx, `
+UPDATE member_access
+SET role_id = ?, status = 'active', provisioning_status = 'active',
+    created_by_uuid = ?, expires_at_ms = ?, inactivity_limit_days = ?
+WHERE uuid = ?;
+`, roleID, approvedByUUID, expiresAtMs, inactivityLimitDays, uuid)
+		if err != nil {
+			return fmt.Errorf("ApprovePending update: %w", err)
+		}
+		return nil
+	})
+}
+
 // ── query helpers ─────────────────────────────────────────────────────────────
 
 const memberAccessSelectSQL = `

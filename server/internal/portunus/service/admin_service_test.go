@@ -29,7 +29,7 @@ func newFakeModuleStore() *fakeModuleAdminStore {
 	}
 }
 
-func (f *fakeModuleAdminStore) CommissionModule(_ context.Context, moduleID, doorID, displayName string) error {
+func (f *fakeModuleAdminStore) CommissionModule(_ context.Context, moduleID, doorID, displayName string, moduleType store.ModuleType) error {
 	if f.returnErr != nil {
 		return f.returnErr
 	}
@@ -38,6 +38,7 @@ func (f *fakeModuleAdminStore) CommissionModule(_ context.Context, moduleID, doo
 		ModuleID:       moduleID,
 		DoorID:         doorID,
 		DisplayName:    displayName,
+		ModuleType:     moduleType,
 		Enabled:        true,
 		CommissionedAt: &now,
 		CreatedAt:      now,

@@ -8,6 +8,7 @@ import (
 
 var (
 	ErrMemberCredentialConflict = errors.New("credential already assigned to another member")
+	ErrMemberNotPending         = errors.New("member is not pending authorization")
 )
 
 // MemberStatus enumerates the lifecycle states of a member_access row.
@@ -105,4 +106,11 @@ type MemberAccessStore interface {
 	// (last_access_at_ms IS NULL and created_at_ms + inactivity_limit_days*86400000) <= cutoffMs.
 	// Returns the number of rows transitioned.
 	ExpireByInactivity(ctx context.Context, now time.Time) (int, error)
+
+	// ApprovePending promotes a pending_authorization member to active in one
+	// statement: assigns the role, sets status and provisioning_status to active,
+	// applies policy fields, and records the approver. Returns ErrNotFound if the
+	// member does not exist, ErrMemberNotPending if it is not pending_authorization.
+	ApprovePending(ctx context.Context, uuid, roleID, approvedByUUID string,
+		expiresAt *time.Time, inactivityLimitDays *int) error
 }

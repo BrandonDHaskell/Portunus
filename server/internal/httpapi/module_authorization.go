@@ -42,11 +42,9 @@ func (s *Server) handleAdminGrantModuleAuthorization(w http.ResponseWriter, r *h
 		expiresAt = &u
 	}
 
-	grantedBy := req.GrantedByUUID
-	if grantedBy == "" {
-		if sess := sessionFromContext(r.Context()); sess != nil {
-			grantedBy = sess.AdminUUID
-		}
+	grantedBy := ""
+	if sess := sessionFromContext(r.Context()); sess != nil {
+		grantedBy = sess.AdminUUID
 	}
 
 	if err := s.moduleAuthService.GrantAuthorization(r.Context(), req.MemberUUID, moduleID, grantedBy, expiresAt, req.TimeRestriction); err != nil {

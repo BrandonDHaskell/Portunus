@@ -17,6 +17,7 @@ type ProvisionStatus string
 
 const (
 	ProvisionStatusSuccess           ProvisionStatus = "success"
+	ProvisionStatusPendingCreated    ProvisionStatus = "pending_created"
 	ProvisionStatusDuplicateActive   ProvisionStatus = "duplicate_active"
 	ProvisionStatusDuplicateInactive ProvisionStatus = "duplicate_inactive"
 	ProvisionStatusDuplicatePending  ProvisionStatus = "duplicate_pending"

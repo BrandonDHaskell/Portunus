@@ -38,12 +38,13 @@ func ParseCredentialUID(s string) ([]byte, error) {
 }
 
 var (
-	ErrModuleIDRequired   = errors.New("module_id is required")
-	ErrModuleDoorRequired = errors.New("a door must be assigned to commission a module")
-	ErrDoorIDRequired     = errors.New("door_id is required")
-	ErrDoorNameRequired   = errors.New("door name is required")
-	ErrModuleNotFound     = errors.New("module not found")
-	ErrDoorNotFound       = errors.New("door not found")
+	ErrModuleIDRequired     = errors.New("module_id is required")
+	ErrModuleDoorRequired   = errors.New("a door must be assigned to commission a module")
+	ErrDoorIDRequired       = errors.New("door_id is required")
+	ErrDoorNameRequired     = errors.New("door name is required")
+	ErrModuleNotFound       = errors.New("module not found")
+	ErrDoorNotFound         = errors.New("door not found")
+	ErrInvalidModuleType    = errors.New("module_type must be 'access_control_unit' or 'provisioning_enrollment_unit'")
 )
 
 type AdminService struct {
@@ -68,6 +69,14 @@ func (s *AdminService) RegisterModule(ctx context.Context, req types.RegisterMod
 		return nil, ErrModuleDoorRequired
 	}
 
+	moduleType := store.ModuleType(strings.TrimSpace(req.ModuleType))
+	if moduleType == "" {
+		moduleType = store.ModuleTypeACU
+	}
+	if moduleType != store.ModuleTypeACU && moduleType != store.ModuleTypePEU {
+		return nil, ErrInvalidModuleType
+	}
+
 	if _, err := s.moduleStore.GetDoor(ctx, doorID); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, ErrDoorNotFound
@@ -75,7 +84,7 @@ func (s *AdminService) RegisterModule(ctx context.Context, req types.RegisterMod
 		return nil, fmt.Errorf("commission module: verify door: %w", err)
 	}
 
-	if err := s.moduleStore.CommissionModule(ctx, moduleID, doorID, req.DisplayName); err != nil {
+	if err := s.moduleStore.CommissionModule(ctx, moduleID, doorID, req.DisplayName, moduleType); err != nil {
 		return nil, fmt.Errorf("commission module: %w", err)
 	}
 
@@ -229,6 +238,7 @@ func moduleRecordToInfo(rec *store.ModuleRecord) *types.ModuleInfo {
 		ModuleID:      rec.ModuleID,
 		DoorID:        rec.DoorID,
 		DisplayName:   rec.DisplayName,
+		ModuleType:    string(rec.ModuleType),
 		Status:        deriveModuleStatus(rec),
 		Enabled:       rec.Enabled,
 		Commissioned:  rec.CommissionedAt != nil,
