@@ -66,6 +66,25 @@ static const int PROV_UNAUTH_RAPID_ON    = 2;
 static const int PROV_UNAUTH_RAPID_OFF   = 2;
 static const int PROV_UNAUTH_RAPID_COUNT = 3;
 
+/* PEU_IDLE: double-blink every 6 s (same shape as PROVISIONING_IDLE, longer period) */
+static const int PEU_IDLE_ON_TICKS    = 1;    /* 50ms pulse */
+static const int PEU_IDLE_GAP_TICKS   = 3;    /* 150ms gap between the two pulses */
+static const int PEU_IDLE_CYCLE_TICKS = 120;  /* 6 s total period */
+
+/* PEU_ARMED_CAPTURE: triple rapid pulse every 2 s — continuous (capture mode) */
+static const int PEU_ARM_CAP_ON_TICKS  = 1;  /* 50ms on  */
+static const int PEU_ARM_CAP_OFF_TICKS = 2;  /* 100ms off */
+static const int PEU_ARM_CAP_PULSES    = 3;
+static const int PEU_ARM_CAP_CYCLE     = 40; /* 2 s including long gap */
+
+/* PEU_ARMED_ENROLL: fast 50/50 pulse 500ms on / 500ms off — continuous (enrol mode) */
+static const int PEU_ARM_ENR_HALF_TICKS = 10; /* 500ms */
+
+/* PEU_RESULT_PENDING: 3× slow blinks 200ms on / 600ms off (one-shot) */
+static const int PEU_PENDING_ON    = 4;   /* 200ms */
+static const int PEU_PENDING_OFF   = 12;  /* 600ms */
+static const int PEU_PENDING_COUNT = 3;
+
 /* ── Task configuration ───────────────────────────────────────────────────── */
 
 static const int PATTERN_TASK_STACK = 2048;
@@ -274,6 +293,124 @@ void FeedbackLed::run_patterns()
                     led_off();
                     current = feedback_type_t::NONE;
                 }
+            }
+            break;
+        }
+
+        /* ── PEU 7-state FSM feedback ──────────────────────────────────── */
+
+        case feedback_type_t::PEU_IDLE: {
+            /* Double-blink every 6 s: pulse–gap–pulse–long-off */
+            int pos = tick % PEU_IDLE_CYCLE_TICKS;
+            int second_pulse_start = PEU_IDLE_ON_TICKS + PEU_IDLE_GAP_TICKS;
+            if (pos == 0 || pos == second_pulse_start) {
+                led_on();
+            } else if (pos == PEU_IDLE_ON_TICKS ||
+                       pos == second_pulse_start + PEU_IDLE_ON_TICKS) {
+                led_off();
+            }
+            break;
+        }
+
+        case feedback_type_t::PEU_ARMED_CAPTURE: {
+            /* Triple rapid pulse every 2 s — continuous */
+            int burst_len = (PEU_ARM_CAP_ON_TICKS + PEU_ARM_CAP_OFF_TICKS) * PEU_ARM_CAP_PULSES;
+            int pos = tick % PEU_ARM_CAP_CYCLE;
+            if (pos < burst_len) {
+                int sub = pos % (PEU_ARM_CAP_ON_TICKS + PEU_ARM_CAP_OFF_TICKS);
+                if (sub == 0) led_on();
+                else if (sub == PEU_ARM_CAP_ON_TICKS) led_off();
+            } else if (pos == burst_len) {
+                led_off(); /* ensure off during gap */
+            }
+            break;
+        }
+
+        case feedback_type_t::PEU_ARMED_ENROLL: {
+            /* 500ms on / 500ms off fast 50/50 pulse — continuous */
+            int pos = tick % (PEU_ARM_ENR_HALF_TICKS * 2);
+            if (pos == 0) {
+                led_on();
+            } else if (pos == PEU_ARM_ENR_HALF_TICKS) {
+                led_off();
+            }
+            break;
+        }
+
+        case feedback_type_t::PEU_RESULT_PENDING: {
+            /* 3× slow blinks 200ms on / 600ms off then off (one-shot) */
+            int cycle = PEU_PENDING_ON + PEU_PENDING_OFF;
+            int total = cycle * PEU_PENDING_COUNT;
+            if (tick < total) {
+                int pos = tick % cycle;
+                if (pos == 0) led_on();
+                else if (pos == PEU_PENDING_ON) led_off();
+            } else {
+                led_off();
+                current = feedback_type_t::NONE;
+            }
+            break;
+        }
+
+        case feedback_type_t::PEU_RESULT_SUCCESS: {
+            /* 5× rapid blinks then off (one-shot) — same as PROVISIONING_SUCCESS */
+            int cycle = PROV_SUCCESS_ON + PROV_SUCCESS_OFF;
+            int total = cycle * PROV_SUCCESS_COUNT;
+            if (tick < total) {
+                int pos = tick % cycle;
+                if (pos == 0) led_on();
+                else if (pos == PROV_SUCCESS_ON) led_off();
+            } else {
+                led_off();
+                current = feedback_type_t::NONE;
+            }
+            break;
+        }
+
+        case feedback_type_t::PEU_RESULT_DUPLICATE: {
+            /* 2× medium blinks then off (one-shot) — same as PROVISIONING_DUPLICATE */
+            int cycle = PROV_DUP_ON + PROV_DUP_OFF;
+            int total = cycle * PROV_DUP_COUNT;
+            if (tick < total) {
+                int pos = tick % cycle;
+                if (pos == 0) led_on();
+                else if (pos == PROV_DUP_ON) led_off();
+            } else {
+                led_off();
+                current = feedback_type_t::NONE;
+            }
+            break;
+        }
+
+        case feedback_type_t::PEU_RESULT_UNAUTHORIZED: {
+            /* 500ms solid on + 3× rapid blinks then off (one-shot) */
+            if (tick == 0) {
+                led_on();
+            } else if (tick == PROV_UNAUTH_LONG_ON) {
+                led_off();
+            } else if (tick > PROV_UNAUTH_LONG_ON) {
+                int pos_in_rapid = tick - PROV_UNAUTH_LONG_ON;
+                int cycle  = PROV_UNAUTH_RAPID_ON + PROV_UNAUTH_RAPID_OFF;
+                int total  = cycle * PROV_UNAUTH_RAPID_COUNT;
+                if (pos_in_rapid < total) {
+                    int pos = pos_in_rapid % cycle;
+                    if (pos == 0) led_on();
+                    else if (pos == PROV_UNAUTH_RAPID_ON) led_off();
+                } else {
+                    led_off();
+                    current = feedback_type_t::NONE;
+                }
+            }
+            break;
+        }
+
+        case feedback_type_t::PEU_RESULT_ERROR: {
+            /* Rapid blink 200ms on/off — continuous (same as SYSTEM_ERROR) */
+            int pos = tick % (ERROR_HALF_CYCLE_TICKS * 2);
+            if (pos == 0) {
+                led_on();
+            } else if (pos == ERROR_HALF_CYCLE_TICKS) {
+                led_off();
             }
             break;
         }

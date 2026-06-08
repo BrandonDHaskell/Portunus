@@ -44,6 +44,16 @@ enum class feedback_type_t : uint8_t {
     PROVISIONING_SUCCESS,       /**< Provisioning succeeded — 5× rapid blinks (one-shot) */
     PROVISIONING_DUPLICATE,     /**< Credential already exists — 2× medium blinks (one-shot) */
     PROVISIONING_UNAUTHORIZED,  /**< Operator not authorised — long on + 3× rapid blinks (one-shot) */
+
+    /* PEU (Provisioning & Enrollment Unit) 7-state FSM feedback */
+    PEU_IDLE,                   /**< Awake, waiting for arm button — slow double pulse (continuous) */
+    PEU_ARMED_CAPTURE,          /**< Armed, capture mode — triple rapid pulse (continuous) */
+    PEU_ARMED_ENROLL,           /**< Armed, operator-enrol mode — fast 50/50 pulse (continuous) */
+    PEU_RESULT_PENDING,         /**< Capture accepted, awaiting admin approval — 3× slow blinks (one-shot) */
+    PEU_RESULT_SUCCESS,         /**< Enrolment succeeded — 5× rapid blinks (one-shot) */
+    PEU_RESULT_DUPLICATE,       /**< Card already exists — 2× medium blinks (one-shot) */
+    PEU_RESULT_UNAUTHORIZED,    /**< Not authorised — long on + 3× rapid blinks (one-shot) */
+    PEU_RESULT_ERROR,           /**< Comm/network error — SYSTEM_ERROR pattern (continuous) */
 };
 
 /**

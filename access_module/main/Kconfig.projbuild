@@ -22,25 +22,79 @@ menu "Portunus Configuration"
                 bool "Provisioning console (credential enrollment)"
         endchoice
 
-        menu "Provisioning Console Settings"
+        menu "Provisioning Console Settings (PEU)"
             depends on PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
 
             config PORTUNUS_PROVISION_TIMEOUT_MS
-                int "Awaiting-credential timeout (milliseconds)"
+                int "Enroll scan-2 timeout (milliseconds)"
                 default 30000
                 range 5000 120000
                 help
-                    How long the console waits for the new credential after
-                    the operator scan before returning to idle and requiring
-                    the operator to scan again.
+                    How long the PEU waits for the new-member card (scan 2)
+                    after the operator badge (scan 1) is accepted, before
+                    returning to Idle state.
 
             config PORTUNUS_DEFAULT_ROLE_ID
                 string "Default role ID for provisioned members"
                 default "guest"
                 help
-                    role_id sent in every ProvisionCredentialRequest. Must
-                    match an existing role on the Portunus server.
-                    Common values: "guest", "member".
+                    role_id sent in every ProvisionCredentialRequest when the
+                    FSM does not override it. Must match an existing role on
+                    the Portunus server. Common values: "guest", "member".
+
+            config PORTUNUS_ARM_TIMEOUT_MS
+                int "Armed state timeout (milliseconds)"
+                default 30000
+                range 5000 120000
+                help
+                    How long the PEU stays in the Armed state waiting for the
+                    first card scan before auto-cancelling and returning to Idle.
+                    Protects against a console left armed after an operator walks away.
+
+            config PORTUNUS_IDLE_TIMEOUT_MS
+                int "Idle-to-sleep timeout (milliseconds)"
+                default 60000
+                range 10000 300000
+                help
+                    How long the PEU stays in the Idle state (awake but not armed)
+                    before transitioning to Sleep, halting credential polling.
+                    A button press wakes it back to Idle.
+
+            config PORTUNUS_RESULT_DISPLAY_MS
+                int "Result display duration (milliseconds)"
+                default 3000
+                range 1000 10000
+                help
+                    How long the PEU shows the result feedback (success, duplicate,
+                    error) before returning to Idle state.
+
+            menu "Arm Button"
+                config PORTUNUS_ENABLE_ARM_BUTTON
+                    bool "Enable GPIO arm button"
+                    default y
+                    help
+                        Enable the momentary push-button arm trigger. When disabled
+                        the PEU starts in the Armed (capture) state immediately after
+                        boot and never enters Sleep or Idle.
+
+                config PORTUNUS_ARM_BUTTON_PIN
+                    int "Arm button GPIO pin"
+                    default 8
+                    depends on PORTUNUS_ENABLE_ARM_BUTTON
+                    help
+                        GPIO pin connected to the arm button. Must not conflict
+                        with SPI, door-hardware, or LED pins.
+
+                config PORTUNUS_ARM_BUTTON_ACTIVE_LOW
+                    bool "Arm button active-low logic"
+                    default y
+                    depends on PORTUNUS_ENABLE_ARM_BUTTON
+                    help
+                        Enable if the button pulls the GPIO LOW when pressed
+                        (button connects pin to GND; internal pull-up enabled).
+                        Disable for active-high wiring (button connects pin to VCC;
+                        internal pull-down enabled).
+            endmenu
         endmenu
     endmenu
 
