@@ -100,8 +100,17 @@ func (s *ProvisionService) Provision(
 		}, nil
 	}
 
-	// Path 1: no operator badge — capture the credential as pending.
-	if len(req.OperatorCredentialUID) == 0 {
+	// Determine path: explicit ProvisionMode wins; field presence is the fallback.
+	isCapture := len(req.OperatorCredentialUID) == 0
+	switch req.ProvisionMode {
+	case types.ProvisionModeCapture:
+		isCapture = true
+	case types.ProvisionModeOperatorEnroll:
+		isCapture = false
+	}
+
+	// Path 1: capture — park credential as pending_authorization.
+	if isCapture {
 		return s.capture(ctx, moduleID, credHash)
 	}
 

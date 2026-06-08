@@ -182,6 +182,11 @@ message ProvisionCredentialRequest {
   // The server hashes this and resolves the operator against member_access,
   // checking that the member's role carries member.provision permission.
   bytes  operator_credential_uid = 6;
+
+  // Explicit provisioning mode selected by the PEU firmware.
+  // When UNSPECIFIED the server infers the mode from operator_credential_uid
+  // presence (empty = capture path, non-empty = operator-enrol path).
+  ProvisionMode provision_mode = 7;
 }
 
 // Returned by the server after processing a provisioning request.
@@ -211,6 +216,19 @@ enum ProvisionStatus {
   PROVISION_STATUS_UNAUTHORIZED = 5;
   // role_id does not exist on the server.
   PROVISION_STATUS_INVALID_ROLE = 6;
+  // Capture path: new pending_authorization record created, awaiting admin approval.
+  PROVISION_STATUS_PENDING_CREATED = 7;
+}
+
+// Provisioning mode sent by the PEU firmware in ProvisionCredentialRequest.
+enum ProvisionMode {
+  PROVISION_MODE_UNSPECIFIED    = 0;
+  // Capture path: no operator badge — new member record created as
+  // pending_authorization and queued for admin approval.
+  PROVISION_MODE_CAPTURE        = 1;
+  // Operator-enrol path: operator badge (scan 1) authorises the new member
+  // (scan 2) directly into the active state.
+  PROVISION_MODE_OPERATOR_ENROLL = 2;
 }
 
 // ──────────────────────────────────────────────────────────────────────────

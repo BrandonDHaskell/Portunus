@@ -17,6 +17,11 @@ set(_reqs
     portunus_config
 )
 
+# provisioning_fsm include dir is needed when main.cpp includes provisioning_fsm.h.
+if(CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE)
+    list(APPEND _reqs provisioning_fsm)
+endif()
+
 if(CONFIG_PORTUNUS_ENABLE_MFRC522)
     list(APPEND _priv_reqs reader_mfrc522)
 endif()
@@ -35,6 +40,10 @@ endif()
 
 if(CONFIG_PORTUNUS_ENABLE_WIFI)
     list(APPEND _priv_reqs wifi_mgr server_comm)
+endif()
+
+if(CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE AND CONFIG_PORTUNUS_ENABLE_ARM_BUTTON)
+    list(APPEND _priv_reqs arm_button_gpio)
 endif()
 
 idf_component_register(

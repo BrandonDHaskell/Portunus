@@ -75,6 +75,7 @@ func provisionRequestFromProto(p *pb.ProvisionCredentialRequest) types.Provision
 		ModuleID:              p.GetModuleId(),
 		CredentialUID:         p.GetCredentialUid(),
 		RoleID:                p.GetRoleId(),
+		ProvisionMode:         pbconvert.ProtoProvisionModeToDomain(p.GetProvisionMode()),
 	}
 }
 

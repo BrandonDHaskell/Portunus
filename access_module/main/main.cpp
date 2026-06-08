@@ -51,6 +51,9 @@
 #ifdef CONFIG_PORTUNUS_ENABLE_LED
 #include "feedback_led.h"
 #endif
+#if defined(CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE) && defined(CONFIG_PORTUNUS_ENABLE_ARM_BUTTON)
+#include "arm_button_gpio.h"
+#endif
 
 #include "nvs_flash.h"
 #include "esp_log.h"
@@ -168,7 +171,18 @@ extern "C" void app_main(void)
 #else
     /* Provisioning console: no door-strike hardware needed. */
     (void)access_ptr;
-    static ProvisioningFSM fsm(reader_ptr, feedback_ptr);
+
+#if defined(CONFIG_PORTUNUS_ENABLE_ARM_BUTTON)
+    static ArmButtonGpio arm_button(
+        static_cast<gpio_num_t>(CONFIG_PORTUNUS_ARM_BUTTON_PIN),
+        CONFIG_PORTUNUS_ARM_BUTTON_ACTIVE_LOW
+    );
+    IArm *arm_ptr = &arm_button;
+#else
+    IArm *arm_ptr = nullptr;
+#endif
+
+    static ProvisioningFSM fsm(reader_ptr, feedback_ptr, arm_ptr);
     ESP_LOGI(TAG, "Variant: PROVISIONING_CONSOLE");
 #endif
 

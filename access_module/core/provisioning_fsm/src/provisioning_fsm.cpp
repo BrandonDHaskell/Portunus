@@ -1,19 +1,20 @@
 /**
  * @file provisioning_fsm.cpp
- * @brief Provisioning console FSM implementation.
+ * @brief PEU (Provisioning & Enrollment Unit) 7-state FSM implementation.
  *
- * Two-scan flow:
- *   1. Credential read in IDLE → store raw UID bytes as operator badge
- *      (m_operator_cred), start 30s timeout, move to AWAITING.
- *   2. Credential read in AWAITING → copy scan-1 operator UID and scan-2
- *      member UID into EVENT_PROVISION_REQUEST, move to SENDING.
- *      The server applies HMAC-SHA256(secret, uid) for both UIDs and
- *      resolves scan-1 to an admin user for operator attribution.
- *   3. Timeout in AWAITING → return to IDLE.
- *   4. EVENT_PROVISION_SUCCESS / EVENT_PROVISION_FAILED → show feedback,
- *      return to IDLE.
+ * Two provisioning paths:
  *
- * The default role_id is read from Kconfig at build time.
+ *   Path 1 — Capture (CAPTURE mode):
+ *     Armed → card tap → CAPTURE_SEND → server parks as pending_authorization.
+ *     No operator badge involved; admin approves later via the web UI.
+ *
+ *   Path 2 — Operator enrolment (OPERATOR_ENROLL mode):
+ *     Armed → scan-1 (operator badge) → ENROLL_SCAN2 → scan-2 (new member)
+ *     → ENROLL_SEND → server creates an active member directly.
+ *
+ * The arm button cycles: IDLE → ARMED(CAPTURE) → ARMED(ENROLL) → IDLE.
+ * Timeouts auto-cancel any armed state and return to Idle (or armed if
+ * no arm button is present).
  */
 
 #include "provisioning_fsm.h"
@@ -35,7 +36,7 @@
 #include <string.h>
 #include <inttypes.h>
 
-static const char *TAG = "prov_fsm";
+static const char *TAG = "peu_fsm";
 
 /* ── Task configuration ───────────────────────────────────────────────────── */
 
@@ -46,30 +47,31 @@ static const int POLL_TASK_PRIORITY  = 4;
 static const int FSM_EVENT_QUEUE_LEN = 8;
 static const int FSM_POLL_INTERVAL_MS = 100;
 
-/* Credential poll timing — same cadence as the access module. */
 static const int MFRC522_POLL_INTERVAL_MS = 250;
 static const int CARD_REREAD_DELAY_MS     = 1000;
 
 /* ── Helpers ──────────────────────────────────────────────────────────────── */
 
-static inline int64_t now_ms(void)
+static inline int64_t now_ms()
 {
     return esp_timer_get_time() / 1000;
 }
 
 /* ── Constructor ──────────────────────────────────────────────────────────── */
 
-ProvisioningFSM::ProvisioningFSM(ICredentialReader *reader, IFeedback *feedback)
+ProvisioningFSM::ProvisioningFSM(ICredentialReader *reader,
+                                 IFeedback         *feedback,
+                                 IArm              *arm)
     : m_reader(reader)
     , m_feedback(feedback)
-{
-}
+    , m_arm(arm)
+{}
 
 /* ── init() ───────────────────────────────────────────────────────────────── */
 
 portunus_err_t ProvisioningFSM::init()
 {
-    ESP_LOGI(TAG, "Initialising provisioning FSM");
+    ESP_LOGI(TAG, "Initialising PEU FSM");
 
     if (m_reader != nullptr) {
         portunus_err_t err = m_reader->init();
@@ -77,13 +79,11 @@ portunus_err_t ProvisioningFSM::init()
             m_has_reader = true;
             ESP_LOGI(TAG, "Credential reader: OK");
         } else {
-            ESP_LOGE(TAG, "Credential reader init failed (0x%" PRIx32 ") — cannot provision",
-                     (uint32_t)err);
-            /* Reader is mandatory for a provisioning console. */
-            return err;
+            ESP_LOGE(TAG, "Credential reader init failed (0x%" PRIx32 ")", (uint32_t)err);
+            return err; // reader is mandatory for PEU
         }
     } else {
-        ESP_LOGE(TAG, "Credential reader not present — provisioning console requires a reader");
+        ESP_LOGE(TAG, "Credential reader not present — PEU requires a reader");
         return PORTUNUS_FAIL;
     }
 
@@ -101,6 +101,21 @@ portunus_err_t ProvisioningFSM::init()
         ESP_LOGW(TAG, "Feedback: not present");
     }
 
+    if (m_arm != nullptr) {
+        portunus_err_t err = m_arm->init();
+        if (err == PORTUNUS_OK) {
+            m_has_arm = true;
+            ESP_LOGI(TAG, "Arm button: OK");
+        } else {
+            m_has_arm = false;
+            ESP_LOGW(TAG, "Arm button init failed (0x%" PRIx32 ") — always-armed mode",
+                     (uint32_t)err);
+        }
+    } else {
+        m_has_arm = false;
+        ESP_LOGW(TAG, "Arm button: not present — always-armed mode");
+    }
+
 #ifdef CONFIG_PORTUNUS_ENABLE_WIFI
     m_has_network = wifi_mgr_is_connected();
 #endif
@@ -111,8 +126,8 @@ portunus_err_t ProvisioningFSM::init()
         return PORTUNUS_ERR_QUEUE_CREATE;
     }
 
-    ESP_LOGI(TAG, "Capabilities: reader=%d feedback=%d network=%d",
-             m_has_reader, m_has_feedback, m_has_network);
+    ESP_LOGI(TAG, "Capabilities: reader=%d feedback=%d arm=%d network=%d",
+             m_has_reader, m_has_feedback, m_has_arm, m_has_network);
 
     return PORTUNUS_OK;
 }
@@ -121,47 +136,40 @@ portunus_err_t ProvisioningFSM::init()
 
 portunus_err_t ProvisioningFSM::start()
 {
-    ESP_LOGI(TAG, "Starting provisioning FSM");
+    ESP_LOGI(TAG, "Starting PEU FSM");
 
-    event_bus_subscribe(EVENT_CREDENTIAL_READ,   on_event_bus_event, this);
     event_bus_subscribe(EVENT_PROVISION_SUCCESS, on_event_bus_event, this);
     event_bus_subscribe(EVENT_PROVISION_FAILED,  on_event_bus_event, this);
+    event_bus_subscribe(EVENT_CREDENTIAL_READ,   on_event_bus_event, this);
+    event_bus_subscribe(EVENT_ARM_REQUESTED,     on_event_bus_event, this);
 
     BaseType_t ret = xTaskCreate(
-        fsm_task_entry,
-        "prov_fsm",
-        FSM_TASK_STACK,
-        this,
-        FSM_TASK_PRIORITY,
-        &m_fsm_task_handle
-    );
+        fsm_task_entry, "peu_fsm",
+        FSM_TASK_STACK, this, FSM_TASK_PRIORITY, &m_fsm_task_handle);
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create FSM task");
         return PORTUNUS_ERR_TASK_CREATE;
     }
 
     ret = xTaskCreate(
-        credential_poll_task_entry,
-        "prov_poll",
-        POLL_TASK_STACK,
-        this,
-        POLL_TASK_PRIORITY,
-        &m_poll_task_handle
-    );
+        poll_task_entry, "peu_poll",
+        POLL_TASK_STACK, this, POLL_TASK_PRIORITY, &m_poll_task_handle);
     if (ret != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create credential polling task");
+        ESP_LOGE(TAG, "Failed to create poll task");
         return PORTUNUS_ERR_TASK_CREATE;
     }
 
-    if (m_has_feedback) {
-        m_feedback->indicate(feedback_type_t::PROVISIONING_IDLE);
+    // Initial state: Idle if arm button present, Armed(CAPTURE) otherwise.
+    if (m_has_arm) {
+        enter_idle();
+    } else {
+        enter_armed(PEU_MODE_CAPTURE);
     }
 
-    ESP_LOGI(TAG, "Provisioning FSM running — state=IDLE");
-    ESP_LOGI(TAG, "Provisioning FSM: scan-1 = operator badge, scan-2 = new member card");
-    ESP_LOGI(TAG, "Role: %s  Timeout: %d ms",
+    ESP_LOGI(TAG, "PEU FSM running — role=%s  scan2_timeout=%dms  arm_timeout=%dms",
              CONFIG_PORTUNUS_DEFAULT_ROLE_ID,
-             CONFIG_PORTUNUS_PROVISION_TIMEOUT_MS);
+             CONFIG_PORTUNUS_PROVISION_TIMEOUT_MS,
+             CONFIG_PORTUNUS_ARM_TIMEOUT_MS);
 
     return PORTUNUS_OK;
 }
@@ -172,9 +180,8 @@ void ProvisioningFSM::on_event_bus_event(const portunus_event_t *event, void *ct
 {
     auto *fsm = static_cast<ProvisioningFSM *>(ctx);
     if (fsm->m_event_queue == nullptr) { return; }
-
     if (xQueueSend(fsm->m_event_queue, event, pdMS_TO_TICKS(10)) != pdTRUE) {
-        ESP_LOGW(TAG, "FSM event queue full — dropped event 0x%04x", event->id);
+        ESP_LOGW(TAG, "FSM queue full — dropped event 0x%04x", event->id);
     }
 }
 
@@ -185,9 +192,47 @@ void ProvisioningFSM::fsm_task_entry(void *arg)
     static_cast<ProvisioningFSM *>(arg)->run();
 }
 
-void ProvisioningFSM::credential_poll_task_entry(void *arg)
+void ProvisioningFSM::poll_task_entry(void *arg)
 {
-    static_cast<ProvisioningFSM *>(arg)->poll_credential();
+    static_cast<ProvisioningFSM *>(arg)->poll();
+}
+
+/* ── Poll task: arm button + credential reader ────────────────────────────── */
+
+void ProvisioningFSM::poll()
+{
+    const TickType_t poll_interval = pdMS_TO_TICKS(FSM_POLL_INTERVAL_MS);
+    const TickType_t reread_delay  = pdMS_TO_TICKS(CARD_REREAD_DELAY_MS);
+
+    for (;;) {
+        // Always poll the arm button — it needs to fire from SLEEP to wake up.
+        if (m_has_arm && m_arm->poll_arm()) {
+            portunus_event_t evt;
+            memset(&evt, 0, sizeof(evt));
+            evt.id = EVENT_ARM_REQUESTED;
+            event_bus_publish(&evt);
+        }
+
+        // Poll the credential reader only in states that need a card scan.
+        peu_state_t state = m_state;
+        if (state == PEU_STATE_ARMED || state == PEU_STATE_ENROLL_SCAN2) {
+            credential_t cred;
+            if (m_reader->read(&cred) == PORTUNUS_OK) {
+                portunus_event_t evt;
+                memset(&evt, 0, sizeof(evt));
+                evt.id                               = EVENT_CREDENTIAL_READ;
+                evt.payload.credential_read.credential   = cred;
+                evt.payload.credential_read.timestamp_ms = now_ms();
+                event_bus_publish(&evt);
+
+                m_reader->halt();
+                vTaskDelay(reread_delay);
+                continue;
+            }
+        }
+
+        vTaskDelay(poll_interval);
+    }
 }
 
 /* ── FSM main loop ────────────────────────────────────────────────────────── */
@@ -195,17 +240,14 @@ void ProvisioningFSM::credential_poll_task_entry(void *arg)
 void ProvisioningFSM::run()
 {
     portunus_event_t event;
-    const TickType_t poll_timeout = pdMS_TO_TICKS(FSM_POLL_INTERVAL_MS);
+    const TickType_t timeout = pdMS_TO_TICKS(FSM_POLL_INTERVAL_MS);
 
     for (;;) {
-        if (xQueueReceive(m_event_queue, &event, poll_timeout) == pdTRUE) {
+        if (xQueueReceive(m_event_queue, &event, timeout) == pdTRUE) {
             process_event(event);
         }
 
-        /* Check both the awaiting timeout and the deferred idle re-arm. */
-        if (m_timeout_deadline_ms != 0 && now_ms() >= m_timeout_deadline_ms) {
-            handle_timeout();
-        }
+        check_timeout();
 
 #ifdef CONFIG_PORTUNUS_ENABLE_WIFI
         m_has_network = wifi_mgr_is_connected();
@@ -218,16 +260,88 @@ void ProvisioningFSM::run()
 void ProvisioningFSM::process_event(const portunus_event_t &event)
 {
     switch (event.id) {
+    case EVENT_ARM_REQUESTED:
+        handle_arm_requested();
+        break;
     case EVENT_CREDENTIAL_READ:
         handle_credential_read(&event.payload.credential_read);
         break;
-
     case EVENT_PROVISION_SUCCESS:
     case EVENT_PROVISION_FAILED:
         handle_provision_result(&event.payload.provision_result);
         break;
+    default:
+        break;
+    }
+}
+
+void ProvisioningFSM::check_timeout()
+{
+    if (m_deadline_ms == 0 || now_ms() < m_deadline_ms) {
+        return;
+    }
+    m_deadline_ms = 0;
+
+    switch (m_state) {
+    case PEU_STATE_IDLE:
+        ESP_LOGI(TAG, "Idle timeout — entering Sleep");
+        enter_sleep();
+        break;
+
+    case PEU_STATE_ARMED:
+        ESP_LOGW(TAG, "Arm timeout — cancelling armed state");
+        if (m_has_arm) {
+            enter_idle();
+        } else {
+            enter_armed(PEU_MODE_CAPTURE); // no button: reset, don't go idle
+        }
+        break;
+
+    case PEU_STATE_ENROLL_SCAN2:
+        ESP_LOGW(TAG, "Scan-2 timeout — returning to Idle");
+        if (m_has_arm) {
+            enter_idle();
+        } else {
+            enter_armed(PEU_MODE_CAPTURE);
+        }
+        break;
+
+    case PEU_STATE_RESULT:
+        enter_idle_after_result();
+        break;
 
     default:
+        break;
+    }
+}
+
+/* ── Event handlers ───────────────────────────────────────────────────────── */
+
+void ProvisioningFSM::handle_arm_requested()
+{
+    switch (m_state) {
+    case PEU_STATE_SLEEP:
+        ESP_LOGI(TAG, "Arm button (from SLEEP) → IDLE");
+        enter_idle();
+        break;
+
+    case PEU_STATE_IDLE:
+        ESP_LOGI(TAG, "Arm button (from IDLE) → ARMED(CAPTURE)");
+        enter_armed(PEU_MODE_CAPTURE);
+        break;
+
+    case PEU_STATE_ARMED:
+        if (m_mode == PEU_MODE_CAPTURE) {
+            ESP_LOGI(TAG, "Arm button (from ARMED CAPTURE) → ARMED(ENROLL)");
+            enter_armed(PEU_MODE_OPERATOR_ENROLL);
+        } else {
+            ESP_LOGI(TAG, "Arm button (from ARMED ENROLL) → IDLE (cancel)");
+            enter_idle();
+        }
+        break;
+
+    default:
+        // Arm button ignored during SEND and RESULT states.
         break;
     }
 }
@@ -237,176 +351,199 @@ void ProvisioningFSM::handle_credential_read(const event_credential_read_t *cred
     char uid_str[CREDENTIAL_UID_HEX_STR_LEN];
     credential_uid_to_hex(&cred->credential, uid_str, sizeof(uid_str));
 
-    switch (m_prov_state) {
-
-    case PROV_STATE_IDLE:
-        /* Scan 1: operator badge tap — store UID for attribution, start timeout. */
-        ESP_LOGI(TAG, "Scan 1 (operator badge) — UID: %s — awaiting new member card", uid_str);
-        m_operator_cred       = cred->credential;
-        m_prov_state          = PROV_STATE_AWAITING_CREDENTIAL;
-        m_timeout_deadline_ms = now_ms() + CONFIG_PORTUNUS_PROVISION_TIMEOUT_MS;
-        if (m_has_feedback) {
-            m_feedback->indicate(feedback_type_t::PROVISIONING_AWAITING);
+    switch (m_state) {
+    case PEU_STATE_ARMED:
+        if (m_mode == PEU_MODE_CAPTURE) {
+            ESP_LOGI(TAG, "Card read in CAPTURE mode — UID: %s", uid_str);
+            publish_capture_request(cred);
+            m_state       = PEU_STATE_CAPTURE_SEND;
+            m_deadline_ms = 0;
+            if (m_has_feedback) {
+                m_feedback->indicate(feedback_type_t::CARD_READ);
+            }
+        } else {
+            // OPERATOR_ENROLL: scan-1 is the operator badge.
+            ESP_LOGI(TAG, "Scan-1 (operator) in ENROLL mode — UID: %s", uid_str);
+            m_operator_cred = cred->credential;
+            m_state         = PEU_STATE_ENROLL_SCAN2;
+            m_deadline_ms   = now_ms() + CONFIG_PORTUNUS_PROVISION_TIMEOUT_MS;
+            if (m_has_feedback) {
+                m_feedback->indicate(feedback_type_t::CARD_READ);
+            }
         }
         break;
 
-    case PROV_STATE_AWAITING_CREDENTIAL: {
-        /* Scan 2: new member card. Bundle scan-1 operator UID + scan-2 member UID. */
-        ESP_LOGI(TAG, "Scan 2 (new member card) — UID: %s — sending provision request", uid_str);
-
+    case PEU_STATE_ENROLL_SCAN2: {
+        // Scan-2: the new member card.
+        ESP_LOGI(TAG, "Scan-2 (new member) — UID: %s — sending enrol request", uid_str);
         if (!m_has_network) {
-            ESP_LOGW(TAG, "Network unavailable — cannot provision");
-            transition_to_idle();
+            ESP_LOGW(TAG, "Network unavailable — cannot enrol");
+            if (m_has_arm) {
+                enter_idle();
+            } else {
+                enter_armed(PEU_MODE_CAPTURE);
+            }
             return;
         }
-
-        portunus_event_t req_evt;
-        memset(&req_evt, 0, sizeof(req_evt));
-        req_evt.id = EVENT_PROVISION_REQUEST;
-
-        /* Scan-1: operator badge UID (field 6 — server resolves to admin user). */
-        memcpy(req_evt.payload.provision_request.operator_credential_uid,
-               m_operator_cred.uid,
-               m_operator_cred.uid_len);
-        req_evt.payload.provision_request.operator_credential_uid_len = m_operator_cred.uid_len;
-
-        /* Scan-2: new member card UID (field 5). */
-        memcpy(req_evt.payload.provision_request.credential_uid,
-               cred->credential.uid,
-               cred->credential.uid_len);
-        req_evt.payload.provision_request.credential_uid_len = cred->credential.uid_len;
-
-        strncpy(req_evt.payload.provision_request.role_id,
-                CONFIG_PORTUNUS_DEFAULT_ROLE_ID,
-                sizeof(req_evt.payload.provision_request.role_id) - 1);
-
-        event_bus_publish(&req_evt);
-
-        m_prov_state = PROV_STATE_SENDING;
+        publish_enroll_request(cred);
+        m_state       = PEU_STATE_ENROLL_SEND;
+        m_deadline_ms = 0;
         if (m_has_feedback) {
             m_feedback->indicate(feedback_type_t::CARD_READ);
         }
         break;
     }
 
-    case PROV_STATE_SENDING:
-        /* Ignore credential reads while waiting for server response. */
-        ESP_LOGD(TAG, "Credential read ignored — provisioning in progress");
+    default:
+        // Ignore card reads in SLEEP, IDLE, *_SEND, RESULT states.
+        ESP_LOGD(TAG, "Credential read ignored in state %d", (int)m_state);
         break;
     }
 }
 
 void ProvisioningFSM::handle_provision_result(const event_provision_result_t *result)
 {
-    if (m_prov_state != PROV_STATE_SENDING) {
+    if (m_state != PEU_STATE_CAPTURE_SEND && m_state != PEU_STATE_ENROLL_SEND) {
         return;
     }
 
+    feedback_type_t fb;
     switch (result->reason) {
     case PROVISION_RESULT_SUCCESS:
         ESP_LOGI(TAG, "Provisioning SUCCESS — member_uuid=%s", result->member_uuid);
-        if (m_has_feedback) {
-            m_feedback->indicate(feedback_type_t::PROVISIONING_SUCCESS);
-        }
+        fb = feedback_type_t::PEU_RESULT_SUCCESS;
+        break;
+
+    case PROVISION_RESULT_PENDING_CREATED:
+        ESP_LOGI(TAG, "Capture accepted — pending admin approval (member_uuid=%s)",
+                 result->member_uuid);
+        fb = feedback_type_t::PEU_RESULT_PENDING;
         break;
 
     case PROVISION_RESULT_DUPLICATE_ACTIVE:
     case PROVISION_RESULT_DUPLICATE_INACTIVE:
     case PROVISION_RESULT_DUPLICATE_PENDING:
         ESP_LOGW(TAG, "Provisioning DUPLICATE — detail=%s", result->detail);
-        if (m_has_feedback) {
-            m_feedback->indicate(feedback_type_t::PROVISIONING_DUPLICATE);
-        }
+        fb = feedback_type_t::PEU_RESULT_DUPLICATE;
         break;
 
     case PROVISION_RESULT_UNAUTHORIZED:
-        ESP_LOGW(TAG, "Provisioning UNAUTHORIZED — detail=%s", result->detail);
-        if (m_has_feedback) {
-            m_feedback->indicate(feedback_type_t::PROVISIONING_UNAUTHORIZED);
-        }
-        break;
-
     case PROVISION_RESULT_INVALID_ROLE:
-        ESP_LOGE(TAG, "Provisioning INVALID_ROLE — check PORTUNUS_DEFAULT_ROLE_ID");
-        if (m_has_feedback) {
-            m_feedback->indicate(feedback_type_t::PROVISIONING_UNAUTHORIZED);
-        }
+        ESP_LOGW(TAG, "Provisioning UNAUTHORIZED/INVALID_ROLE — detail=%s", result->detail);
+        fb = feedback_type_t::PEU_RESULT_UNAUTHORIZED;
         break;
 
     default:
         ESP_LOGE(TAG, "Provisioning comm error — detail=%s", result->detail);
-        if (m_has_feedback) {
-            m_feedback->indicate(feedback_type_t::SYSTEM_ERROR);
-        }
+        fb = feedback_type_t::PEU_RESULT_ERROR;
         break;
     }
 
-    /*
-     * Return to IDLE after a brief delay so the one-shot feedback
-     * patterns have time to complete before the idle pattern resumes.
-     * The FSM main loop will call transition_to_idle() after the
-     * queue drains; we set state now so no further scan 2s are accepted.
-     */
-    m_prov_state = PROV_STATE_IDLE;
-
-    /* Re-arm idle feedback after one-shot pattern duration (~1.5 s). */
-    m_timeout_deadline_ms = now_ms() + 1500;
+    enter_result(fb);
 }
 
-void ProvisioningFSM::handle_timeout()
-{
-    if (m_prov_state == PROV_STATE_AWAITING_CREDENTIAL) {
-        ESP_LOGW(TAG, "Provisioning timeout — returning to IDLE");
-        transition_to_idle();
-        return;
-    }
+/* ── State transitions ────────────────────────────────────────────────────── */
 
-    /* Used as a deferred re-arm for idle feedback after result patterns. */
-    if (m_prov_state == PROV_STATE_IDLE && m_timeout_deadline_ms != 0 &&
-        now_ms() >= m_timeout_deadline_ms) {
-        m_timeout_deadline_ms = 0;
-        if (m_has_feedback) {
-            m_feedback->indicate(feedback_type_t::PROVISIONING_IDLE);
-        }
-    }
-}
-
-void ProvisioningFSM::transition_to_idle()
+void ProvisioningFSM::enter_sleep()
 {
-    m_prov_state          = PROV_STATE_IDLE;
-    m_timeout_deadline_ms = 0;
+    m_state       = PEU_STATE_SLEEP;
+    m_deadline_ms = 0;
     if (m_has_feedback) {
-        m_feedback->indicate(feedback_type_t::PROVISIONING_IDLE);
+        m_feedback->indicate(feedback_type_t::NONE);
     }
-    ESP_LOGI(TAG, "FSM → IDLE");
+    ESP_LOGI(TAG, "FSM → SLEEP");
 }
 
-/* ── Credential polling sub-task ──────────────────────────────────────────── */
-
-void ProvisioningFSM::poll_credential()
+void ProvisioningFSM::enter_idle()
 {
-    const TickType_t poll_interval = pdMS_TO_TICKS(MFRC522_POLL_INTERVAL_MS);
-    const TickType_t reread_delay  = pdMS_TO_TICKS(CARD_REREAD_DELAY_MS);
-
-    for (;;) {
-        credential_t cred;
-        portunus_err_t err = m_reader->read(&cred);
-
-        if (err == PORTUNUS_OK) {
-            portunus_event_t event;
-            memset(&event, 0, sizeof(event));
-            event.id = EVENT_CREDENTIAL_READ;
-            event.payload.credential_read.credential   = cred;
-            event.payload.credential_read.timestamp_ms =
-                esp_timer_get_time() / 1000;
-
-            event_bus_publish(&event);
-
-            m_reader->halt();
-            vTaskDelay(reread_delay);
-            continue;
-        }
-
-        vTaskDelay(poll_interval);
+    m_state       = PEU_STATE_IDLE;
+    m_deadline_ms = now_ms() + CONFIG_PORTUNUS_IDLE_TIMEOUT_MS;
+    if (m_has_feedback) {
+        m_feedback->indicate(feedback_type_t::PEU_IDLE);
     }
+    ESP_LOGI(TAG, "FSM → IDLE (idle_timeout=%dms)", CONFIG_PORTUNUS_IDLE_TIMEOUT_MS);
+}
+
+void ProvisioningFSM::enter_armed(peu_mode_t mode)
+{
+    m_mode        = mode;
+    m_state       = PEU_STATE_ARMED;
+    m_deadline_ms = now_ms() + CONFIG_PORTUNUS_ARM_TIMEOUT_MS;
+
+    feedback_type_t fb = (mode == PEU_MODE_CAPTURE)
+        ? feedback_type_t::PEU_ARMED_CAPTURE
+        : feedback_type_t::PEU_ARMED_ENROLL;
+
+    if (m_has_feedback) {
+        m_feedback->indicate(fb);
+    }
+    ESP_LOGI(TAG, "FSM → ARMED(%s)  arm_timeout=%dms",
+             mode == PEU_MODE_CAPTURE ? "CAPTURE" : "ENROLL",
+             CONFIG_PORTUNUS_ARM_TIMEOUT_MS);
+}
+
+void ProvisioningFSM::enter_result(feedback_type_t fb)
+{
+    m_state       = PEU_STATE_RESULT;
+    m_deadline_ms = now_ms() + CONFIG_PORTUNUS_RESULT_DISPLAY_MS;
+    if (m_has_feedback) {
+        m_feedback->indicate(fb);
+    }
+    ESP_LOGI(TAG, "FSM → RESULT (display=%dms)", CONFIG_PORTUNUS_RESULT_DISPLAY_MS);
+}
+
+void ProvisioningFSM::enter_idle_after_result()
+{
+    if (m_has_arm) {
+        enter_idle();
+    } else {
+        enter_armed(PEU_MODE_CAPTURE);
+    }
+}
+
+/* ── Request helpers ──────────────────────────────────────────────────────── */
+
+void ProvisioningFSM::publish_capture_request(const event_credential_read_t *cred)
+{
+    portunus_event_t evt;
+    memset(&evt, 0, sizeof(evt));
+    evt.id = EVENT_PROVISION_REQUEST;
+
+    // No operator UID for capture path.
+    memcpy(evt.payload.provision_request.credential_uid,
+           cred->credential.uid, cred->credential.uid_len);
+    evt.payload.provision_request.credential_uid_len = cred->credential.uid_len;
+
+    strncpy(evt.payload.provision_request.role_id,
+            CONFIG_PORTUNUS_DEFAULT_ROLE_ID,
+            sizeof(evt.payload.provision_request.role_id) - 1);
+
+    evt.payload.provision_request.provision_mode = PEU_PROVISION_MODE_CAPTURE;
+
+    event_bus_publish(&evt);
+}
+
+void ProvisioningFSM::publish_enroll_request(const event_credential_read_t *cred)
+{
+    portunus_event_t evt;
+    memset(&evt, 0, sizeof(evt));
+    evt.id = EVENT_PROVISION_REQUEST;
+
+    // Scan-1: operator badge UID.
+    memcpy(evt.payload.provision_request.operator_credential_uid,
+           m_operator_cred.uid, m_operator_cred.uid_len);
+    evt.payload.provision_request.operator_credential_uid_len = m_operator_cred.uid_len;
+
+    // Scan-2: new member card UID.
+    memcpy(evt.payload.provision_request.credential_uid,
+           cred->credential.uid, cred->credential.uid_len);
+    evt.payload.provision_request.credential_uid_len = cred->credential.uid_len;
+
+    strncpy(evt.payload.provision_request.role_id,
+            CONFIG_PORTUNUS_DEFAULT_ROLE_ID,
+            sizeof(evt.payload.provision_request.role_id) - 1);
+
+    evt.payload.provision_request.provision_mode = PEU_PROVISION_MODE_OPERATOR_ENROLL;
+
+    event_bus_publish(&evt);
 }

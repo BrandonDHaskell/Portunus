@@ -52,6 +52,9 @@ typedef enum {
     EVENT_PROVISION_REQUEST = 0x0600, /**< FSM requests a provisioning call */
     EVENT_PROVISION_SUCCESS,           /**< Server confirmed provisioning */
     EVENT_PROVISION_FAILED,            /**< Server rejected provisioning */
+
+    /* PEU arm events: 0x07xx (PROVISIONING_CONSOLE firmware only) */
+    EVENT_ARM_REQUESTED = 0x0700,     /**< Arm button pressed; PEU FSM transitions state */
 } portunus_event_id_t;
 
 /* ── Event payloads ────────────────────────────────────────────────────────── */
@@ -95,6 +98,18 @@ typedef struct {
 } event_door_state_t;
 
 /**
+ * @brief Provisioning mode selected by the PEU FSM.
+ *
+ * Mirrors portunus_v1_ProvisionMode without pulling in the nanopb header.
+ * Sent in event_provision_request_t so server_comm can set the proto field.
+ */
+typedef enum {
+    PEU_PROVISION_MODE_UNSPECIFIED     = 0,
+    PEU_PROVISION_MODE_CAPTURE         = 1,
+    PEU_PROVISION_MODE_OPERATOR_ENROLL = 2,
+} peu_provision_mode_t;
+
+/**
  * @brief Result reason codes for EVENT_PROVISION_SUCCESS / EVENT_PROVISION_FAILED.
  *
  * Mirrors portunus_v1_ProvisionStatus without pulling in the nanopb header.
@@ -107,6 +122,7 @@ typedef enum {
     PROVISION_RESULT_UNAUTHORIZED       = 4,
     PROVISION_RESULT_INVALID_ROLE       = 5,
     PROVISION_RESULT_COMM_ERROR         = 6,  /**< Transport / encode / decode failure */
+    PROVISION_RESULT_PENDING_CREATED    = 7,  /**< Capture path: pending_authorization created */
 } provision_result_reason_t;
 
 /**
@@ -116,11 +132,12 @@ typedef enum {
  * server_comm encodes this into a ProvisionCredentialRequest and sends it.
  */
 typedef struct {
-    uint8_t operator_credential_uid[10]; /**< Raw RFID UID bytes from scan-1 (operator badge) */
-    uint8_t operator_credential_uid_len; /**< Number of valid bytes in operator_credential_uid (1–10) */
-    uint8_t credential_uid[10];          /**< Raw RFID UID bytes from scan-2 (new member card) */
-    uint8_t credential_uid_len;          /**< Number of valid bytes in credential_uid (1–10) */
-    char    role_id[33];                 /**< Role ID to assign to the new member */
+    uint8_t              operator_credential_uid[10]; /**< Raw RFID UID bytes from scan-1 (operator badge) */
+    uint8_t              operator_credential_uid_len; /**< Number of valid bytes in operator_credential_uid (1–10) */
+    uint8_t              credential_uid[10];          /**< Raw RFID UID bytes from scan-2 (new member card) */
+    uint8_t              credential_uid_len;          /**< Number of valid bytes in credential_uid (1–10) */
+    char                 role_id[33];                 /**< Role ID to assign to the new member */
+    peu_provision_mode_t provision_mode;              /**< Path selected by the PEU FSM */
 } event_provision_request_t;
 
 /**

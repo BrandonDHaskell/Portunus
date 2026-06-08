@@ -637,6 +637,9 @@ static void handle_provision(const event_provision_request_t *req)
     pb_req.credential_uid.size = req->credential_uid_len;
     memcpy(pb_req.credential_uid.bytes, req->credential_uid, req->credential_uid_len);
 
+    /* Explicit provisioning mode — eliminates server-side field-presence inference. */
+    pb_req.provision_mode = static_cast<portunus_v1_ProvisionMode>(req->provision_mode);
+
     /* Encode */
     uint8_t req_buf[portunus_v1_ProvisionCredentialRequest_size];
     pb_ostream_t ostream = pb_ostream_from_buffer(req_buf, sizeof(req_buf));
@@ -715,19 +718,21 @@ static void handle_provision(const event_provision_request_t *req)
     provision_result_reason_t reason;
     switch (pb_resp.status) {
     case portunus_v1_ProvisionStatus_PROVISION_STATUS_SUCCESS:
-        reason = PROVISION_RESULT_SUCCESS;           break;
+        reason = PROVISION_RESULT_SUCCESS;            break;
+    case portunus_v1_ProvisionStatus_PROVISION_STATUS_PENDING_CREATED:
+        reason = PROVISION_RESULT_PENDING_CREATED;    break;
     case portunus_v1_ProvisionStatus_PROVISION_STATUS_DUPLICATE_ACTIVE:
-        reason = PROVISION_RESULT_DUPLICATE_ACTIVE;  break;
+        reason = PROVISION_RESULT_DUPLICATE_ACTIVE;   break;
     case portunus_v1_ProvisionStatus_PROVISION_STATUS_DUPLICATE_INACTIVE:
         reason = PROVISION_RESULT_DUPLICATE_INACTIVE; break;
     case portunus_v1_ProvisionStatus_PROVISION_STATUS_DUPLICATE_PENDING:
-        reason = PROVISION_RESULT_DUPLICATE_PENDING; break;
+        reason = PROVISION_RESULT_DUPLICATE_PENDING;  break;
     case portunus_v1_ProvisionStatus_PROVISION_STATUS_UNAUTHORIZED:
-        reason = PROVISION_RESULT_UNAUTHORIZED;      break;
+        reason = PROVISION_RESULT_UNAUTHORIZED;       break;
     case portunus_v1_ProvisionStatus_PROVISION_STATUS_INVALID_ROLE:
-        reason = PROVISION_RESULT_INVALID_ROLE;      break;
+        reason = PROVISION_RESULT_INVALID_ROLE;       break;
     default:
-        reason = PROVISION_RESULT_COMM_ERROR;        break;
+        reason = PROVISION_RESULT_COMM_ERROR;         break;
     }
 
     publish_provision_result(reason, pb_resp.member_uuid, pb_resp.detail);

@@ -140,6 +140,7 @@ func (s *Server) ProvisionCredential(ctx context.Context, req *pb.ProvisionCrede
 		ModuleID:              req.GetModuleId(),
 		CredentialUID:         req.GetCredentialUid(),
 		RoleID:                req.GetRoleId(),
+		ProvisionMode:         pbconvert.ProtoProvisionModeToDomain(req.GetProvisionMode()),
 	}
 
 	resp, err := s.provisionService.Provision(ctx, domainReq)
