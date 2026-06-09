@@ -1,6 +1,10 @@
 # ── Secrets & environment ──
 .env*
-!.env*.example
+# Re-include the committed, non-secret server profiles. .env and .env.prod stay
+# ignored. (Patterns without a slash match at any depth, so server/.env.local
+# and server/.env.ci are re-included.)
+!.env.local
+!.env.ci
 
 # ── TLS material ──
 certs/

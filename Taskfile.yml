@@ -133,10 +133,17 @@ tasks:
     cmds:
       - go build -o bin/portunus-server-linux-arm64 ./cmd/portunus-server
 
-  run:server:dev:
-    desc: Run the server with the dev profile (server/.env.dev)
+  run:server:local:
+    desc: Run the server with the local profile (server/.env.local)
     dir: "{{.SERVER_DIR}}"
-    dotenv: ['.env.dev']
+    dotenv: ['.env.local']
+    cmds:
+      - go run ./cmd/portunus-server
+
+  run:server:ci:
+    desc: Run the server with the ci profile (server/.env.ci — TLS + gRPC, in-memory DB)
+    dir: "{{.SERVER_DIR}}"
+    dotenv: ['.env.ci']
     cmds:
       - go run ./cmd/portunus-server
 
@@ -377,12 +384,37 @@ tasks:
     cmds:
       - "{{.IDF_PYTHON}} scripts/proto_gen.py --check"
 
+  ci:server:smoke:
+    desc: Boot the ci profile and verify HTTPS + gRPC TLS come up (Linux/macOS)
+    dir: "{{.SERVER_DIR}}"
+    cmds:
+      - |
+        set -euo pipefail
+        go build -o bin/portunus-server ./cmd/portunus-server
+        set -a; . ./.env.ci; set +a
+        ./bin/portunus-server & SRV=$!
+        trap 'kill $SRV 2>/dev/null || true' EXIT
+        code=""
+        for _ in $(seq 1 30); do
+          code=$(curl -ksS -o /dev/null -w '%{http_code}' https://127.0.0.1:8443/admin/ui/login || true)
+          [ "$code" = "200" ] && break
+          sleep 0.2
+        done
+        [ "$code" = "200" ] || { echo "HTTPS smoke FAILED (last code: ${code:-none})"; exit 1; }
+        echo "HTTPS OK: /admin/ui/login -> 200 over TLS"
+        if echo | openssl s_client -connect 127.0.0.1:50051 -alpn h2 2>/dev/null | grep -q "BEGIN CERTIFICATE"; then
+          echo "gRPC TLS OK: certificate presented on :50051"
+        else
+          echo "gRPC TLS smoke FAILED"; exit 1
+        fi
+
   ci:server:
-    desc: Full server CI check (vet, format, test with race detector)
+    desc: Full server CI check (vet, format, test with race detector, boot smoke)
     cmds:
       - task: vet:server
       - task: fmt:server
       - task: test:server:race
+      - task: ci:server:smoke
 
   ci:all:
     desc: Full CI — server checks + proto drift + firmware compile
