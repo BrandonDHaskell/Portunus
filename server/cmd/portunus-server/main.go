@@ -111,7 +111,7 @@ func main() {
 	defer expiryWorker.Stop()
 
 	// Provisioning service: handles device-initiated provisioning from PROVISIONING_CONSOLE modules.
-	provisionSvc := service.NewProvisionService(registry, memberAccessStore, roleStore, accessEventStore, credentialHashSecret, cfg.OperatorProvisioningEnabled, auditStore)
+	provisionSvc := service.NewProvisionService(registry, memberAccessStore, moduleAuthStore, roleStore, accessEventStore, credentialHashSecret, cfg.OperatorProvisioningEnabled, auditStore)
 
 	// Admin service for module and door management via REST API.
 	adminSvc := service.NewAdminService(moduleAdminStore, credentialHashSecret)

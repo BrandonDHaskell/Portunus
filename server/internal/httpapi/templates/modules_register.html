@@ -24,6 +24,13 @@
         placeholder="e.g. Front Door Reader">
     </div>
     <div class="form-group">
+      <label for="module_type">Module Type <span style="color:var(--danger)">*</span></label>
+      <select id="module_type" name="module_type" required>
+        <option value="access_control_unit" selected>Access Control Unit (ACU) — door reader</option>
+        <option value="provisioning_enrollment_unit">Provisioning &amp; Enrollment Unit (PEU) — enrollment console</option>
+      </select>
+    </div>
+    <div class="form-group">
       <label for="door_id">Assign to Door (optional)</label>
       <select id="door_id" name="door_id">
         <option value="">— Not assigned —</option>

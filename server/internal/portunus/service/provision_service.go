@@ -33,6 +33,7 @@ const capturePlaceholderRole = "guest"
 type ProvisionService struct {
 	registry                    *DeviceRegistry
 	memberStore                 store.MemberAccessStore
+	moduleAuthStore             store.ModuleAuthorizationStore // may be nil; auth copy is skipped if absent
 	roleStore                   store.RoleStore
 	accessEvents                store.AccessEventStore
 	auditStore                  store.AuditStore // may be nil; writes are best-effort
@@ -43,6 +44,7 @@ type ProvisionService struct {
 func NewProvisionService(
 	registry *DeviceRegistry,
 	memberStore store.MemberAccessStore,
+	moduleAuthStore store.ModuleAuthorizationStore,
 	roleStore store.RoleStore,
 	accessEvents store.AccessEventStore,
 	credentialHashSecret []byte,
@@ -52,6 +54,7 @@ func NewProvisionService(
 	return &ProvisionService{
 		registry:                    registry,
 		memberStore:                 memberStore,
+		moduleAuthStore:             moduleAuthStore,
 		roleStore:                   roleStore,
 		accessEvents:                accessEvents,
 		auditStore:                  auditStore,
@@ -229,6 +232,10 @@ func (s *ProvisionService) operatorEnroll(
 		return types.ProvisionCredentialResponse{}, fmt.Errorf("attach credential: %w", err)
 	}
 
+	// Copy operator's active module authorizations to the new member so they
+	// gain access to the same doors the operator badge can open.
+	s.copyOperatorAuthorizations(ctx, operatorUUID, memberUUID)
+
 	s.recordAudit(ctx, store.AuditEntry{
 		ActorUUID:    operatorUUID,
 		ActorType:    store.ActorTypeMember,
@@ -244,6 +251,25 @@ func (s *ProvisionService) operatorEnroll(
 		MemberUUID: memberUUID,
 		Status:     types.ProvisionStatusSuccess,
 	}, nil
+}
+
+// copyOperatorAuthorizations copies all non-revoked module authorizations from
+// the operator member to the newly enrolled member. Errors per grant are
+// swallowed — the member was already committed and an admin can fix gaps.
+func (s *ProvisionService) copyOperatorAuthorizations(ctx context.Context, fromUUID, toUUID string) {
+	if s.moduleAuthStore == nil {
+		return
+	}
+	auths, err := s.moduleAuthStore.ListByMember(ctx, fromUUID)
+	if err != nil {
+		return
+	}
+	for _, auth := range auths {
+		if auth.RevokedAt != nil {
+			continue
+		}
+		_ = s.moduleAuthStore.GrantAuthorization(ctx, toUUID, auth.ModuleID, fromUUID, auth.ExpiresAt, auth.TimeRestriction)
+	}
 }
 
 // resolveOperator validates the scan-1 operator credential.

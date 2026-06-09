@@ -42,6 +42,10 @@
       <input type="text" class="font-mono" value="{{if .DoorID}}{{.DoorID}}{{else}}— not assigned —{{end}}" readonly>
     </div>
     <div class="form-group">
+      <label>Module Type</label>
+      <input type="text" value="{{if eq .ModuleType "provisioning_enrollment_unit"}}Provisioning &amp; Enrollment Unit (PEU){{else}}Access Control Unit (ACU){{end}}" readonly>
+    </div>
+    <div class="form-group">
       <label>Commissioned</label>
       <input type="text" value="{{if .CommissionedAt}}{{.CommissionedAt}}{{else}}—{{end}}" readonly>
     </div>
@@ -84,9 +88,9 @@
   <h2 style="margin-top:0">Actions</h2>
   <div style="display:flex;flex-wrap:wrap;gap:.75rem;align-items:flex-start">
 
-    <!-- Assign to door -->
+    <!-- Assign to door / set module type -->
     {{if $.Doors}}
-    <form method="POST" action="/admin/ui/modules" style="display:flex;gap:.5rem;align-items:flex-end">
+    <form method="POST" action="/admin/ui/modules" style="display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap">
       <input type="hidden" name="module_id" value="{{.ModuleID}}">
       <input type="hidden" name="display_name" value="{{.DisplayName}}">
       <div class="form-group" style="margin:0">
@@ -98,6 +102,13 @@
             {{.Name}} ({{.DoorID}})
           </option>
           {{end}}
+        </select>
+      </div>
+      <div class="form-group" style="margin:0">
+        <label for="module_type_detail">Module Type</label>
+        <select id="module_type_detail" name="module_type">
+          <option value="access_control_unit" {{if ne $.Module.ModuleType "provisioning_enrollment_unit"}}selected{{end}}>ACU — door reader</option>
+          <option value="provisioning_enrollment_unit" {{if eq $.Module.ModuleType "provisioning_enrollment_unit"}}selected{{end}}>PEU — enrollment console</option>
         </select>
       </div>
       <button class="btn btn-secondary" type="submit">Save</button>
