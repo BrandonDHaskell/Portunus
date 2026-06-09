@@ -366,7 +366,7 @@ openssl rand -hex 32   # → dev credential hash secret
 openssl rand -hex 32   # → prod credential hash secret
 ```
 
-- **Dev:** Set `PORTUNUS_HMAC_SECRET` and `PORTUNUS_CREDENTIAL_HASH_SECRET` in the dev machine's server environment. `PORTUNUS_HMAC_SECRET` also goes in `.env` so `task firmware:build:dev` can inject it.
+- **Local:** Set `PORTUNUS_HMAC_SECRET` and `PORTUNUS_CREDENTIAL_HASH_SECRET` in the dev machine's server environment. `PORTUNUS_HMAC_SECRET` also goes in `.env` so `task firmware:build:dev` can inject it.
 - **Prod:** Set both secrets in `/etc/portunus/portunus.env` on the Pi. `PORTUNUS_HMAC_SECRET` also goes in the repo-root `.env` so `task firmware:build:prod` can inject it into the firmware.
 
 ### TLS certificates per environment

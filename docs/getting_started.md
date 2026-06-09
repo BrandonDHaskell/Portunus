@@ -61,11 +61,11 @@ go version    # should print go1.24 or newer
 task --version
 ```
 
-### 3. Start the server in dev mode
+### 3. Start the server in local mode
 
 ```bash
 cd server
-PORTUNUS_ENV=dev PORTUNUS_ALLOW_ALL=true go run ./cmd/portunus-server
+PORTUNUS_ENV=local PORTUNUS_ALLOW_ALL=true go run ./cmd/portunus-server
 ```
 
 The server starts on `:8080`. It seeds a default `door-001` module automatically and grants all credential checks. **Leave this terminal open.**
