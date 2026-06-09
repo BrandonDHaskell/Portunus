@@ -126,7 +126,26 @@ func main() {
 	adminUserSvc := service.NewAdminUserService(adminUserStore, roleStore)
 	roleSvc := service.NewRoleService(roleStore)
 
-	tlsEnabled := cfg.TLSCertFile != "" && cfg.TLSKeyFile != ""
+	// Acquire the serving certificate once. prod loads it from PEM files; ci
+	// generates an ephemeral self-signed cert in-process. Both the HTTP and the
+	// gRPC listener serve with this same certificate.
+	var servingCert tls.Certificate
+	tlsEnabled := false
+	switch {
+	case cfg.TLSCertFile != "" && cfg.TLSKeyFile != "":
+		c, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+		if err != nil {
+			logger.Fatalf("TLS cert load error: %v", err)
+		}
+		servingCert, tlsEnabled = c, true
+	case cfg.Env == config.EnvCI:
+		c, err := config.EphemeralCert()
+		if err != nil {
+			logger.Fatalf("ci ephemeral cert error: %v", err)
+		}
+		servingCert, tlsEnabled = c, true
+		logger.Printf("TLS: ephemeral self-signed cert (ci profile, in-memory)")
+	}
 
 	// HTTP
 	srv := httpapi.NewServer(httpapi.Dependencies{
@@ -148,14 +167,14 @@ func main() {
 	})
 
 	go func() {
-		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+		if tlsEnabled {
 			logger.Printf("listening (TLS) on %s", cfg.HTTPAddr)
-			if err := srv.StartTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil {
+			if err := srv.StartTLSConfig(servingCert); err != nil {
 				logger.Printf("server error: %v", err)
 				stop()
 			}
 		} else {
-			logger.Printf("listening (plain HTTP — not recommended for production) on %s", cfg.HTTPAddr)
+			logger.Printf("listening (plain HTTP, not recommended for production) on %s", cfg.HTTPAddr)
 			if err := srv.Start(); err != nil {
 				logger.Printf("server error: %v", err)
 				stop()
@@ -190,14 +209,10 @@ func main() {
 			}),
 		}
 
-		// TLS for gRPC — uses the same cert/key as the HTTP server.
-		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
-			cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
-			if err != nil {
-				logger.Fatalf("gRPC TLS cert load error: %v", err)
-			}
+		// TLS for gRPC: the same certificate the HTTP server serves.
+		if tlsEnabled {
 			opts = append(opts, grpc.Creds(credentials.NewTLS(&tls.Config{
-				Certificates: []tls.Certificate{cert},
+				Certificates: []tls.Certificate{servingCert},
 				MinVersion:   tls.VersionTLS12,
 				NextProtos:   []string{"h2"},
 			})))

@@ -51,20 +51,20 @@ The community-proven approach (used in `chrisomatic/esp-grpc` and Espressif's ow
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│                    gRPC Wire Format                       │
+│                    gRPC Wire Format                      │
 │                                                          │
 │  HTTP/2 HEADERS frame:                                   │
 │    :method     = POST                                    │
 │    :scheme     = https                                   │
 │    :path       = /portunus.v1.PortunusService/...        │
-│    content-type = application/grpc                        │
+│    content-type = application/grpc                       │
 │    te          = trailers                                │
 │                                                          │
 │  HTTP/2 DATA frame:                                      │
 │    ┌─────────┬──────────────┬────────────────────────┐   │
-│    │ 1 byte  │   4 bytes    │     N bytes             │   │
-│    │ compress│ msg length   │ protobuf payload        │   │
-│    │ (0x00)  │ (big-endian) │ (Nanopb-encoded)        │   │
+│    │ 1 byte  │   4 bytes    │     N bytes            │   │
+│    │ compress│ msg length   │ protobuf payload       │   │
+│    │ (0x00)  │ (big-endian) │ (Nanopb-encoded)       │   │
 │    └─────────┴──────────────┴────────────────────────┘   │
 │                                                          │
 │  HTTP/2 HEADERS frame (trailers):                        │
