@@ -462,4 +462,4 @@ Those may be good next steps, but they are not the current implemented baseline.
 - [Server setup](setup_server.md)
 - [Firmware setup](setup_firmware.md)
 - [Access module setup and architecture](../access_module/README.md)
-- [Shared secrets setup](../access_module/shared_secrets_setup.md)
+- [Shared secrets setup](shared_secrets_setup.md)

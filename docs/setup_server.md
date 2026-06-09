@@ -101,7 +101,7 @@ The server is configured entirely through environment variables. No config file 
 
 | Variable | Description | Example |
 |---|---|---|
-| `PORTUNUS_ENV` | `dev` or `prod`. Dev mode seeds the database with a default module and door on startup. Prod mode skips seeding. | `prod` |
+| `PORTUNUS_ENV` | `local`, `ci`, or `prod`. Local mode seeds the database with a default module and door on startup. Prod mode skips seeding. | `prod` |
 | `PORTUNUS_HMAC_SECRET` | Pre-shared key for HMAC-SHA256 request signing. Every device endpoint POST must include a valid `X-Portunus-Sig` header computed with this secret. Must match `CONFIG_PORTUNUS_HMAC_SECRET` in the firmware. Generate with `openssl rand -hex 32`. | `a3f1...` (64 hex chars) |
 | `PORTUNUS_CREDENTIAL_HASH_SECRET` | HMAC key used to hash credential IDs before storage. Prevents rainbow-table attacks against a stolen database. Generate with `openssl rand -hex 32`. Required in prod — server refuses to start without it. | `c9d4...` (64 hex chars) |
 | `PORTUNUS_TLS_CERT_FILE` | Path to the PEM-encoded server certificate. | `./certs/server.pem` |
@@ -114,20 +114,20 @@ The server is configured entirely through environment variables. No config file 
 | `PORTUNUS_HTTP_ADDR` | `:8080` | Listen address for the HTTP/HTTPS server. |
 | `PORTUNUS_GRPC_ADDR` | *(empty — disabled)* | Listen address for the gRPC server. Set to `:50051` to enable. |
 | `PORTUNUS_DB_PATH` | `./data/portunus.db` | Path to the SQLite database file. The parent directory is created automatically. |
-| `PORTUNUS_KNOWN_MODULES` | *(empty)* | Comma-separated module IDs to pre-register in dev mode (e.g. `door-001,door-002`). Only used when `PORTUNUS_ENV=dev`. |
+| `PORTUNUS_KNOWN_MODULES` | *(empty)* | Comma-separated module IDs to pre-register in local mode (e.g. `door-001,door-002`). Only used when `PORTUNUS_ENV=local`. |
 | `PORTUNUS_ALLOW_ALL` | `false` | When `true`, all credentials are granted access. **Dev/testing only.** |
 | `PORTUNUS_ALLOWED_CREDENTIAL_IDS` | *(empty)* | Comma-separated raw credential IDs for the legacy env-var allowlist. Superseded by the DB-backed member + authorization path. |
 | `PORTUNUS_HEARTBEAT_RETENTION_DAYS` | `30` | Heartbeat records older than this are pruned automatically. Set to `0` to keep forever. |
 | `PORTUNUS_PRUNE_INTERVAL_HOURS` | `6` | How often the background heartbeat pruner runs. |
 | `PORTUNUS_EXPIRY_WORKER_INTERVAL_MINUTES` | `60` | How often the background member expiry sweep runs. |
 
-### Dev quick-start (minimal)
+### Local quick-start (minimal)
 
 For local development with no TLS and no auth enforcement, you can run with just:
 
 ```bash
 cd server
-PORTUNUS_ENV=dev PORTUNUS_ALLOW_ALL=true go run ./cmd/portunus-server
+PORTUNUS_ENV=local PORTUNUS_ALLOW_ALL=true go run ./cmd/portunus-server
 ```
 
 This starts the server on `:8080` with plain HTTP, seeds a default `door-001` module, and grants all credential checks. The database is created at `./data/portunus.db`.
@@ -346,7 +346,7 @@ Once the server is running, verify it responds correctly.
 
 ### Health check (heartbeat endpoint)
 
-Without HMAC enforcement (dev mode):
+Without HMAC enforcement (local mode):
 
 ```bash
 curl -s -X POST http://localhost:8080/v1/heartbeat \
@@ -439,7 +439,7 @@ curl -s -b /tmp/portunus-cookies.txt \
   --cacert certs/ca.pem | jq .
 ```
 
-For plain HTTP dev mode, omit `--cacert certs/ca.pem` and replace `https://localhost:8443` with `http://localhost:8080`.
+For plain HTTP local mode, omit `--cacert certs/ca.pem` and replace `https://localhost:8443` with `http://localhost:8080`.
 
 #### Change the bootstrap password
 
@@ -472,9 +472,9 @@ See [docs/api.md](api.md) for the full endpoint reference.
 
 Before an ESP32 module can receive access decisions from the server, it must be registered (commissioned). The server rejects heartbeats and access requests from unregistered modules with `unknown_module`.
 
-### Dev mode — automatic
+### Local mode — automatic
 
-When `PORTUNUS_ENV=dev`, the server auto-seeds a module with `module_id: door-001` on startup. If your firmware's `CONFIG_PORTUNUS_MODULE_ID` is set to `door-001`, no manual registration is needed during development.
+When `PORTUNUS_ENV=local`, the server auto-seeds a module with `module_id: door-001` on startup. If your firmware's `CONFIG_PORTUNUS_MODULE_ID` is set to `door-001`, no manual registration is needed during development.
 
 ### Production mode — manual registration required
 
@@ -526,15 +526,15 @@ curl -s -b /tmp/portunus-cookies.txt \
   --cacert certs/ca.pem | jq .
 ```
 
-For plain HTTP dev mode, omit `--cacert certs/ca.pem` and replace `https://localhost:8443` with `http://localhost:8080`.
+For plain HTTP local mode, omit `--cacert certs/ca.pem` and replace `https://localhost:8443` with `http://localhost:8080`.
 
 ---
 
 ## Dev vs. production differences
 
-| Concern | Dev | Production |
+| Concern | Local | Production |
 |---|---|---|
-| `PORTUNUS_ENV` | `dev` | `prod` |
+| `PORTUNUS_ENV` | `local` | `prod` |
 | TLS | Optional (plain HTTP on `:8080`) | Required (`PORTUNUS_TLS_CERT_FILE` + `PORTUNUS_TLS_KEY_FILE`) |
 | HMAC signing | Optional (can omit `PORTUNUS_HMAC_SECRET`) | Required — rejects unsigned device requests with 401 |
 | Credential hash secret | Optional (can omit `PORTUNUS_CREDENTIAL_HASH_SECRET`) | Required — server refuses to start without it |
@@ -584,7 +584,7 @@ All server-related commands from the project `Taskfile.yml`:
 
 **"missing_signature" (HTTP 401) on device requests** — `PORTUNUS_HMAC_SECRET` is set on the server but the device is not sending the `X-Portunus-Sig` header, or the secrets don't match. Verify the firmware's `CONFIG_PORTUNUS_HMAC_SECRET` matches the server's `PORTUNUS_HMAC_SECRET` exactly.
 
-**"unknown_module" in access responses** — The module ID in the request is not registered in the database. In dev mode, `PORTUNUS_KNOWN_MODULES` or the default `door-001` seeding handles this automatically. In production, register modules via the admin API: `POST /admin/v1/modules`.
+**"unknown_module" in access responses** — The module ID in the request is not registered in the database. In local mode, `PORTUNUS_KNOWN_MODULES` or the default `door-001` seeding handles this automatically. In production, register modules via the admin API: `POST /admin/v1/modules`.
 
 **Server starts but ESP32 can't connect** — Verify the server's listen address is `0.0.0.0` (or `:port` which listens on all interfaces), not `127.0.0.1`. Check that the firewall allows the port. On Debian: `sudo ufw allow 8443/tcp` (or whichever port you're using).
 

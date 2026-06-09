@@ -61,11 +61,11 @@ go version    # should print go1.24 or newer
 task --version
 ```
 
-### 3. Start the server in dev mode
+### 3. Start the server in local mode
 
 ```bash
 cd server
-PORTUNUS_ENV=dev PORTUNUS_ALLOW_ALL=true go run ./cmd/portunus-server
+PORTUNUS_ENV=local PORTUNUS_ALLOW_ALL=true go run ./cmd/portunus-server
 ```
 
 The server starts on `:8080`. It seeds a default `door-001` module automatically and grants all credential checks. **Leave this terminal open.**
@@ -159,6 +159,98 @@ A response of `"known": true` confirms the module is communicating with the serv
 
 ---
 
+## Post-Clone Setup
+
+A clone does not contain everything you need to run Portunus. What is missing falls into three buckets:
+
+- **Generated build output** (`build/`, `bin/`, `data/`). Created by the build and ignored by git. Nothing to do.
+- **Command-generated material.** TLS certificates (`task certs:generate`) and the firmware overlay files (`sdkconfig.defaults*`, committed) are produced by tooling, not copied by hand. The prod build also writes a temporary `sdkconfig.defaults.secret` and deletes it; that is machine-managed, leave it alone.
+- **Per-user files you create.** Secret and machine-specific config that cannot be committed: the repo-root `.env`, `server/.env.prod`, and your firmware device settings. These are covered below.
+
+The two non-secret server profiles, `server/.env.local` and `server/.env.ci`, are committed and ship in the clone. You do not create them; they are documented under "Server environment files" only so you know what they do.
+
+### Server environment files
+
+The server selects a runtime profile via `PORTUNUS_ENV`. Each profile has an env file under `server/`.
+
+| File | Committed? | Task | Profile behaviour |
+|---|---|---|---|
+| `server/.env.local` | Yes (no secrets) | `task run:server:local` | Plain HTTP on `:8080`, dev data seeded. Fast iteration. |
+| `server/.env.ci` | Yes (no secrets) | `task run:server:ci` | TLS + gRPC over an in-process ephemeral cert, in-memory DB. Used by CI. |
+| `server/.env.prod` | No — you create it | `task run:server:prod` | Hardened. Real certs and secrets. |
+
+`server/.env.local` and `server/.env.ci` already exist after cloning. Create `server/.env.prod` yourself for the mirror loop (production config pointed at localhost on your dev machine):
+
+```bash
+# server/.env.prod — gitignored, you create this. Holds real secrets.
+# Loaded by `task run:server:prod` together with the repo-root .env.
+# The Raspberry Pi does NOT use this file; it reads /etc/portunus/portunus.env
+# via systemd — see setup_server.md › Running as a systemd service.
+PORTUNUS_ENV=prod
+PORTUNUS_HTTP_ADDR=:8443
+PORTUNUS_GRPC_ADDR=:50051
+PORTUNUS_DB_PATH=./data/portunus.db
+# Cert paths are relative to server/, where the task runs (certs:generate writes to repo-root certs/):
+PORTUNUS_TLS_CERT_FILE=../certs/server.pem
+PORTUNUS_TLS_KEY_FILE=../certs/server.key
+PORTUNUS_HMAC_SECRET=<64-char hex, same value as the repo-root .env>
+PORTUNUS_CREDENTIAL_HASH_SECRET=<64-char hex>
+```
+
+Setting `PORTUNUS_ENV=prod` here is required: the server validates the prod profile at startup and refuses to boot without TLS, the HMAC secret, and the credential hash secret. A prod env that forgets `PORTUNUS_ENV=prod` would otherwise boot as `local`.
+
+### The shared secret and deploy targets (repo-root `.env`)
+
+The repo-root `.env` is loaded automatically by the Taskfile (`dotenv: ['.env']`) and carries two unrelated things: the shared HMAC secret injected into the prod firmware build, and your deployment targets.
+
+```bash
+# .env — repo root, gitignored. Create this yourself.
+
+# Shared HMAC secret. Use the SAME value on the server and in the firmware.
+# `task firmware:build:prod` injects this into the firmware at build time.
+PORTUNUS_HMAC_SECRET=<64-char hex>
+
+# Deploy targets — used by `task deploy:server`, `deploy:server:status`, `deploy:server:logs`.
+DEPLOY_HOST=pi@192.168.1.100
+DEPLOY_DIR=/opt/portunus
+DEPLOY_SERVICE=portunus-server
+```
+
+Generate the secret with `openssl rand -hex 32`. For HMAC and TLS in depth, including rotation, see [Shared secrets setup](shared_secrets_setup.md).
+
+### TLS certificates
+
+Generate a CA and server certificate for your server's LAN IP. Do this once the server IP is decided; you only regenerate if the IP changes.
+
+```bash
+task certs:generate -- --ip 192.168.1.100            # add --dns portunus.local if you have one
+```
+
+This writes `certs/ca.pem`, `certs/server.pem`, `certs/server.key`, and copies the CA into `access_module/certs/ca_cert.pem` for firmware embedding. For the full file list and TLS modes, see [TLS certificate setup](setup_server.md#tls-certificate-setup) and [Shared secrets setup](shared_secrets_setup.md).
+
+### Secrets
+
+Two secrets, both 32-byte hex. The HMAC secret is shared with the firmware (and goes in the repo-root `.env`, above); the credential hash secret is server-only.
+
+```bash
+openssl rand -hex 32   # → PORTUNUS_HMAC_SECRET (server + firmware + repo-root .env)
+openssl rand -hex 32   # → PORTUNUS_CREDENTIAL_HASH_SECRET (server only)
+```
+
+Record both. Keep them out of source control. Both are required in the `prod` profile.
+
+### Firmware device settings
+
+Firmware configuration is not a file you copy; it is set through ESP-IDF menuconfig and saved to `sdkconfig` (gitignored). Run:
+
+```bash
+task firmware:menuconfig
+```
+
+Under **Portunus Configuration**, set WiFi (`PORTUNUS_WIFI_SSID`, `PORTUNUS_WIFI_PASSWORD`), the module ID (`PORTUNUS_MODULE_ID`), the server host, TLS options, and the HMAC secret. For the full menuconfig reference and GPIO defaults, see [Firmware setup](setup_firmware.md).
+
+---
+
 ## Production setup
 
 TLS certificate pinning, HMAC request signing, and explicit module registration. The server and firmware share two values that must be configured together: the **server IP** (used in the TLS certificate) and the **HMAC secret**.
@@ -176,42 +268,22 @@ Follow [Install Go](setup_server.md#install-go) and [Install Task](setup_server.
 
 ### 3. Generate TLS certificates
 
-You need your server's LAN IP address before this step. Generating certs after the server IP is decided means you don't need to regenerate them unless the IP changes.
+You need your server's LAN IP before this step. Generate certs as described in [Post-Clone Setup › TLS certificates](#tls-certificates):
 
 ```bash
 task certs:generate -- --ip 192.168.1.100
 ```
 
-Replace `192.168.1.100` with your actual server IP. Optionally add a DNS name:
-
-```bash
-task certs:generate -- --ip 192.168.1.100 --dns portunus.local
-```
-
-This creates `certs/ca.pem`, `certs/server.pem`, `certs/server.key`, and copies the CA cert to `access_module/certs/ca_cert.pem` for firmware embedding. See [TLS certificate setup](setup_server.md#tls-certificate-setup) for the full file list.
-
 ### 4. Generate secrets
 
-Generate the HMAC secret (shared between server and firmware) and the credential hash secret (server-only):
-
-```bash
-openssl rand -hex 32   # → PORTUNUS_HMAC_SECRET
-openssl rand -hex 32   # → PORTUNUS_CREDENTIAL_HASH_SECRET
-```
-
-**Record both values.** You will use them in steps 5 and 9. Keep them out of source control.
+Generate the HMAC secret and the credential hash secret as described in [Post-Clone Setup › Secrets](#secrets). Record both; you use them in steps 5 and 9.
 
 ### 5. Start the server
 
-```bash
-export PORTUNUS_ENV=prod
-export PORTUNUS_HTTP_ADDR=:8443
-export PORTUNUS_TLS_CERT_FILE="$PWD/certs/server.pem"
-export PORTUNUS_TLS_KEY_FILE="$PWD/certs/server.key"
-export PORTUNUS_HMAC_SECRET=<your-hmac-secret-from-step-4>
-export PORTUNUS_CREDENTIAL_HASH_SECRET=<your-hash-secret-from-step-4>
+Put the production values in `server/.env.prod` and the shared HMAC secret in the repo-root `.env`, as described in [Post-Clone Setup › Server environment files](#server-environment-files). Then start the server:
 
-cd server && go run ./cmd/portunus-server
+```bash
+task run:server:prod
 ```
 
 On first start, copy the bootstrap admin password from the server output. See [Production example](setup_server.md#production-example) for the full environment variable reference, and [Running as a systemd service](setup_server.md#running-as-a-systemd-service) for a persistent deployment on a Raspberry Pi.
@@ -258,14 +330,7 @@ cd esp-idf
 
 ### 9. Create the .env file
 
-The production firmware build reads `PORTUNUS_HMAC_SECRET` from a `.env` file in the repo root:
-
-```bash
-# .env — repo root, gitignored
-PORTUNUS_HMAC_SECRET=<same-hmac-secret-as-step-4>
-```
-
-Use the **same value** you set on the server in step 5. See [Dev and prod overlay builds](setup_firmware.md#dev-and-prod-overlay-builds).
+The production firmware build reads `PORTUNUS_HMAC_SECRET` from the repo-root `.env`. If you have not created it yet, see [Post-Clone Setup › The shared secret and deploy targets](#the-shared-secret-and-deploy-targets-repo-root-env). Use the **same value** you set on the server in step 5.
 
 ### 10. Configure the firmware
 

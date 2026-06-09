@@ -543,7 +543,7 @@ This design reduces SQLite write contention and keeps multi-step writes grouped 
 
 Not every write in the codebase uses the worker.
 
-1. **`db.SeedDev()` writes directly** during startup seeding in dev mode before normal request handling begins.
+1. **`db.SeedDev()` writes directly** during startup seeding in local mode before normal request handling begins.
 2. Reads query the shared `*sql.DB` directly.
 
 So the most accurate statement for the current codebase is:
@@ -558,11 +558,11 @@ The code comments describe the intent clearly, but the exact behavior is determi
 
 ---
 
-## Dev seeding behavior
+## Local seeding behavior
 
-When `PORTUNUS_ENV=dev`, the server calls `db.SeedDev()` on startup.
+When `PORTUNUS_ENV=local`, the server calls `db.SeedDev()` on startup.
 
-Current dev seeding does the following:
+Current local seeding does the following:
 
 - Ensures a starter door exists:
   - `door_id = 'door_main'`

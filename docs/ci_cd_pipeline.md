@@ -75,18 +75,7 @@ ssh pi@<PI_IP> "echo ok"
 
 ### Pipeline configuration
 
-The deployment tasks need to know the Pi's address. Create a `.env` file in the repo root (gitignored) with your deployment target:
-
-```bash
-# .env — local deployment config (not committed)
-DEPLOY_HOST=pi@192.168.1.100
-DEPLOY_DIR=/opt/portunus
-DEPLOY_SERVICE=portunus-server
-
-# Required by task firmware:build:prod — injected into sdkconfig at build time.
-# Must match PORTUNUS_HMAC_SECRET in /etc/portunus/portunus.env on the Pi.
-PORTUNUS_HMAC_SECRET=<your-64-char-hex-hmac-secret>
-```
+The deploy tasks need the Pi's address (`DEPLOY_HOST` / `DEPLOY_DIR` / `DEPLOY_SERVICE`) and the prod firmware build needs the shared `PORTUNUS_HMAC_SECRET`. Both live in the repo-root `.env`, documented in [getting_started.md › Post-Clone Setup](getting_started.md#post-clone-setup).
 
 ---
 
@@ -366,7 +355,7 @@ openssl rand -hex 32   # → dev credential hash secret
 openssl rand -hex 32   # → prod credential hash secret
 ```
 
-- **Dev:** Set `PORTUNUS_HMAC_SECRET` and `PORTUNUS_CREDENTIAL_HASH_SECRET` in the dev machine's server environment. `PORTUNUS_HMAC_SECRET` also goes in `.env` so `task firmware:build:dev` can inject it.
+- **Local:** Set `PORTUNUS_HMAC_SECRET` and `PORTUNUS_CREDENTIAL_HASH_SECRET` in the dev machine's server environment. `PORTUNUS_HMAC_SECRET` also goes in `.env` so `task firmware:build:dev` can inject it.
 - **Prod:** Set both secrets in `/etc/portunus/portunus.env` on the Pi. `PORTUNUS_HMAC_SECRET` also goes in the repo-root `.env` so `task firmware:build:prod` can inject it into the firmware.
 
 ### TLS certificates per environment
@@ -485,22 +474,7 @@ The following targets are defined in `Taskfile.yml`. The Taskfile loads `.env` a
 
 ## .env file
 
-Create this file in the repo root. It is gitignored and contains machine-specific deployment config:
-
-```bash
-# .env — local deployment config (do not commit)
-#
-# Used by: task deploy:server, deploy:server:status, deploy:server:logs
-DEPLOY_HOST=pi@192.168.1.100
-DEPLOY_DIR=/opt/portunus
-DEPLOY_SERVICE=portunus-server
-```
-
-Add `.env` to `.gitignore` if it's not already there:
-
-```bash
-echo '.env' >> .gitignore
-```
+The repo-root `.env` (deploy targets plus the firmware HMAC secret) is documented once in [getting_started.md › Post-Clone Setup](getting_started.md#post-clone-setup). It is gitignored and loaded automatically by the Taskfile.
 
 ---
 

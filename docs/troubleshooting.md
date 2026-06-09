@@ -97,14 +97,7 @@ That script creates `certs/ca.pem` and copies it to `access_module/certs/ca_cert
 
 **`task firmware:build:prod` fails: `PORTUNUS_HMAC_SECRET must be set in .env`**
 
-The production build reads the HMAC secret from a `.env` file in the repo root. Create it:
-
-```bash
-# .env — repo root
-PORTUNUS_HMAC_SECRET=<your-64-char-hex-secret>
-```
-
-Use the same value as `PORTUNUS_HMAC_SECRET` on the server. See [Dev and prod overlay builds](setup_firmware.md#dev-and-prod-overlay-builds).
+The production build reads the HMAC secret from the repo-root `.env`. Create it as described in [getting_started.md › Post-Clone Setup](getting_started.md#post-clone-setup), using the same value as `PORTUNUS_HMAC_SECRET` on the server.
 
 ---
 

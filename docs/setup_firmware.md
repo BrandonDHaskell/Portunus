@@ -231,20 +231,7 @@ The root `Taskfile.yml` defines:
 
 All four overlay files (`sdkconfig.defaults`, `sdkconfig.defaults.dev`, `sdkconfig.defaults.prod`, `sdkconfig.defaults.ci`) are committed in `access_module/`. The `firmware:build:prod` task reads `PORTUNUS_HMAC_SECRET` from `.env` via the Taskfile `dotenv` mechanism so the secret never needs to be committed to source control.
 
-Create a `.env` file in the **repo root** (not inside `access_module/`) before running the prod build:
-
-```bash
-# .env — repo root, gitignored
-PORTUNUS_HMAC_SECRET=<your-64-char-hex-secret>
-```
-
-Generate the secret value with:
-
-```bash
-openssl rand -hex 32
-```
-
-Use the same value for `PORTUNUS_HMAC_SECRET` on the server. The `.env` file is covered by the `*.env` entry in `.gitignore` — never commit it. If the variable is missing when you run `task firmware:build:prod`, the task will fail with an explicit error before writing any build files.
+Before running the prod build, the repo-root `.env` must contain `PORTUNUS_HMAC_SECRET`. The build injects it at build time and fails with an explicit error if it is missing. Create it as described in [getting_started.md › Post-Clone Setup](getting_started.md#post-clone-setup), using the same value as the server.
 
 ---
 

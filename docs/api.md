@@ -615,11 +615,11 @@ Register an RFID badge for an admin user. Requires `admin_user.edit` permission.
 
 ---
 
-## Quick Start (dev mode)
+## Quick Start (local mode)
 
 ```bash
 # Start the server
-PORTUNUS_ENV=dev PORTUNUS_ALLOW_ALL=true go run ./cmd/portunus-server
+PORTUNUS_ENV=local PORTUNUS_ALLOW_ALL=true go run ./cmd/portunus-server
 ```
 
 The server seeds a default `door-001` module and `door_main` door on startup.
