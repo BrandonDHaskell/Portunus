@@ -8,13 +8,44 @@ import (
 	"strings"
 )
 
+// Env is the server runtime profile. It selects validation strictness and a
+// few runtime behaviours (dev seeding, gRPC reflection). It is NOT the firmware
+// profile, which is a separate client-side axis.
+type Env string
+
+const (
+	// EnvLocal is the localhost iteration profile: relaxed, plain HTTP by
+	// default, dev data seeded. Formerly "dev".
+	EnvLocal Env = "local"
+	// EnvCI exercises the full TLS + gRPC transport against ephemeral,
+	// no-secret material so CI has parity with the firmware ci profile.
+	// Formerly "test".
+	EnvCI Env = "ci"
+	// EnvProd is the hardened deployment profile. Validate() rejects an
+	// unsafe prod boot.
+	EnvProd Env = "prod"
+)
+
+func parseEnv(s string) (Env, error) {
+	switch Env(strings.ToLower(strings.TrimSpace(s))) {
+	case EnvLocal:
+		return EnvLocal, nil
+	case EnvCI:
+		return EnvCI, nil
+	case EnvProd:
+		return EnvProd, nil
+	default:
+		return "", fmt.Errorf("PORTUNUS_ENV %q is not valid: must be one of: local, ci, prod", s)
+	}
+}
+
 type Config struct {
 	HTTPAddr string
-	GRPCAddr string // e.g. ":50051" — empty means gRPC listener disabled
+	GRPCAddr string // e.g. ":50051"; empty means the gRPC listener is disabled
 
 	// DB
-	Env    string // "dev" | "prod"
-	DBPath string // e.g. "./data/portunus.db"
+	Env    Env
+	DBPath string // e.g. "./data/portunus.db"; ":memory:" for an ephemeral DB
 
 	KnownModules []string
 	AllowAll     bool
@@ -26,101 +57,90 @@ type Config struct {
 	// Expiry worker
 	ExpiryWorkerIntervalMinutes int // how often member expiry sweeps run (default 60)
 
-	// TLS
-	// When TLSCertFile and TLSKeyFile are both set, the server starts in
-	// HTTPS mode using ListenAndServeTLS.  Leave both empty to use plain
-	// HTTP (development only).
+	// TLS. When both files are set, the server serves HTTPS using them.
+	// When unset under the ci profile, the server generates an ephemeral
+	// self-signed cert in-process (see EphemeralCert). Under local, unset
+	// means plain HTTP.
 	TLSCertFile string
 	TLSKeyFile  string
 
-	// HMAC request authentication
-	// When non-empty, every inbound POST must include an X-Portunus-Sig
-	// header containing HMAC-SHA256(HMACSecret, request_body).  Requests
-	// with missing or invalid signatures are rejected with 401.
-	// Set to the same value as CONFIG_PORTUNUS_HMAC_SECRET in the firmware.
+	// HMAC request authentication. When non-empty, inbound device POSTs must
+	// carry a valid X-Portunus-Sig. Same value as CONFIG_PORTUNUS_HMAC_SECRET
+	// in the firmware.
 	HMACSecret string
 
-	// Credential hash secret for keyed HMAC-SHA256 credential ID hashing.
-	// When set, credential IDs are hashed with HMAC-SHA256(secret, credentialID)
-	// instead of bare SHA-256, preventing rainbow-table attacks on a stolen database.
-	// Generate with: openssl rand -hex 32
-	// Required in prod mode.
+	// CredentialHashSecret keys the HMAC-SHA256 credential-ID hashing.
+	// Generate with: openssl rand -hex 32. Required in prod.
 	CredentialHashSecret string
 
-	// OperatorProvisioningEnabled enables Path 2 (two-scan operator enrolment)
-	// in the provisioning service. Default off — set PORTUNUS_OPERATOR_PROVISIONING_ENABLED=true.
+	// OperatorProvisioningEnabled enables Path 2 (two-scan operator enrolment).
+	// Default off: set PORTUNUS_OPERATOR_PROVISIONING_ENABLED=true.
 	OperatorProvisioningEnabled bool
 }
 
-// Validate returns an error if the config is unsafe for prod mode.
-// In dev mode it always returns nil.
+// Validate enforces per-profile invariants.
+//   - prod: rejects any unsafe configuration (no TLS, no HMAC, AllowAll, no
+//     credential hash secret).
+//   - ci: requires the gRPC listener so CI actually exercises the transport.
+//     ci provides its own TLS cert in-process, so no secret material is required.
+//   - local: always valid.
 func (c Config) Validate() error {
-	if c.Env != "prod" {
+	switch c.Env {
+	case EnvProd:
+		var errs []error
+		if c.TLSCertFile == "" || c.TLSKeyFile == "" {
+			errs = append(errs, errors.New("prod requires TLS: set PORTUNUS_TLS_CERT_FILE and PORTUNUS_TLS_KEY_FILE"))
+		}
+		if c.HMACSecret == "" {
+			errs = append(errs, errors.New("prod requires HMAC auth: set PORTUNUS_HMAC_SECRET"))
+		}
+		if c.AllowAll {
+			errs = append(errs, errors.New("prod forbids PORTUNUS_ALLOW_ALL=true"))
+		}
+		if c.CredentialHashSecret == "" {
+			errs = append(errs, errors.New("prod requires a credential hash secret: set PORTUNUS_CREDENTIAL_HASH_SECRET"))
+		}
+		return errors.Join(errs...)
+	case EnvCI:
+		if c.GRPCAddr == "" {
+			return errors.New("ci requires the gRPC listener: set PORTUNUS_GRPC_ADDR (e.g. :50051) so CI exercises the gRPC transport")
+		}
+		return nil
+	default:
 		return nil
 	}
-
-	var errs []error
-	if c.TLSCertFile == "" || c.TLSKeyFile == "" {
-		errs = append(errs, errors.New("prod requires TLS: set PORTUNUS_TLS_CERT_FILE and PORTUNUS_TLS_KEY_FILE"))
-	}
-	if c.HMACSecret == "" {
-		errs = append(errs, errors.New("prod requires HMAC auth: set PORTUNUS_HMAC_SECRET"))
-	}
-	if c.AllowAll {
-		errs = append(errs, errors.New("prod forbids PORTUNUS_ALLOW_ALL=true"))
-	}
-	if c.CredentialHashSecret == "" {
-		errs = append(errs, errors.New("prod requires a credential hash secret: set PORTUNUS_CREDENTIAL_HASH_SECRET"))
-	}
-	return errors.Join(errs...)
 }
 
 // FromEnv reads configuration from environment variables.
-// It returns an error if PORTUNUS_ENV is set to an unrecognised value.
-// Valid values are "dev", "test", and "prod".
+// PORTUNUS_ENV defaults to "local"; an unrecognised value is an error.
 func FromEnv() (Config, error) {
-	addr := getenvDefault("PORTUNUS_HTTP_ADDR", ":8080")
-
-	env := strings.ToLower(getenvDefault("PORTUNUS_ENV", "dev"))
-	if env != "dev" && env != "test" && env != "prod" {
-		return Config{}, fmt.Errorf("PORTUNUS_ENV %q is not valid: must be one of: dev, test, prod", env)
+	env, err := parseEnv(getenvDefault("PORTUNUS_ENV", string(EnvLocal)))
+	if err != nil {
+		return Config{}, err
 	}
 
-	dbPath := getenvDefault("PORTUNUS_DB_PATH", "./data/portunus.db")
-
-	knownModules := splitCSV(os.Getenv("PORTUNUS_KNOWN_MODULES"))
 	allowAll := strings.EqualFold(os.Getenv("PORTUNUS_ALLOW_ALL"), "true") ||
 		os.Getenv("PORTUNUS_ALLOW_ALL") == "1"
-
-	retentionDays := getenvInt("PORTUNUS_HEARTBEAT_RETENTION_DAYS", 30)
-	pruneInterval := getenvInt("PORTUNUS_PRUNE_INTERVAL_HOURS", 6)
-	expiryInterval := getenvInt("PORTUNUS_EXPIRY_WORKER_INTERVAL_MINUTES", 60)
-
-	tlsCert := strings.TrimSpace(os.Getenv("PORTUNUS_TLS_CERT_FILE"))
-	tlsKey := strings.TrimSpace(os.Getenv("PORTUNUS_TLS_KEY_FILE"))
-	hmacSecret := os.Getenv("PORTUNUS_HMAC_SECRET")
-	grpcAddr := strings.TrimSpace(os.Getenv("PORTUNUS_GRPC_ADDR"))
-	credentialHashSecret := os.Getenv("PORTUNUS_CREDENTIAL_HASH_SECRET")
 	operatorProvisioning := strings.EqualFold(os.Getenv("PORTUNUS_OPERATOR_PROVISIONING_ENABLED"), "true") ||
 		os.Getenv("PORTUNUS_OPERATOR_PROVISIONING_ENABLED") == "1"
 
 	return Config{
-		HTTPAddr: addr,
-		GRPCAddr: grpcAddr,
+		HTTPAddr: getenvDefault("PORTUNUS_HTTP_ADDR", ":8080"),
+		GRPCAddr: strings.TrimSpace(os.Getenv("PORTUNUS_GRPC_ADDR")),
 		Env:      env,
-		DBPath:   dbPath,
+		DBPath:   getenvDefault("PORTUNUS_DB_PATH", "./data/portunus.db"),
 
-		KnownModules: knownModules,
+		KnownModules: splitCSV(os.Getenv("PORTUNUS_KNOWN_MODULES")),
 		AllowAll:     allowAll,
 
-		HeartbeatRetentionDays:      retentionDays,
-		PruneIntervalHours:          pruneInterval,
-		ExpiryWorkerIntervalMinutes: expiryInterval,
+		HeartbeatRetentionDays:      getenvInt("PORTUNUS_HEARTBEAT_RETENTION_DAYS", 30),
+		PruneIntervalHours:          getenvInt("PORTUNUS_PRUNE_INTERVAL_HOURS", 6),
+		ExpiryWorkerIntervalMinutes: getenvInt("PORTUNUS_EXPIRY_WORKER_INTERVAL_MINUTES", 60),
 
-		TLSCertFile:          tlsCert,
-		TLSKeyFile:           tlsKey,
-		HMACSecret:           hmacSecret,
-		CredentialHashSecret: credentialHashSecret,
+		TLSCertFile:          strings.TrimSpace(os.Getenv("PORTUNUS_TLS_CERT_FILE")),
+		TLSKeyFile:           strings.TrimSpace(os.Getenv("PORTUNUS_TLS_KEY_FILE")),
+		HMACSecret:           os.Getenv("PORTUNUS_HMAC_SECRET"),
+		CredentialHashSecret: os.Getenv("PORTUNUS_CREDENTIAL_HASH_SECRET"),
 
 		OperatorProvisioningEnabled: operatorProvisioning,
 	}, nil
