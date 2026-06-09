@@ -10,16 +10,12 @@ import (
 )
 
 type Config struct {
-	Path string // e.g. "./data/portunus.db"
-	Env  string // "dev" | "prod"
+	Path string // e.g. "./data/portunus.db"; ":memory:" for an ephemeral DB
 }
 
 func Open(ctx context.Context, cfg Config) (*sql.DB, error) {
 	if cfg.Path == "" {
 		cfg.Path = "./data/portunus.db"
-	}
-	if cfg.Env == "" {
-		cfg.Env = "dev"
 	}
 
 	// Ensure DB parent directory exists.

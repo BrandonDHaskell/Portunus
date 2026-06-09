@@ -42,19 +42,19 @@ func main() {
 	defer stop()
 
 	// --- Open / migrate / (dev) seed SQLite
-	dbConn, err := db.Open(ctx, db.Config{Path: cfg.DBPath, Env: cfg.Env})
+	dbConn, err := db.Open(ctx, db.Config{Path: cfg.DBPath})
 	if err != nil {
 		logger.Fatalf("db open/init error: %v", err)
 	}
 	defer dbConn.Close()
 
-	if cfg.Env == "dev" {
+	if cfg.Env == config.EnvLocal {
 		if err := db.SeedDev(ctx, dbConn, db.SeedDevOptions{KnownModules: cfg.KnownModules}); err != nil {
 			logger.Fatalf("db seed error: %v", err)
 		}
 	}
-	// "test" intentionally skips dev seeding — the test environment manages
-	// its own fixture data.
+	// "ci" and "prod" intentionally skip dev seeding — CI manages its own
+	// fixtures and prod must never auto-seed.
 	writer := db.NewWorker(dbConn)
 	defer writer.Close()
 
@@ -214,7 +214,7 @@ func main() {
 			ProvisionService: provisionSvc,
 		})
 		pb.RegisterPortunusServiceServer(grpcServer, grpcHandler)
-		if cfg.Env != "prod" {
+		if cfg.Env != config.EnvProd {
 			reflection.Register(grpcServer)
 			logger.Printf("gRPC reflection: ENABLED (non-prod)")
 		} else {
