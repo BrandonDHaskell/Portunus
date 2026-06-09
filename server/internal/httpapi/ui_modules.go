@@ -106,6 +106,7 @@ func (s *Server) handleUIModulesRegister(w http.ResponseWriter, r *http.Request)
 		ModuleID:    r.FormValue("module_id"),
 		DoorID:      r.FormValue("door_id"),
 		DisplayName: r.FormValue("display_name"),
+		ModuleType:  r.FormValue("module_type"),
 	}
 
 	mod, err := s.adminService.RegisterModule(r.Context(), req)
@@ -118,6 +119,8 @@ func (s *Server) handleUIModulesRegister(w http.ResponseWriter, r *http.Request)
 			msg = "Select a door to commission this module."
 		case errors.Is(err, service.ErrDoorNotFound):
 			msg = "The selected door no longer exists."
+		case errors.Is(err, service.ErrInvalidModuleType):
+			msg = "Invalid module type."
 		default:
 			s.logger.Printf("ui register module: %v", err)
 		}

@@ -36,21 +36,23 @@ func newProvisionSvc(t *testing.T, operatorProvisioningEnabled bool) (
 	store.MemberAccessStore,
 	store.RoleStore,
 	*memory.AccessEventStore,
+	store.ModuleAuthorizationStore,
 ) {
 	t.Helper()
 	conn, writer := openSvcTestDB(t)
 	seedModule(t, conn, testModuleID)
 
 	maStore := sqlitestore.NewMemberAccessStore(conn, writer)
+	mauthStore := sqlitestore.NewModuleAuthorizationStore(conn, writer)
 	roleStore := sqlitestore.NewRoleStore(conn, writer)
 	eventStore := memory.NewAccessEventStore()
 	registry := service.NewDeviceRegistry(memory.NewDeviceStore([]string{testModuleID}))
 
 	svc := service.NewProvisionService(
-		registry, maStore, roleStore, eventStore,
+		registry, maStore, mauthStore, roleStore, eventStore,
 		testSecret, operatorProvisioningEnabled, nil,
 	)
-	return svc, maStore, roleStore, eventStore
+	return svc, maStore, roleStore, eventStore, mauthStore
 }
 
 func seedOperatorMember(
@@ -130,7 +132,7 @@ VALUES ('acu-module', 1, ?, ?, ?)`, now, now, now); err != nil {
 	registry := service.NewDeviceRegistry(deviceStore)
 
 	svc := service.NewProvisionService(
-		registry, maStore, roleStore, eventStore,
+		registry, maStore, nil, roleStore, eventStore,
 		testSecret, false, nil,
 	)
 
@@ -150,7 +152,7 @@ VALUES ('acu-module', 1, ?, ?, ?)`, now, now, now); err != nil {
 // ── Path 1: capture (no operator UID) ─────────────────────────────────────────
 
 func TestProvision_Capture_CreatesNewPendingMember(t *testing.T) {
-	svc, maStore, _, _ := newProvisionSvc(t, false)
+	svc, maStore, _, _, _ := newProvisionSvc(t, false)
 	credUID := []byte{0x04, 0xAA, 0xBB, 0xCC}
 
 	resp, err := svc.Provision(context.Background(), captureReq(credUID))
@@ -174,7 +176,7 @@ func TestProvision_Capture_CreatesNewPendingMember(t *testing.T) {
 }
 
 func TestProvision_Capture_DuplicateScan_ReturnsDuplicatePending(t *testing.T) {
-	svc, _, _, _ := newProvisionSvc(t, false)
+	svc, _, _, _, _ := newProvisionSvc(t, false)
 	credUID := []byte{0x04, 0x11, 0x22, 0x33}
 
 	resp1, err := svc.Provision(context.Background(), captureReq(credUID))
@@ -194,7 +196,7 @@ func TestProvision_Capture_DuplicateScan_ReturnsDuplicatePending(t *testing.T) {
 // ── Path 2: operator enrolment disabled ───────────────────────────────────────
 
 func TestProvision_OperatorEnroll_DisabledByFlag_Unauthorized(t *testing.T) {
-	svc, _, _, _ := newProvisionSvc(t, false /* disabled */)
+	svc, _, _, _, _ := newProvisionSvc(t, false /* disabled */)
 	operatorUID := []byte{0x04, 0xDE, 0xAD, 0xBE}
 	memberUID := []byte{0x04, 0x99, 0x88, 0x77}
 
@@ -210,7 +212,7 @@ func TestProvision_OperatorEnroll_DisabledByFlag_Unauthorized(t *testing.T) {
 // ── Path 2: operator not found — hard block, no record created ─────────────────
 
 func TestProvision_OperatorNotFound_HardBlocked_NoPendingCreated(t *testing.T) {
-	svc, maStore, _, _ := newProvisionSvc(t, true)
+	svc, maStore, _, _, _ := newProvisionSvc(t, true)
 	operatorUID := []byte{0x04, 0xFF, 0xFF, 0xFF}
 	memberUID := []byte{0x04, 0x01, 0x02, 0x03}
 
@@ -235,7 +237,7 @@ func TestProvision_OperatorNotFound_HardBlocked_NoPendingCreated(t *testing.T) {
 // ── Path 2: operator found but inactive/no-permission ─────────────────────────
 
 func TestProvision_OperatorPending_Unauthorized(t *testing.T) {
-	svc, maStore, _, eventStore := newProvisionSvc(t, true)
+	svc, maStore, _, eventStore, _ := newProvisionSvc(t, true)
 	operatorUID := []byte{0x04, 0x11, 0x22, 0x33}
 	memberUID := []byte{0x04, 0x01, 0x02, 0x03}
 	// active=false → provisioning_status = pending_authorization; inactive check fires before perm check
@@ -254,7 +256,7 @@ func TestProvision_OperatorPending_Unauthorized(t *testing.T) {
 }
 
 func TestProvision_OperatorDisabled_Unauthorized(t *testing.T) {
-	svc, maStore, roleStore, eventStore := newProvisionSvc(t, true)
+	svc, maStore, roleStore, eventStore, _ := newProvisionSvc(t, true)
 	operatorUID := []byte{0x04, 0x44, 0x55, 0x66}
 	memberUID := []byte{0x04, 0x01, 0x02, 0x03}
 	grantProvisionPermission(t, roleStore, "operator")
@@ -273,7 +275,7 @@ func TestProvision_OperatorDisabled_Unauthorized(t *testing.T) {
 }
 
 func TestProvision_OperatorNoProvisionPermission_Unauthorized(t *testing.T) {
-	svc, maStore, _, eventStore := newProvisionSvc(t, true)
+	svc, maStore, _, eventStore, _ := newProvisionSvc(t, true)
 	operatorUID := []byte{0x04, 0xAA, 0xBB, 0xCC}
 	memberUID := []byte{0x04, 0x01, 0x02, 0x03}
 	// guest role has no permissions by default
@@ -294,7 +296,7 @@ func TestProvision_OperatorNoProvisionPermission_Unauthorized(t *testing.T) {
 // ── Path 2: success ───────────────────────────────────────────────────────────
 
 func TestProvision_OperatorEnroll_Success(t *testing.T) {
-	svc, maStore, roleStore, _ := newProvisionSvc(t, true)
+	svc, maStore, roleStore, _, _ := newProvisionSvc(t, true)
 	operatorUID := []byte{0x04, 0xDE, 0xAD, 0xBE}
 	memberUID := []byte{0x04, 0x99, 0x88, 0x77}
 	grantProvisionPermission(t, roleStore, "operator")
@@ -344,8 +346,9 @@ func TestProvision_OperatorEnroll_RoleDefaultsApplied(t *testing.T) {
 		t.Fatalf("SetRolePermissions: %v", err)
 	}
 
+	mauthStore := sqlitestore.NewModuleAuthorizationStore(conn, writer)
 	svc := service.NewProvisionService(
-		registry, maStore, roleStore, memory.NewAccessEventStore(),
+		registry, maStore, mauthStore, roleStore, memory.NewAccessEventStore(),
 		testSecret, true, nil,
 	)
 
@@ -375,5 +378,68 @@ func TestProvision_OperatorEnroll_RoleDefaultsApplied(t *testing.T) {
 	}
 	if rec.ExpiresAt == nil {
 		t.Error("expected ExpiresAt to be set from role default, got nil")
+	}
+}
+
+// ── authorization copy ────────────────────────────────────────────────────────
+
+// TestProvision_OperatorEnroll_CopiesModuleAuthorizations verifies that the
+// new member is granted access to every module the operator currently has an
+// active (non-revoked) authorization on.
+func TestProvision_OperatorEnroll_CopiesModuleAuthorizations(t *testing.T) {
+	ctx := context.Background()
+
+	conn, writer := openSvcTestDB(t)
+	doorA, doorB := "door-alpha", "door-beta"
+	seedModule(t, conn, testModuleID)
+	seedModule(t, conn, doorA)
+	seedModule(t, conn, doorB)
+
+	maStore := sqlitestore.NewMemberAccessStore(conn, writer)
+	mauthStore := sqlitestore.NewModuleAuthorizationStore(conn, writer)
+	roleStore := sqlitestore.NewRoleStore(conn, writer)
+	registry := service.NewDeviceRegistry(memory.NewDeviceStore([]string{testModuleID}))
+	svc := service.NewProvisionService(
+		registry, maStore, mauthStore, roleStore, memory.NewAccessEventStore(),
+		testSecret, true, nil,
+	)
+
+	if err := roleStore.SetRolePermissions(ctx, "operator", []string{permissions.MemberProvision}); err != nil {
+		t.Fatalf("SetRolePermissions: %v", err)
+	}
+
+	operatorUID := []byte{0x04, 0xDE, 0xAD, 0x01}
+	memberUID := []byte{0x04, 0xDE, 0xAD, 0x02}
+	opUUID := seedOperatorMember(t, maStore, operatorUID, "operator", true, true)
+
+	if err := mauthStore.GrantAuthorization(ctx, opUUID, doorA, "", nil, ""); err != nil {
+		t.Fatalf("grant %s to operator: %v", doorA, err)
+	}
+	if err := mauthStore.GrantAuthorization(ctx, opUUID, doorB, "", nil, ""); err != nil {
+		t.Fatalf("grant %s to operator: %v", doorB, err)
+	}
+
+	resp, err := svc.Provision(ctx, enrollReq(operatorUID, memberUID))
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if resp.Status != types.ProvisionStatusSuccess {
+		t.Fatalf("expected success, got status=%q detail=%q", resp.Status, resp.Detail)
+	}
+
+	auths, err := mauthStore.ListByMember(ctx, resp.MemberUUID)
+	if err != nil {
+		t.Fatalf("ListByMember new member: %v", err)
+	}
+	got := make(map[string]bool)
+	for _, a := range auths {
+		if a.RevokedAt == nil {
+			got[a.ModuleID] = true
+		}
+	}
+	for _, want := range []string{doorA, doorB} {
+		if !got[want] {
+			t.Errorf("new member missing authorization for module %q", want)
+		}
 	}
 }

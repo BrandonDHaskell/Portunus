@@ -83,17 +83,45 @@
   <h2 style="margin-top:0">Actions</h2>
   <div style="display:flex;flex-wrap:wrap;gap:.75rem;align-items:flex-start">
 
-    <!-- Attach credential -->
-    {{if not .CredentialHash}}
+    <!-- Approve & Activate (pending_authorization only) -->
+    {{if eq .ProvisioningStatus "pending_authorization"}}
+    <form method="POST" action="/admin/ui/members/{{.UUID}}/approve"
+          style="display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap;border:1px solid var(--warning,#f59e0b);border-radius:6px;padding:.75rem;background:var(--warning-bg,#fffbeb)">
+      {{if $.Roles}}
+      <div class="form-group" style="margin:0">
+        <label for="approve_role_id">Role <span style="color:var(--danger)">*</span></label>
+        <select id="approve_role_id" name="role_id" required>
+          <option value="">— Select a role —</option>
+          {{range $.Roles}}
+          <option value="{{.RoleID}}" {{if eq .RoleID $.Member.RoleID}}selected{{end}}>{{.Name}}</option>
+          {{end}}
+        </select>
+      </div>
+      {{end}}
+      <div class="form-group" style="margin:0">
+        <label for="approve_expires_at">Hard Expiry (optional)</label>
+        <input id="approve_expires_at" name="expires_at" type="date">
+      </div>
+      <div class="form-group" style="margin:0">
+        <label for="approve_inactivity">Inactivity Limit (days, optional)</label>
+        <input id="approve_inactivity" name="inactivity_limit_days" type="number" min="1" style="width:8rem">
+      </div>
+      <button class="btn btn-primary" type="submit"
+        onclick="return confirm('Approve and activate this member?')">Approve &amp; Activate</button>
+    </form>
+    {{end}}
+
+    <!-- Attach / Replace credential -->
     <form method="POST" action="/admin/ui/members/{{.UUID}}/credential" style="display:flex;gap:.5rem;align-items:flex-end">
       <div class="form-group" style="margin:0">
-        <label for="credential_id">Attach Credential UID (e.g. 04:A3:2B:1C)</label>
+        <label for="credential_id">{{if .CredentialHash}}Replace{{else}}Attach{{end}} Credential UID (e.g. 04:A3:2B:1C)</label>
         <input id="credential_id" name="credential_id" type="text" class="font-mono"
           placeholder="XX:XX:XX:XX" maxlength="29" style="width:28rem">
       </div>
-      <button class="btn btn-primary" type="submit">Attach</button>
+      <button class="btn {{if .CredentialHash}}btn-secondary{{else}}btn-primary{{end}}" type="submit">
+        {{if .CredentialHash}}Replace{{else}}Attach{{end}}
+      </button>
     </form>
-    {{end}}
 
     <!-- Assign role -->
     {{if $.Roles}}
