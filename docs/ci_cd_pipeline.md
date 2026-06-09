@@ -29,7 +29,7 @@ The pipeline is driven entirely by [Task](https://taskfile.dev) targets defined 
   │                      Dev Machine                            │
   │                                                             │
   │  1. VALIDATE        task ci:all                             │
-  │     go vet, gofmt, tests (race), proto drift check,        │
+  │     go vet, gofmt, tests (race), proto drift check,         │
   │     firmware compile check                                  │
   │                          │                                  │
   │  2. BUILD               ▼                                   │

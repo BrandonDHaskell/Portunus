@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"log"
@@ -236,10 +237,26 @@ func (s *Server) Start() error {
 	return s.httpServer.ListenAndServe()
 }
 
-// StartTLS starts the server with TLS using the provided certificate and key files.
-// certFile and keyFile must be PEM-encoded.
+// StartTLSConfig starts the server with TLS using an in-memory certificate.
+// Both the prod path (cert loaded from PEM files) and the ci path (ephemeral
+// self-signed cert) converge here, so the handshake code exercised in CI is
+// the same code that serves prod. NextProtos is left to the standard library
+// so HTTP/2 and HTTP/1.1 are negotiated as before.
+func (s *Server) StartTLSConfig(cert tls.Certificate) error {
+	s.httpServer.TLSConfig = &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	}
+	return s.httpServer.ListenAndServeTLS("", "")
+}
+
+// StartTLS loads a PEM cert/key pair from disk and serves with it.
 func (s *Server) StartTLS(certFile, keyFile string) error {
-	return s.httpServer.ListenAndServeTLS(certFile, keyFile)
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return err
+	}
+	return s.StartTLSConfig(cert)
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
