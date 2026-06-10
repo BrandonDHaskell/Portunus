@@ -456,17 +456,17 @@ func (s *Server) uiMemberRoutes(mux *http.ServeMux) {
 
 	// Provision new member (must be registered before /{member_uuid} to avoid ambiguity)
 	mux.HandleFunc("GET /admin/ui/members/new",
-		perm(permissions.MemberProvision, s.handleUIMembersNew))
+		perm(permissions.MemberEnroll, s.handleUIMembersNew))
 	mux.HandleFunc("POST /admin/ui/members",
-		perm(permissions.MemberProvision, s.handleUIMembersCreate))
+		perm(permissions.MemberEnroll, s.handleUIMembersCreate))
 
 	// Member detail + actions
 	mux.HandleFunc("GET /admin/ui/members/{member_uuid}",
 		perm(permissions.MemberView, s.handleUIMembersDetail))
 	mux.HandleFunc("POST /admin/ui/members/{member_uuid}/approve",
-		perm(permissions.MemberProvision, s.handleUIMembersApprove))
+		perm(permissions.MemberEnroll, s.handleUIMembersApprove))
 	mux.HandleFunc("POST /admin/ui/members/{member_uuid}/credential",
-		perm(permissions.MemberProvision, s.handleUIMembersAttachCredential))
+		perm(permissions.MemberEnroll, s.handleUIMembersAttachCredential))
 	mux.HandleFunc("POST /admin/ui/members/{member_uuid}/role",
 		perm(permissions.MemberAssignRole, s.handleUIMembersAssignRole))
 	mux.HandleFunc("POST /admin/ui/members/{member_uuid}/disable",

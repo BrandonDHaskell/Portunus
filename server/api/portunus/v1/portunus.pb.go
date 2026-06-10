@@ -57,17 +57,14 @@ type ProvisionStatus int32
 
 const (
 	ProvisionStatus_PROVISION_STATUS_UNSPECIFIED ProvisionStatus = 0
-	ProvisionStatus_PROVISION_STATUS_SUCCESS     ProvisionStatus = 1
 	// credential_hash is already assigned to an active member.
 	ProvisionStatus_PROVISION_STATUS_DUPLICATE_ACTIVE ProvisionStatus = 2
 	// credential_hash exists but belongs to an expired or archived member.
 	ProvisionStatus_PROVISION_STATUS_DUPLICATE_INACTIVE ProvisionStatus = 3
 	// credential_hash is attached to a pending_authorization record.
 	ProvisionStatus_PROVISION_STATUS_DUPLICATE_PENDING ProvisionStatus = 4
-	// Operator does not have provisioning permission.
+	// Request denied (PEU gate, module type check).
 	ProvisionStatus_PROVISION_STATUS_UNAUTHORIZED ProvisionStatus = 5
-	// role_id does not exist on the server.
-	ProvisionStatus_PROVISION_STATUS_INVALID_ROLE ProvisionStatus = 6
 	// Capture path: new pending_authorization record created, awaiting admin approval.
 	ProvisionStatus_PROVISION_STATUS_PENDING_CREATED ProvisionStatus = 7
 )
@@ -76,22 +73,18 @@ const (
 var (
 	ProvisionStatus_name = map[int32]string{
 		0: "PROVISION_STATUS_UNSPECIFIED",
-		1: "PROVISION_STATUS_SUCCESS",
 		2: "PROVISION_STATUS_DUPLICATE_ACTIVE",
 		3: "PROVISION_STATUS_DUPLICATE_INACTIVE",
 		4: "PROVISION_STATUS_DUPLICATE_PENDING",
 		5: "PROVISION_STATUS_UNAUTHORIZED",
-		6: "PROVISION_STATUS_INVALID_ROLE",
 		7: "PROVISION_STATUS_PENDING_CREATED",
 	}
 	ProvisionStatus_value = map[string]int32{
 		"PROVISION_STATUS_UNSPECIFIED":        0,
-		"PROVISION_STATUS_SUCCESS":            1,
 		"PROVISION_STATUS_DUPLICATE_ACTIVE":   2,
 		"PROVISION_STATUS_DUPLICATE_INACTIVE": 3,
 		"PROVISION_STATUS_DUPLICATE_PENDING":  4,
 		"PROVISION_STATUS_UNAUTHORIZED":       5,
-		"PROVISION_STATUS_INVALID_ROLE":       6,
 		"PROVISION_STATUS_PENDING_CREATED":    7,
 	}
 )
@@ -121,60 +114,6 @@ func (x ProvisionStatus) Number() protoreflect.EnumNumber {
 // Deprecated: Use ProvisionStatus.Descriptor instead.
 func (ProvisionStatus) EnumDescriptor() ([]byte, []int) {
 	return file_portunus_v1_portunus_proto_rawDescGZIP(), []int{0}
-}
-
-// Provisioning mode sent by the PEU firmware in ProvisionCredentialRequest.
-type ProvisionMode int32
-
-const (
-	ProvisionMode_PROVISION_MODE_UNSPECIFIED ProvisionMode = 0
-	// Capture path: no operator badge — new member record created as
-	// pending_authorization and queued for admin approval.
-	ProvisionMode_PROVISION_MODE_CAPTURE ProvisionMode = 1
-	// Operator-enrol path: operator badge (scan 1) authorises the new member
-	// (scan 2) directly into the active state.
-	ProvisionMode_PROVISION_MODE_OPERATOR_ENROLL ProvisionMode = 2
-)
-
-// Enum value maps for ProvisionMode.
-var (
-	ProvisionMode_name = map[int32]string{
-		0: "PROVISION_MODE_UNSPECIFIED",
-		1: "PROVISION_MODE_CAPTURE",
-		2: "PROVISION_MODE_OPERATOR_ENROLL",
-	}
-	ProvisionMode_value = map[string]int32{
-		"PROVISION_MODE_UNSPECIFIED":     0,
-		"PROVISION_MODE_CAPTURE":         1,
-		"PROVISION_MODE_OPERATOR_ENROLL": 2,
-	}
-)
-
-func (x ProvisionMode) Enum() *ProvisionMode {
-	p := new(ProvisionMode)
-	*p = x
-	return p
-}
-
-func (x ProvisionMode) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (ProvisionMode) Descriptor() protoreflect.EnumDescriptor {
-	return file_portunus_v1_portunus_proto_enumTypes[1].Descriptor()
-}
-
-func (ProvisionMode) Type() protoreflect.EnumType {
-	return &file_portunus_v1_portunus_proto_enumTypes[1]
-}
-
-func (x ProvisionMode) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use ProvisionMode.Descriptor instead.
-func (ProvisionMode) EnumDescriptor() ([]byte, []int) {
-	return file_portunus_v1_portunus_proto_rawDescGZIP(), []int{1}
 }
 
 // Sent by the access module at a regular interval to report health
@@ -549,29 +488,18 @@ func (x *AccessResponse) GetServerTime() string {
 	return ""
 }
 
-// Sent by a provisioning console after a successful two-scan flow.
-// The device sends raw RFID UID bytes for both scans; the server applies
-// HMAC-SHA256 and resolves the scan-1 UID to a member_access record for
-// attribution.
+// Sent by a provisioning console (capture path only).
+// The device sends raw RFID UID bytes for the new member's card; the server
+// applies HMAC-SHA256 and parks the credential as pending_authorization.
 //
 // Server Go equivalent: types.ProvisionCredentialRequest
 type ProvisionCredentialRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Module ID of the provisioning console.
 	ModuleId string `protobuf:"bytes,2,opt,name=module_id,json=moduleId,proto3" json:"module_id,omitempty"`
-	// Role ID to assign to the new member.  Must already exist on the server.
-	RoleId string `protobuf:"bytes,4,opt,name=role_id,json=roleId,proto3" json:"role_id,omitempty"`
-	// Raw RFID UID bytes read from the new-member card (scan 2, 1–10 bytes).
+	// Raw RFID UID bytes read from the new-member card (1–10 bytes).
 	// The server computes HMAC-SHA256(secret, credential_uid) before storing.
 	CredentialUid []byte `protobuf:"bytes,5,opt,name=credential_uid,json=credentialUid,proto3" json:"credential_uid,omitempty"`
-	// Raw RFID UID bytes read from the operator's card (scan 1, 1–10 bytes).
-	// The server hashes this and resolves the operator against member_access,
-	// checking that the member's role carries member.provision permission.
-	OperatorCredentialUid []byte `protobuf:"bytes,6,opt,name=operator_credential_uid,json=operatorCredentialUid,proto3" json:"operator_credential_uid,omitempty"`
-	// Explicit provisioning mode selected by the PEU firmware.
-	// When UNSPECIFIED the server infers the mode from operator_credential_uid
-	// presence (empty = capture path, non-empty = operator-enrol path).
-	ProvisionMode ProvisionMode `protobuf:"varint,7,opt,name=provision_mode,json=provisionMode,proto3,enum=portunus.v1.ProvisionMode" json:"provision_mode,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -613,13 +541,6 @@ func (x *ProvisionCredentialRequest) GetModuleId() string {
 	return ""
 }
 
-func (x *ProvisionCredentialRequest) GetRoleId() string {
-	if x != nil {
-		return x.RoleId
-	}
-	return ""
-}
-
 func (x *ProvisionCredentialRequest) GetCredentialUid() []byte {
 	if x != nil {
 		return x.CredentialUid
@@ -627,26 +548,12 @@ func (x *ProvisionCredentialRequest) GetCredentialUid() []byte {
 	return nil
 }
 
-func (x *ProvisionCredentialRequest) GetOperatorCredentialUid() []byte {
-	if x != nil {
-		return x.OperatorCredentialUid
-	}
-	return nil
-}
-
-func (x *ProvisionCredentialRequest) GetProvisionMode() ProvisionMode {
-	if x != nil {
-		return x.ProvisionMode
-	}
-	return ProvisionMode_PROVISION_MODE_UNSPECIFIED
-}
-
 // Returned by the server after processing a provisioning request.
 //
 // Server Go equivalent: types.ProvisionCredentialResponse
 type ProvisionCredentialResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// UUID assigned to the new member record.  Non-empty on SUCCESS only.
+	// UUID assigned to the new member record.  Non-empty on PENDING_CREATED.
 	MemberUuid string          `protobuf:"bytes,1,opt,name=member_uuid,json=memberUuid,proto3" json:"member_uuid,omitempty"`
 	Status     ProvisionStatus `protobuf:"varint,2,opt,name=status,proto3,enum=portunus.v1.ProvisionStatus" json:"status,omitempty"`
 	// Human-readable detail for duplicate/error cases (operator display).
@@ -743,31 +650,22 @@ const file_portunus_v1_portunus_proto_rawDesc = "" +
 	"\x06reason\x18\x04 \x01(\tR\x06reason\x12\x1b\n" +
 	"\tmodule_id\x18\x05 \x01(\tR\bmoduleId\x12\x1f\n" +
 	"\vserver_time\x18\x06 \x01(\tR\n" +
-	"serverTime\"\xa0\x02\n" +
+	"serverTime\"\xd0\x01\n" +
 	"\x1aProvisionCredentialRequest\x12\x1b\n" +
-	"\tmodule_id\x18\x02 \x01(\tR\bmoduleId\x12\x17\n" +
-	"\arole_id\x18\x04 \x01(\tR\x06roleId\x12%\n" +
-	"\x0ecredential_uid\x18\x05 \x01(\fR\rcredentialUid\x126\n" +
-	"\x17operator_credential_uid\x18\x06 \x01(\fR\x15operatorCredentialUid\x12A\n" +
-	"\x0eprovision_mode\x18\a \x01(\x0e2\x1a.portunus.v1.ProvisionModeR\rprovisionModeJ\x04\b\x01\x10\x02J\x04\b\x03\x10\x04R\roperator_uuidR\x0fcredential_hash\"\x8c\x01\n" +
+	"\tmodule_id\x18\x02 \x01(\tR\bmoduleId\x12%\n" +
+	"\x0ecredential_uid\x18\x05 \x01(\fR\rcredentialUidJ\x04\b\x01\x10\x02J\x04\b\x03\x10\x04J\x04\b\x04\x10\x05J\x04\b\x06\x10\aJ\x04\b\a\x10\bR\roperator_uuidR\x0fcredential_hashR\arole_idR\x17operator_credential_uidR\x0eprovision_mode\"\x8c\x01\n" +
 	"\x1bProvisionCredentialResponse\x12\x1f\n" +
 	"\vmember_uuid\x18\x01 \x01(\tR\n" +
 	"memberUuid\x124\n" +
 	"\x06status\x18\x02 \x01(\x0e2\x1c.portunus.v1.ProvisionStatusR\x06status\x12\x16\n" +
-	"\x06detail\x18\x03 \x01(\tR\x06detail*\xb5\x02\n" +
+	"\x06detail\x18\x03 \x01(\tR\x06detail*\xb9\x02\n" +
 	"\x0fProvisionStatus\x12 \n" +
-	"\x1cPROVISION_STATUS_UNSPECIFIED\x10\x00\x12\x1c\n" +
-	"\x18PROVISION_STATUS_SUCCESS\x10\x01\x12%\n" +
+	"\x1cPROVISION_STATUS_UNSPECIFIED\x10\x00\x12%\n" +
 	"!PROVISION_STATUS_DUPLICATE_ACTIVE\x10\x02\x12'\n" +
 	"#PROVISION_STATUS_DUPLICATE_INACTIVE\x10\x03\x12&\n" +
 	"\"PROVISION_STATUS_DUPLICATE_PENDING\x10\x04\x12!\n" +
-	"\x1dPROVISION_STATUS_UNAUTHORIZED\x10\x05\x12!\n" +
-	"\x1dPROVISION_STATUS_INVALID_ROLE\x10\x06\x12$\n" +
-	" PROVISION_STATUS_PENDING_CREATED\x10\a*o\n" +
-	"\rProvisionMode\x12\x1e\n" +
-	"\x1aPROVISION_MODE_UNSPECIFIED\x10\x00\x12\x1a\n" +
-	"\x16PROVISION_MODE_CAPTURE\x10\x01\x12\"\n" +
-	"\x1ePROVISION_MODE_OPERATOR_ENROLL\x10\x022\x95\x02\n" +
+	"\x1dPROVISION_STATUS_UNAUTHORIZED\x10\x05\x12$\n" +
+	" PROVISION_STATUS_PENDING_CREATED\x10\a\"\x04\b\x01\x10\x01\"\x04\b\x06\x10\x06*\x18PROVISION_STATUS_SUCCESS*\x1dPROVISION_STATUS_INVALID_ROLE2\x95\x02\n" +
 	"\x0fPortunusService\x12N\n" +
 	"\rSendHeartbeat\x12\x1d.portunus.v1.HeartbeatRequest\x1a\x1e.portunus.v1.HeartbeatResponse\x12H\n" +
 	"\rRequestAccess\x12\x1a.portunus.v1.AccessRequest\x1a\x1b.portunus.v1.AccessResponse\x12h\n" +
@@ -785,32 +683,30 @@ func file_portunus_v1_portunus_proto_rawDescGZIP() []byte {
 	return file_portunus_v1_portunus_proto_rawDescData
 }
 
-var file_portunus_v1_portunus_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_portunus_v1_portunus_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_portunus_v1_portunus_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_portunus_v1_portunus_proto_goTypes = []any{
 	(ProvisionStatus)(0),                // 0: portunus.v1.ProvisionStatus
-	(ProvisionMode)(0),                  // 1: portunus.v1.ProvisionMode
-	(*HeartbeatRequest)(nil),            // 2: portunus.v1.HeartbeatRequest
-	(*HeartbeatResponse)(nil),           // 3: portunus.v1.HeartbeatResponse
-	(*AccessRequest)(nil),               // 4: portunus.v1.AccessRequest
-	(*AccessResponse)(nil),              // 5: portunus.v1.AccessResponse
-	(*ProvisionCredentialRequest)(nil),  // 6: portunus.v1.ProvisionCredentialRequest
-	(*ProvisionCredentialResponse)(nil), // 7: portunus.v1.ProvisionCredentialResponse
+	(*HeartbeatRequest)(nil),            // 1: portunus.v1.HeartbeatRequest
+	(*HeartbeatResponse)(nil),           // 2: portunus.v1.HeartbeatResponse
+	(*AccessRequest)(nil),               // 3: portunus.v1.AccessRequest
+	(*AccessResponse)(nil),              // 4: portunus.v1.AccessResponse
+	(*ProvisionCredentialRequest)(nil),  // 5: portunus.v1.ProvisionCredentialRequest
+	(*ProvisionCredentialResponse)(nil), // 6: portunus.v1.ProvisionCredentialResponse
 }
 var file_portunus_v1_portunus_proto_depIdxs = []int32{
-	1, // 0: portunus.v1.ProvisionCredentialRequest.provision_mode:type_name -> portunus.v1.ProvisionMode
-	0, // 1: portunus.v1.ProvisionCredentialResponse.status:type_name -> portunus.v1.ProvisionStatus
-	2, // 2: portunus.v1.PortunusService.SendHeartbeat:input_type -> portunus.v1.HeartbeatRequest
-	4, // 3: portunus.v1.PortunusService.RequestAccess:input_type -> portunus.v1.AccessRequest
-	6, // 4: portunus.v1.PortunusService.ProvisionCredential:input_type -> portunus.v1.ProvisionCredentialRequest
-	3, // 5: portunus.v1.PortunusService.SendHeartbeat:output_type -> portunus.v1.HeartbeatResponse
-	5, // 6: portunus.v1.PortunusService.RequestAccess:output_type -> portunus.v1.AccessResponse
-	7, // 7: portunus.v1.PortunusService.ProvisionCredential:output_type -> portunus.v1.ProvisionCredentialResponse
-	5, // [5:8] is the sub-list for method output_type
-	2, // [2:5] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	0, // 0: portunus.v1.ProvisionCredentialResponse.status:type_name -> portunus.v1.ProvisionStatus
+	1, // 1: portunus.v1.PortunusService.SendHeartbeat:input_type -> portunus.v1.HeartbeatRequest
+	3, // 2: portunus.v1.PortunusService.RequestAccess:input_type -> portunus.v1.AccessRequest
+	5, // 3: portunus.v1.PortunusService.ProvisionCredential:input_type -> portunus.v1.ProvisionCredentialRequest
+	2, // 4: portunus.v1.PortunusService.SendHeartbeat:output_type -> portunus.v1.HeartbeatResponse
+	4, // 5: portunus.v1.PortunusService.RequestAccess:output_type -> portunus.v1.AccessResponse
+	6, // 6: portunus.v1.PortunusService.ProvisionCredential:output_type -> portunus.v1.ProvisionCredentialResponse
+	4, // [4:7] is the sub-list for method output_type
+	1, // [1:4] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_portunus_v1_portunus_proto_init() }
@@ -825,7 +721,7 @@ func file_portunus_v1_portunus_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_portunus_v1_portunus_proto_rawDesc), len(file_portunus_v1_portunus_proto_rawDesc)),
-			NumEnums:      2,
+			NumEnums:      1,
 			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,

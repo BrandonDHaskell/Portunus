@@ -13,31 +13,17 @@
 /* Status codes for ProvisionCredentialResponse. */
 typedef enum _portunus_v1_ProvisionStatus {
     portunus_v1_ProvisionStatus_PROVISION_STATUS_UNSPECIFIED = 0,
-    portunus_v1_ProvisionStatus_PROVISION_STATUS_SUCCESS = 1,
     /* credential_hash is already assigned to an active member. */
     portunus_v1_ProvisionStatus_PROVISION_STATUS_DUPLICATE_ACTIVE = 2,
     /* credential_hash exists but belongs to an expired or archived member. */
     portunus_v1_ProvisionStatus_PROVISION_STATUS_DUPLICATE_INACTIVE = 3,
     /* credential_hash is attached to a pending_authorization record. */
     portunus_v1_ProvisionStatus_PROVISION_STATUS_DUPLICATE_PENDING = 4,
-    /* Operator does not have provisioning permission. */
+    /* Request denied (PEU gate, module type check). */
     portunus_v1_ProvisionStatus_PROVISION_STATUS_UNAUTHORIZED = 5,
-    /* role_id does not exist on the server. */
-    portunus_v1_ProvisionStatus_PROVISION_STATUS_INVALID_ROLE = 6,
     /* Capture path: new pending_authorization record created, awaiting admin approval. */
     portunus_v1_ProvisionStatus_PROVISION_STATUS_PENDING_CREATED = 7
 } portunus_v1_ProvisionStatus;
-
-/* Provisioning mode sent by the PEU firmware in ProvisionCredentialRequest. */
-typedef enum _portunus_v1_ProvisionMode {
-    portunus_v1_ProvisionMode_PROVISION_MODE_UNSPECIFIED = 0,
-    /* Capture path: no operator badge — new member record created as
- pending_authorization and queued for admin approval. */
-    portunus_v1_ProvisionMode_PROVISION_MODE_CAPTURE = 1,
-    /* Operator-enrol path: operator badge (scan 1) authorises the new member
- (scan 2) directly into the active state. */
-    portunus_v1_ProvisionMode_PROVISION_MODE_OPERATOR_ENROLL = 2
-} portunus_v1_ProvisionMode;
 
 /* Struct definitions */
 /* Sent by the access module at a regular interval to report health
@@ -128,36 +114,24 @@ typedef struct _portunus_v1_AccessResponse {
 } portunus_v1_AccessResponse;
 
 typedef PB_BYTES_ARRAY_T(10) portunus_v1_ProvisionCredentialRequest_credential_uid_t;
-typedef PB_BYTES_ARRAY_T(10) portunus_v1_ProvisionCredentialRequest_operator_credential_uid_t;
-/* Sent by a provisioning console after a successful two-scan flow.
- The device sends raw RFID UID bytes for both scans; the server applies
- HMAC-SHA256 and resolves the scan-1 UID to a member_access record for
- attribution.
+/* Sent by a provisioning console (capture path only).
+ The device sends raw RFID UID bytes for the new member's card; the server
+ applies HMAC-SHA256 and parks the credential as pending_authorization.
 
  Server Go equivalent: types.ProvisionCredentialRequest */
 typedef struct _portunus_v1_ProvisionCredentialRequest {
     /* Module ID of the provisioning console. */
     char module_id[33];
-    /* Role ID to assign to the new member.  Must already exist on the server. */
-    char role_id[33];
-    /* Raw RFID UID bytes read from the new-member card (scan 2, 1–10 bytes).
+    /* Raw RFID UID bytes read from the new-member card (1–10 bytes).
  The server computes HMAC-SHA256(secret, credential_uid) before storing. */
     portunus_v1_ProvisionCredentialRequest_credential_uid_t credential_uid;
-    /* Raw RFID UID bytes read from the operator's card (scan 1, 1–10 bytes).
- The server hashes this and resolves the operator against member_access,
- checking that the member's role carries member.provision permission. */
-    portunus_v1_ProvisionCredentialRequest_operator_credential_uid_t operator_credential_uid;
-    /* Explicit provisioning mode selected by the PEU firmware.
- When UNSPECIFIED the server infers the mode from operator_credential_uid
- presence (empty = capture path, non-empty = operator-enrol path). */
-    portunus_v1_ProvisionMode provision_mode;
 } portunus_v1_ProvisionCredentialRequest;
 
 /* Returned by the server after processing a provisioning request.
 
  Server Go equivalent: types.ProvisionCredentialResponse */
 typedef struct _portunus_v1_ProvisionCredentialResponse {
-    /* UUID assigned to the new member record.  Non-empty on SUCCESS only. */
+    /* UUID assigned to the new member record.  Non-empty on PENDING_CREATED. */
     char member_uuid[37];
     portunus_v1_ProvisionStatus status;
     /* Human-readable detail for duplicate/error cases (operator display). */
@@ -174,15 +148,10 @@ extern "C" {
 #define _portunus_v1_ProvisionStatus_MAX portunus_v1_ProvisionStatus_PROVISION_STATUS_PENDING_CREATED
 #define _portunus_v1_ProvisionStatus_ARRAYSIZE ((portunus_v1_ProvisionStatus)(portunus_v1_ProvisionStatus_PROVISION_STATUS_PENDING_CREATED+1))
 
-#define _portunus_v1_ProvisionMode_MIN portunus_v1_ProvisionMode_PROVISION_MODE_UNSPECIFIED
-#define _portunus_v1_ProvisionMode_MAX portunus_v1_ProvisionMode_PROVISION_MODE_OPERATOR_ENROLL
-#define _portunus_v1_ProvisionMode_ARRAYSIZE ((portunus_v1_ProvisionMode)(portunus_v1_ProvisionMode_PROVISION_MODE_OPERATOR_ENROLL+1))
 
 
 
 
-
-#define portunus_v1_ProvisionCredentialRequest_provision_mode_ENUMTYPE portunus_v1_ProvisionMode
 
 #define portunus_v1_ProvisionCredentialResponse_status_ENUMTYPE portunus_v1_ProvisionStatus
 
@@ -192,13 +161,13 @@ extern "C" {
 #define portunus_v1_HeartbeatResponse_init_default {0, 0, "", ""}
 #define portunus_v1_AccessRequest_init_default   {"", "", false, 0, ""}
 #define portunus_v1_AccessResponse_init_default  {0, 0, 0, "", "", ""}
-#define portunus_v1_ProvisionCredentialRequest_init_default {"", "", {0, {0}}, {0, {0}}, _portunus_v1_ProvisionMode_MIN}
+#define portunus_v1_ProvisionCredentialRequest_init_default {"", {0, {0}}}
 #define portunus_v1_ProvisionCredentialResponse_init_default {"", _portunus_v1_ProvisionStatus_MIN, ""}
 #define portunus_v1_HeartbeatRequest_init_zero   {"", "", 0, false, 0, false, 0, "", 0, 0}
 #define portunus_v1_HeartbeatResponse_init_zero  {0, 0, "", ""}
 #define portunus_v1_AccessRequest_init_zero      {"", "", false, 0, ""}
 #define portunus_v1_AccessResponse_init_zero     {0, 0, 0, "", "", ""}
-#define portunus_v1_ProvisionCredentialRequest_init_zero {"", "", {0, {0}}, {0, {0}}, _portunus_v1_ProvisionMode_MIN}
+#define portunus_v1_ProvisionCredentialRequest_init_zero {"", {0, {0}}}
 #define portunus_v1_ProvisionCredentialResponse_init_zero {"", _portunus_v1_ProvisionStatus_MIN, ""}
 
 /* Field tags (for use in manual encoding/decoding) */
@@ -225,10 +194,7 @@ extern "C" {
 #define portunus_v1_AccessResponse_module_id_tag 5
 #define portunus_v1_AccessResponse_server_time_tag 6
 #define portunus_v1_ProvisionCredentialRequest_module_id_tag 2
-#define portunus_v1_ProvisionCredentialRequest_role_id_tag 4
 #define portunus_v1_ProvisionCredentialRequest_credential_uid_tag 5
-#define portunus_v1_ProvisionCredentialRequest_operator_credential_uid_tag 6
-#define portunus_v1_ProvisionCredentialRequest_provision_mode_tag 7
 #define portunus_v1_ProvisionCredentialResponse_member_uuid_tag 1
 #define portunus_v1_ProvisionCredentialResponse_status_tag 2
 #define portunus_v1_ProvisionCredentialResponse_detail_tag 3
@@ -274,10 +240,7 @@ X(a, STATIC,   SINGULAR, STRING,   server_time,       6)
 
 #define portunus_v1_ProvisionCredentialRequest_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, STRING,   module_id,         2) \
-X(a, STATIC,   SINGULAR, STRING,   role_id,           4) \
-X(a, STATIC,   SINGULAR, BYTES,    credential_uid,    5) \
-X(a, STATIC,   SINGULAR, BYTES,    operator_credential_uid,   6) \
-X(a, STATIC,   SINGULAR, UENUM,    provision_mode,    7)
+X(a, STATIC,   SINGULAR, BYTES,    credential_uid,    5)
 #define portunus_v1_ProvisionCredentialRequest_CALLBACK NULL
 #define portunus_v1_ProvisionCredentialRequest_DEFAULT NULL
 
@@ -309,7 +272,7 @@ extern const pb_msgdesc_t portunus_v1_ProvisionCredentialResponse_msg;
 #define portunus_v1_AccessResponse_size          115
 #define portunus_v1_HeartbeatRequest_size        142
 #define portunus_v1_HeartbeatResponse_size       79
-#define portunus_v1_ProvisionCredentialRequest_size 94
+#define portunus_v1_ProvisionCredentialRequest_size 46
 #define portunus_v1_ProvisionCredentialResponse_size 105
 
 #ifdef __cplusplus

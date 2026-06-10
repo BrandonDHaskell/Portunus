@@ -151,10 +151,9 @@ message AccessResponse {
 // Provisioning (PROVISIONING_CONSOLE firmware variant)
 // ──────────────────────────────────────────────────────────────────────────
 
-// Sent by a provisioning console after a successful two-scan flow.
-// The device sends raw RFID UID bytes for both scans; the server applies
-// HMAC-SHA256 and resolves the scan-1 UID to a member_access record for
-// attribution.
+// Sent by a provisioning console (capture path only).
+// The device sends raw RFID UID bytes for the new member's card; the server
+// applies HMAC-SHA256 and parks the credential as pending_authorization.
 //
 // Server Go equivalent: types.ProvisionCredentialRequest
 message ProvisionCredentialRequest {
@@ -171,29 +170,21 @@ message ProvisionCredentialRequest {
   reserved 3;
   reserved "credential_hash";
 
-  // Role ID to assign to the new member.  Must already exist on the server.
-  string role_id                = 4;
+  // Retired: was the role to assign via Path 2 (operator enrolment), which
+  // has been removed. Field number must not be reused.
+  reserved 4, 6, 7;
+  reserved "role_id", "operator_credential_uid", "provision_mode";
 
-  // Raw RFID UID bytes read from the new-member card (scan 2, 1–10 bytes).
+  // Raw RFID UID bytes read from the new-member card (1–10 bytes).
   // The server computes HMAC-SHA256(secret, credential_uid) before storing.
   bytes  credential_uid         = 5;
-
-  // Raw RFID UID bytes read from the operator's card (scan 1, 1–10 bytes).
-  // The server hashes this and resolves the operator against member_access,
-  // checking that the member's role carries member.provision permission.
-  bytes  operator_credential_uid = 6;
-
-  // Explicit provisioning mode selected by the PEU firmware.
-  // When UNSPECIFIED the server infers the mode from operator_credential_uid
-  // presence (empty = capture path, non-empty = operator-enrol path).
-  ProvisionMode provision_mode = 7;
 }
 
 // Returned by the server after processing a provisioning request.
 //
 // Server Go equivalent: types.ProvisionCredentialResponse
 message ProvisionCredentialResponse {
-  // UUID assigned to the new member record.  Non-empty on SUCCESS only.
+  // UUID assigned to the new member record.  Non-empty on PENDING_CREATED.
   string member_uuid   = 1;
 
   ProvisionStatus status = 2;
@@ -205,30 +196,19 @@ message ProvisionCredentialResponse {
 // Status codes for ProvisionCredentialResponse.
 enum ProvisionStatus {
   PROVISION_STATUS_UNSPECIFIED  = 0;
-  PROVISION_STATUS_SUCCESS      = 1;
+  // Retired: was returned by Path 2 (operator enrolment), which has been removed.
+  reserved 1, 6;
+  reserved "PROVISION_STATUS_SUCCESS", "PROVISION_STATUS_INVALID_ROLE";
   // credential_hash is already assigned to an active member.
   PROVISION_STATUS_DUPLICATE_ACTIVE   = 2;
   // credential_hash exists but belongs to an expired or archived member.
   PROVISION_STATUS_DUPLICATE_INACTIVE = 3;
   // credential_hash is attached to a pending_authorization record.
   PROVISION_STATUS_DUPLICATE_PENDING  = 4;
-  // Operator does not have provisioning permission.
+  // Request denied (PEU gate, module type check).
   PROVISION_STATUS_UNAUTHORIZED = 5;
-  // role_id does not exist on the server.
-  PROVISION_STATUS_INVALID_ROLE = 6;
   // Capture path: new pending_authorization record created, awaiting admin approval.
   PROVISION_STATUS_PENDING_CREATED = 7;
-}
-
-// Provisioning mode sent by the PEU firmware in ProvisionCredentialRequest.
-enum ProvisionMode {
-  PROVISION_MODE_UNSPECIFIED    = 0;
-  // Capture path: no operator badge — new member record created as
-  // pending_authorization and queued for admin approval.
-  PROVISION_MODE_CAPTURE        = 1;
-  // Operator-enrol path: operator badge (scan 1) authorises the new member
-  // (scan 2) directly into the active state.
-  PROVISION_MODE_OPERATOR_ENROLL = 2;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -255,7 +235,7 @@ service PortunusService {
   // RequestAccess evaluates a credential-read event and returns an access decision.
   rpc RequestAccess(AccessRequest) returns (AccessResponse);
 
-  // ProvisionCredential processes a two-scan provisioning flow from a
+  // ProvisionCredential processes a capture provisioning request from a
   // PROVISIONING_CONSOLE firmware variant.
   rpc ProvisionCredential(ProvisionCredentialRequest) returns (ProvisionCredentialResponse);
 }

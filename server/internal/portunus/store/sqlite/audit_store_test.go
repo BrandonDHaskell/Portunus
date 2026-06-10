@@ -88,7 +88,7 @@ func TestAuditStore_RecordAuditEntry_DefaultsFilled(t *testing.T) {
 
 	before := time.Now().UTC()
 	entry := store.AuditEntry{
-		Action: "member.provision",
+		Action: "member.enroll",
 	}
 	if err := s.RecordAuditEntry(ctx, entry); err != nil {
 		t.Fatalf("RecordAuditEntry: %v", err)

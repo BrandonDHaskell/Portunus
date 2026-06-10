@@ -136,11 +136,8 @@ func (s *Server) RequestAccess(ctx context.Context, req *pb.AccessRequest) (*pb.
 
 func (s *Server) ProvisionCredential(ctx context.Context, req *pb.ProvisionCredentialRequest) (*pb.ProvisionCredentialResponse, error) {
 	domainReq := types.ProvisionCredentialRequest{
-		OperatorCredentialUID: req.GetOperatorCredentialUid(),
-		ModuleID:              req.GetModuleId(),
-		CredentialUID:         req.GetCredentialUid(),
-		RoleID:                req.GetRoleId(),
-		ProvisionMode:         pbconvert.ProtoProvisionModeToDomain(req.GetProvisionMode()),
+		ModuleID:      req.GetModuleId(),
+		CredentialUID: req.GetCredentialUid(),
 	}
 
 	resp, err := s.provisionService.Provision(ctx, domainReq)

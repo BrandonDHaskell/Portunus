@@ -9,62 +9,52 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/permissions"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/types"
 )
 
 var ErrProvisionCredentialUIDRequired = errors.New("credential_uid is required")
 
-// capturePlaceholderRole is assigned to device-captured pending members (Path 1).
-// An admin reassigns it at approval time.
+// capturePlaceholderRole is assigned to device-captured pending members.
+// An admin reassigns it at approval time. Path 2 (operator enrolment) has
+// been removed; capture is now the only provisioning path.
 const capturePlaceholderRole = "guest"
 
 // ProvisionService handles device-initiated member provisioning.
 //
-// Path 1 (capture): PEU scan with no operator badge → creates one
-// pending_authorization member with role "guest". An admin approves it later.
-//
-// Path 2 (operator enrolment): PEU scan-1 (operator) + scan-2 (new card) →
-// creates an active member directly. Gated by operatorProvisioningEnabled.
+// Capture path: a PEU scan with no operator badge creates one
+// pending_authorization member. An admin approves it later via the console.
 //
 // Only PEU (provisioning_enrollment_unit) modules may call Provision. ACU
 // (access_control_unit) modules are blocked at the module-type gate.
 type ProvisionService struct {
-	registry                    *DeviceRegistry
-	memberStore                 store.MemberAccessStore
-	moduleAuthStore             store.ModuleAuthorizationStore // may be nil; auth copy is skipped if absent
-	roleStore                   store.RoleStore
-	accessEvents                store.AccessEventStore
-	auditStore                  store.AuditStore // may be nil; writes are best-effort
-	credentialHashSecret        []byte
-	operatorProvisioningEnabled bool
+	registry             *DeviceRegistry
+	memberStore          store.MemberAccessStore
+	roleStore            store.RoleStore
+	accessEvents         store.AccessEventStore
+	auditStore           store.AuditStore // may be nil; writes are best-effort
+	credentialHashSecret []byte
 }
 
 func NewProvisionService(
 	registry *DeviceRegistry,
 	memberStore store.MemberAccessStore,
-	moduleAuthStore store.ModuleAuthorizationStore,
 	roleStore store.RoleStore,
 	accessEvents store.AccessEventStore,
 	credentialHashSecret []byte,
-	operatorProvisioningEnabled bool,
 	auditStore store.AuditStore,
 ) *ProvisionService {
 	return &ProvisionService{
-		registry:                    registry,
-		memberStore:                 memberStore,
-		moduleAuthStore:             moduleAuthStore,
-		roleStore:                   roleStore,
-		accessEvents:                accessEvents,
-		auditStore:                  auditStore,
-		credentialHashSecret:        credentialHashSecret,
-		operatorProvisioningEnabled: operatorProvisioningEnabled,
+		registry:             registry,
+		memberStore:          memberStore,
+		roleStore:            roleStore,
+		accessEvents:         accessEvents,
+		auditStore:           auditStore,
+		credentialHashSecret: credentialHashSecret,
 	}
 }
 
-// Provision routes a device provisioning request to the capture or operator-
-// enrolment path after validating the module and applying the PEU gate.
+// Provision validates the module and routes every valid PEU request to capture.
 func (s *ProvisionService) Provision(
 	ctx context.Context,
 	req types.ProvisionCredentialRequest,
@@ -103,34 +93,10 @@ func (s *ProvisionService) Provision(
 		}, nil
 	}
 
-	// Determine path: explicit ProvisionMode wins; field presence is the fallback.
-	isCapture := len(req.OperatorCredentialUID) == 0
-	switch req.ProvisionMode {
-	case types.ProvisionModeCapture:
-		isCapture = true
-	case types.ProvisionModeOperatorEnroll:
-		isCapture = false
-	}
-
-	// Path 1: capture — park credential as pending_authorization.
-	if isCapture {
-		return s.capture(ctx, moduleID, credHash)
-	}
-
-	// Path 2: operator badge present — gated by deployment flag.
-	if !s.operatorProvisioningEnabled {
-		s.recordProvisionAttempt(ctx, moduleID, credHash, "provision_blocked:operator_provisioning_disabled")
-		return types.ProvisionCredentialResponse{
-			OK:     true,
-			Known:  true,
-			Status: types.ProvisionStatusUnauthorized,
-			Detail: "operator provisioning is disabled for this deployment",
-		}, nil
-	}
-	return s.operatorEnroll(ctx, req, credHash)
+	return s.capture(ctx, moduleID, credHash)
 }
 
-// capture parks a single credential as pending_authorization (Path 1).
+// capture parks a single credential as pending_authorization.
 func (s *ProvisionService) capture(
 	ctx context.Context,
 	moduleID string,
@@ -178,140 +144,6 @@ func (s *ProvisionService) capture(
 	}, nil
 }
 
-// operatorEnroll runs the two-scan enrolment flow (Path 2).
-func (s *ProvisionService) operatorEnroll(
-	ctx context.Context,
-	req types.ProvisionCredentialRequest,
-	credHash []byte,
-) (types.ProvisionCredentialResponse, error) {
-	operatorUUID, blocked, err := s.resolveOperator(ctx, req)
-	if err != nil {
-		return types.ProvisionCredentialResponse{}, err
-	}
-	if blocked != nil {
-		return *blocked, nil
-	}
-
-	roleID := strings.TrimSpace(req.RoleID)
-	if roleID == "" {
-		return invalidRoleResponse("role_id is required"), nil
-	}
-	role, err := s.roleStore.GetRole(ctx, roleID)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return invalidRoleResponse(fmt.Sprintf("role %q not found", roleID)), nil
-		}
-		return types.ProvisionCredentialResponse{}, fmt.Errorf("role lookup: %w", err)
-	}
-
-	existing, err := s.memberStore.GetMemberByCredential(ctx, credHash)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return types.ProvisionCredentialResponse{}, fmt.Errorf("credential lookup: %w", err)
-	}
-	if err == nil {
-		st, detail := provisionDuplicateStatus(existing)
-		return types.ProvisionCredentialResponse{OK: true, Known: true, Status: st, Detail: detail}, nil
-	}
-
-	expiresAt, inactivityLimitDays := applyRoleDefaults(role, nil, nil)
-
-	memberUUID := uuid.New().String()
-	if err := s.memberStore.CreateMember(ctx, memberUUID, roleID, operatorUUID,
-		store.ProvisioningStatusActive, expiresAt, inactivityLimitDays); err != nil {
-		return types.ProvisionCredentialResponse{}, fmt.Errorf("create member: %w", err)
-	}
-	if err := s.memberStore.AttachCredential(ctx, memberUUID, credHash); err != nil {
-		if errors.Is(err, store.ErrMemberCredentialConflict) {
-			return types.ProvisionCredentialResponse{
-				OK:     true,
-				Known:  true,
-				Status: types.ProvisionStatusDuplicateActive,
-				Detail: "credential assigned between check and insert",
-			}, nil
-		}
-		return types.ProvisionCredentialResponse{}, fmt.Errorf("attach credential: %w", err)
-	}
-
-	// Copy operator's active module authorizations to the new member so they
-	// gain access to the same doors the operator badge can open.
-	s.copyOperatorAuthorizations(ctx, operatorUUID, memberUUID)
-
-	s.recordAudit(ctx, store.AuditEntry{
-		ActorUUID:    operatorUUID,
-		ActorType:    store.ActorTypeMember,
-		Action:       "member.provision.enroll",
-		ResourceType: "member",
-		ResourceID:   memberUUID,
-		Details:      fmt.Sprintf(`{"module_id":%q,"role_id":%q}`, req.ModuleID, roleID),
-		Result:       "success",
-	})
-	return types.ProvisionCredentialResponse{
-		OK:         true,
-		Known:      true,
-		MemberUUID: memberUUID,
-		Status:     types.ProvisionStatusSuccess,
-	}, nil
-}
-
-// copyOperatorAuthorizations copies all non-revoked module authorizations from
-// the operator member to the newly enrolled member. Errors per grant are
-// swallowed — the member was already committed and an admin can fix gaps.
-func (s *ProvisionService) copyOperatorAuthorizations(ctx context.Context, fromUUID, toUUID string) {
-	if s.moduleAuthStore == nil {
-		return
-	}
-	auths, err := s.moduleAuthStore.ListByMember(ctx, fromUUID)
-	if err != nil {
-		return
-	}
-	for _, auth := range auths {
-		if auth.RevokedAt != nil {
-			continue
-		}
-		_ = s.moduleAuthStore.GrantAuthorization(ctx, toUUID, auth.ModuleID, fromUUID, auth.ExpiresAt, auth.TimeRestriction)
-	}
-}
-
-// resolveOperator validates the scan-1 operator credential.
-// Returns (uuid, nil, nil) on success.
-// Returns ("", &blockedResponse, nil) when the operator is not authorized.
-// Returns ("", nil, err) on an internal error.
-// Unknown operators are hard-blocked with no record created.
-func (s *ProvisionService) resolveOperator(
-	ctx context.Context,
-	req types.ProvisionCredentialRequest,
-) (string, *types.ProvisionCredentialResponse, error) {
-	opHash := HashCredentialID(req.OperatorCredentialUID, s.credentialHashSecret)
-
-	member, err := s.memberStore.GetMemberByCredential(ctx, opHash)
-	if err != nil {
-		if !errors.Is(err, store.ErrNotFound) {
-			return "", nil, fmt.Errorf("operator credential lookup: %w", err)
-		}
-		s.recordProvisionAttempt(ctx, req.ModuleID, opHash, "provision_unauthorized:operator_not_found")
-		return "", unauthorizedResponse("operator credential not recognized"), nil
-	}
-
-	// Operator must be active and enabled.
-	if !member.Enabled || member.Status != store.MemberStatusActive ||
-		member.ProvisioningStatus != store.ProvisioningStatusActive {
-		s.recordProvisionAttempt(ctx, req.ModuleID, opHash, "provision_unauthorized:operator_inactive")
-		return "", unauthorizedResponse("operator account is not active"), nil
-	}
-
-	// Role must carry member.provision.
-	perms, err := s.roleStore.GetRolePermissions(ctx, member.RoleID)
-	if err != nil {
-		return "", nil, fmt.Errorf("get operator role permissions: %w", err)
-	}
-	if !hasPermission(perms, permissions.MemberProvision) {
-		s.recordProvisionAttempt(ctx, req.ModuleID, opHash, "provision_unauthorized:no_member_provision_permission")
-		return "", unauthorizedResponse("operator does not have member.provision permission"), nil
-	}
-
-	return member.UUID, nil, nil
-}
-
 // recordProvisionAttempt writes a denied access event. Errors are swallowed.
 func (s *ProvisionService) recordProvisionAttempt(ctx context.Context, moduleID string, credHash []byte, reason string) {
 	now := time.Now().UTC()
@@ -332,37 +164,8 @@ func (s *ProvisionService) recordAudit(ctx context.Context, e store.AuditEntry) 
 		return
 	}
 	if err := s.auditStore.RecordAuditEntry(ctx, e); err != nil {
-		// Intentionally not fatal; logged by the store itself if needed.
 		_ = err
 	}
-}
-
-func unauthorizedResponse(detail string) *types.ProvisionCredentialResponse {
-	return &types.ProvisionCredentialResponse{
-		OK:     true,
-		Known:  true,
-		Status: types.ProvisionStatusUnauthorized,
-		Detail: detail,
-	}
-}
-
-func invalidRoleResponse(detail string) types.ProvisionCredentialResponse {
-	return types.ProvisionCredentialResponse{
-		OK:     true,
-		Known:  true,
-		Status: types.ProvisionStatusInvalidRole,
-		Detail: detail,
-	}
-}
-
-// hasPermission returns true if perm is present in the permissions slice.
-func hasPermission(perms []string, perm string) bool {
-	for _, p := range perms {
-		if p == perm {
-			return true
-		}
-	}
-	return false
 }
 
 // provisionDuplicateStatus maps an existing member record to the appropriate

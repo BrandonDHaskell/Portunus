@@ -268,7 +268,7 @@ func (s *MemberAccessService) ApprovePending(
 }
 
 // applyRoleDefaults fills expiry/inactivity from the role's defaults when the
-// caller did not specify them. Shared by ApprovePending and operatorEnroll.
+// caller did not specify them.
 func applyRoleDefaults(role *store.RoleRecord, expiresAt *time.Time, inactivityLimitDays *int) (*time.Time, *int) {
 	if expiresAt == nil && role.DefaultExpiryDays != nil {
 		t := time.Now().UTC().AddDate(0, 0, *role.DefaultExpiryDays)

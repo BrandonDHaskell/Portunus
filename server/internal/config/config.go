@@ -72,10 +72,6 @@ type Config struct {
 	// CredentialHashSecret keys the HMAC-SHA256 credential-ID hashing.
 	// Generate with: openssl rand -hex 32. Required in prod.
 	CredentialHashSecret string
-
-	// OperatorProvisioningEnabled enables Path 2 (two-scan operator enrolment).
-	// Default off: set PORTUNUS_OPERATOR_PROVISIONING_ENABLED=true.
-	OperatorProvisioningEnabled bool
 }
 
 // Validate enforces per-profile invariants.
@@ -121,8 +117,6 @@ func FromEnv() (Config, error) {
 
 	allowAll := strings.EqualFold(os.Getenv("PORTUNUS_ALLOW_ALL"), "true") ||
 		os.Getenv("PORTUNUS_ALLOW_ALL") == "1"
-	operatorProvisioning := strings.EqualFold(os.Getenv("PORTUNUS_OPERATOR_PROVISIONING_ENABLED"), "true") ||
-		os.Getenv("PORTUNUS_OPERATOR_PROVISIONING_ENABLED") == "1"
 
 	return Config{
 		HTTPAddr: getenvDefault("PORTUNUS_HTTP_ADDR", ":8080"),
@@ -141,8 +135,6 @@ func FromEnv() (Config, error) {
 		TLSKeyFile:           strings.TrimSpace(os.Getenv("PORTUNUS_TLS_KEY_FILE")),
 		HMACSecret:           os.Getenv("PORTUNUS_HMAC_SECRET"),
 		CredentialHashSecret: os.Getenv("PORTUNUS_CREDENTIAL_HASH_SECRET"),
-
-		OperatorProvisioningEnabled: operatorProvisioning,
 	}, nil
 }
 

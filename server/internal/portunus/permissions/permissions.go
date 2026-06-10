@@ -31,7 +31,7 @@ const (
 	RoleAssignPermission = "role.assign_permissions"
 
 	// Member access management
-	MemberProvision  = "member.provision"
+	MemberEnroll     = "member.enroll"
 	MemberList       = "member.list"
 	MemberView       = "member.view"
 	MemberAssignRole = "member.assign_role"
@@ -55,7 +55,7 @@ func All() []string {
 		DoorList, DoorRegister, DoorDelete,
 		AdminUserCreate, AdminUserList, AdminUserEdit, AdminUserDisable,
 		RoleList, RoleCreate, RoleEdit, RoleDelete, RoleAssignPermission,
-		MemberProvision, MemberList, MemberView, MemberAssignRole, MemberDisable, MemberArchive,
+		MemberEnroll, MemberList, MemberView, MemberAssignRole, MemberDisable, MemberArchive,
 		ModuleAuthGrant, ModuleAuthRevoke, ModuleAuthList,
 		AuditLogList,
 	}
