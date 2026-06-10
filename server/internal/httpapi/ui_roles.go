@@ -3,7 +3,6 @@ package httpapi
 import (
 	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/permissions"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
@@ -42,10 +41,8 @@ func (s *Server) handleUIRolesCreate(w http.ResponseWriter, r *http.Request) {
 
 	name := r.FormValue("name")
 	description := r.FormValue("description")
-	expiryDays := parseOptionalInt(r.FormValue("default_expiry_days"))
-	inactivityDays := parseOptionalInt(r.FormValue("default_inactivity_days"))
 
-	role, err := s.roleService.CreateRole(r.Context(), name, description, expiryDays, inactivityDays)
+	role, err := s.roleService.CreateRole(r.Context(), name, description)
 	if err != nil {
 		s.logger.Printf("ui create role: %v", err)
 		d := newUIPageData(r, "roles")
@@ -95,10 +92,8 @@ func (s *Server) handleUIRolesUpdate(w http.ResponseWriter, r *http.Request) {
 
 	name := r.FormValue("name")
 	description := r.FormValue("description")
-	expiryDays := parseOptionalInt(r.FormValue("default_expiry_days"))
-	inactivityDays := parseOptionalInt(r.FormValue("default_inactivity_days"))
 
-	if err := s.roleService.UpdateRole(r.Context(), roleID, name, description, expiryDays, inactivityDays); err != nil {
+	if err := s.roleService.UpdateRole(r.Context(), roleID, name, description); err != nil {
 		if errors.Is(err, service.ErrRoleNotFound) {
 			http.NotFound(w, r)
 			return
@@ -195,16 +190,4 @@ func (s *Server) uiRoleRoutes(mux *http.ServeMux) {
 		perm(permissions.RoleAssignPermission, s.handleUIRolesSetPermissions))
 	mux.HandleFunc("POST /admin/ui/roles/{role_id}/delete",
 		perm(permissions.RoleDelete, s.handleUIRolesDelete))
-}
-
-// parseOptionalInt converts a form value to *int, returning nil on empty/invalid.
-func parseOptionalInt(s string) *int {
-	if s == "" {
-		return nil
-	}
-	n, err := strconv.Atoi(s)
-	if err != nil || n <= 0 {
-		return nil
-	}
-	return &n
 }
