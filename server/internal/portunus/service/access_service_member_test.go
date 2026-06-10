@@ -535,7 +535,7 @@ func TestExpiryWorker_RunsOnStart(t *testing.T) {
 		t.Fatalf("CreateMember: %v", err)
 	}
 
-	worker := service.NewExpiryWorker(maStore, service.ExpiryWorkerConfig{IntervalMinutes: 60}, silentLogger())
+	worker := service.NewExpiryWorker(maStore, nil, service.ExpiryWorkerConfig{IntervalMinutes: 60}, silentLogger())
 	workerCtx, cancel := context.WithCancel(ctx)
 	worker.Start(workerCtx)
 	// Give the goroutine a moment to run the initial sweep.

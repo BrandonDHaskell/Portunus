@@ -110,4 +110,9 @@ type MemberAccessStore interface {
 	// not exist, ErrMemberNotPending if it is not pending_authorization.
 	ApprovePending(ctx context.Context, uuid, approvedByUUID string,
 		expiresAt *time.Time, inactivityLimitDays *int) error
+
+	// ArchiveStalePending transitions pending_authorization rows whose
+	// created_at_ms + ttlDays*86400000 < now to status='archived'. Returns the
+	// number of rows affected.
+	ArchiveStalePending(ctx context.Context, now time.Time, ttlDays int) (int64, error)
 }

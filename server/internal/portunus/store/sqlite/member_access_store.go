@@ -251,6 +251,26 @@ WHERE uuid = ?;
 	})
 }
 
+func (s *MemberAccessStore) ArchiveStalePending(ctx context.Context, now time.Time, ttlDays int) (int64, error) {
+	nowMs := now.UTC().UnixMilli()
+	ttlMs := int64(ttlDays) * 86400000
+	var count int64
+	err := s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+UPDATE member_access
+   SET status = 'archived', archived_at_ms = ?, archived_by_uuid = NULL
+ WHERE provisioning_status = 'pending_authorization'
+   AND created_at_ms + ? < ?;
+`, nowMs, ttlMs, nowMs)
+		if err != nil {
+			return fmt.Errorf("ArchiveStalePending: %w", err)
+		}
+		count, _ = res.RowsAffected()
+		return nil
+	})
+	return count, err
+}
+
 // ── query helpers ─────────────────────────────────────────────────────────────
 
 const memberAccessSelectSQL = `

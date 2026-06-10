@@ -56,6 +56,7 @@ type Config struct {
 
 	// Expiry worker
 	ExpiryWorkerIntervalMinutes int // how often member expiry sweeps run (default 60)
+	PendingTTLDays              int // how many days before stale pending rows are archived; 0 disables (default 7)
 
 	// TLS. When both files are set, the server serves HTTPS using them.
 	// When unset under the ci profile, the server generates an ephemeral
@@ -130,6 +131,7 @@ func FromEnv() (Config, error) {
 		HeartbeatRetentionDays:      getenvInt("PORTUNUS_HEARTBEAT_RETENTION_DAYS", 30),
 		PruneIntervalHours:          getenvInt("PORTUNUS_PRUNE_INTERVAL_HOURS", 6),
 		ExpiryWorkerIntervalMinutes: getenvInt("PORTUNUS_EXPIRY_WORKER_INTERVAL_MINUTES", 60),
+		PendingTTLDays:              getenvInt("PORTUNUS_PENDING_TTL_DAYS", 7),
 
 		TLSCertFile:          strings.TrimSpace(os.Getenv("PORTUNUS_TLS_CERT_FILE")),
 		TLSKeyFile:           strings.TrimSpace(os.Getenv("PORTUNUS_TLS_KEY_FILE")),

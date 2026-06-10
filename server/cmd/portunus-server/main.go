@@ -104,8 +104,9 @@ func main() {
 	}
 
 	// Expiry worker: transitions member records to 'expired' on a scheduled interval.
-	expiryWorker := service.NewExpiryWorker(memberAccessStore, service.ExpiryWorkerConfig{
+	expiryWorker := service.NewExpiryWorker(memberAccessStore, auditStore, service.ExpiryWorkerConfig{
 		IntervalMinutes: cfg.ExpiryWorkerIntervalMinutes,
+		PendingTTLDays:  cfg.PendingTTLDays,
 	}, logger)
 	expiryWorker.Start(ctx)
 	defer expiryWorker.Stop()

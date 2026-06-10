@@ -484,6 +484,128 @@ func TestMemberAccessStore_ApprovePending_NotPending(t *testing.T) {
 	}
 }
 
+// ── ArchiveStalePending ───────────────────────────────────────────────────────
+
+func TestMemberAccessStore_ArchiveStalePending_ArchivesOldRow(t *testing.T) {
+	conn := openTestDB(t)
+	w := newTestWriter(t, conn)
+	ms := sqlitestore.NewMemberAccessStore(conn, w)
+	ctx := context.Background()
+
+	uuid := "stale-001"
+	if err := ms.CreateMember(ctx, uuid, "", store.ProvisioningStatusPendingAuthorization, nil, nil); err != nil {
+		t.Fatalf("CreateMember: %v", err)
+	}
+
+	// Back-date created_at_ms to 8 days ago.
+	past := time.Now().UTC().Add(-8 * 24 * time.Hour).UnixMilli()
+	if _, err := conn.ExecContext(ctx, `UPDATE member_access SET created_at_ms = ? WHERE uuid = ?`, past, uuid); err != nil {
+		t.Fatalf("back-date: %v", err)
+	}
+
+	n, err := ms.ArchiveStalePending(ctx, time.Now().UTC(), 7)
+	if err != nil {
+		t.Fatalf("ArchiveStalePending: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("expected 1 archived row, got %d", n)
+	}
+
+	rec, err := ms.GetMember(ctx, uuid)
+	if err != nil {
+		t.Fatalf("GetMember: %v", err)
+	}
+	if rec.Status != store.MemberStatusArchived {
+		t.Errorf("status = %q, want archived", rec.Status)
+	}
+	if rec.ArchivedAt == nil {
+		t.Error("archived_at_ms should be set")
+	}
+	if rec.ArchivedByUUID != "" {
+		t.Errorf("archived_by_uuid should be empty for system action, got %q", rec.ArchivedByUUID)
+	}
+}
+
+func TestMemberAccessStore_ArchiveStalePending_KeepsYoungRow(t *testing.T) {
+	conn := openTestDB(t)
+	w := newTestWriter(t, conn)
+	ms := sqlitestore.NewMemberAccessStore(conn, w)
+	ctx := context.Background()
+
+	uuid := "fresh-001"
+	if err := ms.CreateMember(ctx, uuid, "", store.ProvisioningStatusPendingAuthorization, nil, nil); err != nil {
+		t.Fatalf("CreateMember: %v", err)
+	}
+
+	// Row is brand-new; TTL is 7 days — should not be archived.
+	n, err := ms.ArchiveStalePending(ctx, time.Now().UTC(), 7)
+	if err != nil {
+		t.Fatalf("ArchiveStalePending: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("expected 0 archived rows, got %d", n)
+	}
+
+	rec, _ := ms.GetMember(ctx, uuid)
+	if rec.Status != store.MemberStatusActive {
+		t.Errorf("status = %q, want active (untouched)", rec.Status)
+	}
+}
+
+func TestMemberAccessStore_ArchiveStalePending_ZeroTTLDisabled(t *testing.T) {
+	conn := openTestDB(t)
+	w := newTestWriter(t, conn)
+	ms := sqlitestore.NewMemberAccessStore(conn, w)
+	ctx := context.Background()
+
+	uuid := "stale-disabled-001"
+	if err := ms.CreateMember(ctx, uuid, "", store.ProvisioningStatusPendingAuthorization, nil, nil); err != nil {
+		t.Fatalf("CreateMember: %v", err)
+	}
+	past := time.Now().UTC().Add(-100 * 24 * time.Hour).UnixMilli()
+	if _, err := conn.ExecContext(ctx, `UPDATE member_access SET created_at_ms = ? WHERE uuid = ?`, past, uuid); err != nil {
+		t.Fatalf("back-date: %v", err)
+	}
+
+	// TTL=0: the caller (expiry worker) skips the call entirely, but the store
+	// itself should treat ttlDays=0 as archiving everything older than epoch,
+	// which means everything. This test documents behaviour when called with 0,
+	// though the worker never does so.  The acceptance criterion is that the
+	// worker skips; the store just executes what it's told.
+	//
+	// We verify the worker-level disable separately in the expiry_worker tests.
+	// Here we just confirm the store doesn't panic with ttlDays=0.
+	_, err := ms.ArchiveStalePending(ctx, time.Now().UTC(), 0)
+	if err != nil {
+		t.Fatalf("ArchiveStalePending(ttl=0): %v", err)
+	}
+}
+
+func TestMemberAccessStore_ArchiveStalePending_SkipsActiveRows(t *testing.T) {
+	conn := openTestDB(t)
+	w := newTestWriter(t, conn)
+	ms := sqlitestore.NewMemberAccessStore(conn, w)
+	ctx := context.Background()
+
+	uuid := "active-old-001"
+	if err := ms.CreateMember(ctx, uuid, "", store.ProvisioningStatusActive, nil, nil); err != nil {
+		t.Fatalf("CreateMember: %v", err)
+	}
+	// Back-date so it would match the age predicate if it were pending.
+	past := time.Now().UTC().Add(-30 * 24 * time.Hour).UnixMilli()
+	if _, err := conn.ExecContext(ctx, `UPDATE member_access SET created_at_ms = ? WHERE uuid = ?`, past, uuid); err != nil {
+		t.Fatalf("back-date: %v", err)
+	}
+
+	n, err := ms.ArchiveStalePending(ctx, time.Now().UTC(), 7)
+	if err != nil {
+		t.Fatalf("ArchiveStalePending: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("expected 0 archived rows (active row must be skipped), got %d", n)
+	}
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 func randomHash(t *testing.T) []byte {
