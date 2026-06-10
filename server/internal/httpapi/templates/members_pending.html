@@ -9,7 +9,6 @@
   <thead>
     <tr>
       <th>UUID</th>
-      <th>Role</th>
       <th>Credential</th>
       <th>Created</th>
       <th>Created By</th>
@@ -27,7 +26,6 @@
             title="Copy UUID to clipboard">Copy</button>
         </div>
       </td>
-      <td><span class="badge badge-blue">{{.RoleID}}</span></td>
       <td class="font-mono text-muted" style="font-size:.8rem">
         {{if .CredentialHash}}{{.CredentialHash}}{{else}}<em>not yet attached</em>{{end}}
       </td>
@@ -40,7 +38,7 @@
       </td>
     </tr>
   {{else}}
-    <tr><td colspan="6" class="text-muted" style="text-align:center;padding:2rem">No pending authorizations.</td></tr>
+    <tr><td colspan="5" class="text-muted" style="text-align:center;padding:2rem">No pending authorizations.</td></tr>
   {{end}}
   </tbody>
 </table>

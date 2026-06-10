@@ -92,7 +92,7 @@ func seedActiveMember(
 	credHash[0] = 0xDE
 	credHash[1] = 0xAD
 
-	if err := maStore.CreateMember(ctx, memberUUID, "member", "", store.ProvisioningStatusActive, nil, nil); err != nil {
+	if err := maStore.CreateMember(ctx, memberUUID, "", store.ProvisioningStatusActive, nil, nil); err != nil {
 		t.Fatalf("CreateMember: %v", err)
 	}
 	if err := maStore.AttachCredential(ctx, memberUUID, credHash); err != nil {
@@ -136,7 +136,7 @@ func TestAccessService_MemberPath_Granted(t *testing.T) {
 	credHash := service.HashCredentialID([]byte{0x04, 0x01, 0x00, 0x01}, nil)
 
 	seedModule(t, dbConn, moduleID)
-	if err := maStore.CreateMember(ctx, memberUUID, "member", "", store.ProvisioningStatusActive, nil, nil); err != nil {
+	if err := maStore.CreateMember(ctx, memberUUID, "", store.ProvisioningStatusActive, nil, nil); err != nil {
 		t.Fatalf("CreateMember: %v", err)
 	}
 	if err := maStore.AttachCredential(ctx, memberUUID, credHash); err != nil {
@@ -177,7 +177,7 @@ func TestAccessService_MemberPath_NoAuthorization(t *testing.T) {
 	memberUUID := "aaaaaaaa-0000-4000-8000-000000000002"
 	credHash := service.HashCredentialID([]byte{0x04, 0x01, 0x00, 0x02}, nil)
 
-	if err := maStore.CreateMember(ctx, memberUUID, "member", "", store.ProvisioningStatusActive, nil, nil); err != nil {
+	if err := maStore.CreateMember(ctx, memberUUID, "", store.ProvisioningStatusActive, nil, nil); err != nil {
 		t.Fatalf("CreateMember: %v", err)
 	}
 	if err := maStore.AttachCredential(ctx, memberUUID, credHash); err != nil {
@@ -213,7 +213,7 @@ func TestAccessService_MemberPath_RevokedAuthorization(t *testing.T) {
 	credHash := service.HashCredentialID([]byte{0x04, 0x01, 0x00, 0x03}, nil)
 
 	seedModule(t, dbConn, moduleID)
-	if err := maStore.CreateMember(ctx, memberUUID, "member", "", store.ProvisioningStatusActive, nil, nil); err != nil {
+	if err := maStore.CreateMember(ctx, memberUUID, "", store.ProvisioningStatusActive, nil, nil); err != nil {
 		t.Fatalf("CreateMember: %v", err)
 	}
 	if err := maStore.AttachCredential(ctx, memberUUID, credHash); err != nil {
@@ -258,7 +258,7 @@ func TestAccessService_MemberPath_ExpiredAuthorization(t *testing.T) {
 	pastExpiry := time.Now().UTC().Add(-24 * time.Hour)
 
 	seedModule(t, dbConn, moduleID)
-	if err := maStore.CreateMember(ctx, memberUUID, "member", "", store.ProvisioningStatusActive, nil, nil); err != nil {
+	if err := maStore.CreateMember(ctx, memberUUID, "", store.ProvisioningStatusActive, nil, nil); err != nil {
 		t.Fatalf("CreateMember: %v", err)
 	}
 	if err := maStore.AttachCredential(ctx, memberUUID, credHash); err != nil {
@@ -296,7 +296,7 @@ func TestAccessService_MemberPath_ExpiredMember(t *testing.T) {
 	credHash := service.HashCredentialID([]byte{0x04, 0x01, 0x00, 0x05}, nil)
 
 	seedModule(t, dbConn, moduleID)
-	if err := maStore.CreateMember(ctx, memberUUID, "member", "", store.ProvisioningStatusActive, nil, nil); err != nil {
+	if err := maStore.CreateMember(ctx, memberUUID, "", store.ProvisioningStatusActive, nil, nil); err != nil {
 		t.Fatalf("CreateMember: %v", err)
 	}
 	if err := maStore.AttachCredential(ctx, memberUUID, credHash); err != nil {
@@ -338,7 +338,7 @@ func TestAccessService_MemberPath_DisabledMember(t *testing.T) {
 	credHash := service.HashCredentialID([]byte{0x04, 0x01, 0x00, 0x06}, nil)
 
 	seedModule(t, dbConn, moduleID)
-	if err := maStore.CreateMember(ctx, memberUUID, "member", "", store.ProvisioningStatusActive, nil, nil); err != nil {
+	if err := maStore.CreateMember(ctx, memberUUID, "", store.ProvisioningStatusActive, nil, nil); err != nil {
 		t.Fatalf("CreateMember: %v", err)
 	}
 	if err := maStore.AttachCredential(ctx, memberUUID, credHash); err != nil {
@@ -404,7 +404,7 @@ func TestAccessService_MemberPath_UpdatesLastAccess(t *testing.T) {
 	credHash := service.HashCredentialID([]byte{0x04, 0x01, 0x00, 0x07}, nil)
 
 	seedModule(t, dbConn, moduleID)
-	if err := maStore.CreateMember(ctx, memberUUID, "member", "", store.ProvisioningStatusActive, nil, nil); err != nil {
+	if err := maStore.CreateMember(ctx, memberUUID, "", store.ProvisioningStatusActive, nil, nil); err != nil {
 		t.Fatalf("CreateMember: %v", err)
 	}
 	if err := maStore.AttachCredential(ctx, memberUUID, credHash); err != nil {
@@ -452,15 +452,15 @@ func TestExpiryWorker_HardDeadlineSweep(t *testing.T) {
 	future := time.Now().UTC().Add(24 * time.Hour)
 
 	// Expired by hard deadline.
-	if err := maStore.CreateMember(ctx, "exp-001", "member", "", store.ProvisioningStatusActive, &past, nil); err != nil {
+	if err := maStore.CreateMember(ctx, "exp-001", "", store.ProvisioningStatusActive, &past, nil); err != nil {
 		t.Fatalf("CreateMember exp-001: %v", err)
 	}
 	// Not yet expired.
-	if err := maStore.CreateMember(ctx, "exp-002", "member", "", store.ProvisioningStatusActive, &future, nil); err != nil {
+	if err := maStore.CreateMember(ctx, "exp-002", "", store.ProvisioningStatusActive, &future, nil); err != nil {
 		t.Fatalf("CreateMember exp-002: %v", err)
 	}
 	// No deadline — never expires via hard sweep.
-	if err := maStore.CreateMember(ctx, "exp-003", "member", "", store.ProvisioningStatusActive, nil, nil); err != nil {
+	if err := maStore.CreateMember(ctx, "exp-003", "", store.ProvisioningStatusActive, nil, nil); err != nil {
 		t.Fatalf("CreateMember exp-003: %v", err)
 	}
 
@@ -489,7 +489,7 @@ func TestExpiryWorker_InactivitySweep(t *testing.T) {
 
 	// Member with 1-day inactivity limit, last seen 2 days ago → should expire.
 	inact1 := 1
-	if err := maStore.CreateMember(ctx, "inact-001", "member", "", store.ProvisioningStatusActive, nil, &inact1); err != nil {
+	if err := maStore.CreateMember(ctx, "inact-001", "", store.ProvisioningStatusActive, nil, &inact1); err != nil {
 		t.Fatalf("CreateMember inact-001: %v", err)
 	}
 	twoDaysAgo := time.Now().UTC().Add(-48 * time.Hour)
@@ -499,7 +499,7 @@ func TestExpiryWorker_InactivitySweep(t *testing.T) {
 
 	// Member with 30-day inactivity limit, last seen yesterday → should NOT expire.
 	inact30 := 30
-	if err := maStore.CreateMember(ctx, "inact-002", "member", "", store.ProvisioningStatusActive, nil, &inact30); err != nil {
+	if err := maStore.CreateMember(ctx, "inact-002", "", store.ProvisioningStatusActive, nil, &inact30); err != nil {
 		t.Fatalf("CreateMember inact-002: %v", err)
 	}
 	yesterday := time.Now().UTC().Add(-24 * time.Hour)
@@ -531,7 +531,7 @@ func TestExpiryWorker_RunsOnStart(t *testing.T) {
 	maStore := sqlitestore.NewMemberAccessStore(dbConn, writer)
 
 	past := time.Now().UTC().Add(-1 * time.Hour)
-	if err := maStore.CreateMember(ctx, "worker-001", "member", "", store.ProvisioningStatusActive, &past, nil); err != nil {
+	if err := maStore.CreateMember(ctx, "worker-001", "", store.ProvisioningStatusActive, &past, nil); err != nil {
 		t.Fatalf("CreateMember: %v", err)
 	}
 
@@ -558,12 +558,11 @@ func TestMemberAccessService_AttachCredential_DuplicateActive(t *testing.T) {
 	ctx := context.Background()
 	dbConn, writer := openSvcTestDB(t)
 	maStore := sqlitestore.NewMemberAccessStore(dbConn, writer)
-	roleStore := sqlitestore.NewRoleStore(dbConn, writer)
 
-	svc := service.NewMemberAccessService(maStore, roleStore)
+	svc := service.NewMemberAccessService(maStore)
 
 	// Provision first member and attach a credential.
-	m1, err := svc.ProvisionMember(ctx, "member", "", nil, nil)
+	m1, err := svc.ProvisionMember(ctx, "", nil, nil)
 	if err != nil {
 		t.Fatalf("ProvisionMember m1: %v", err)
 	}
@@ -577,7 +576,7 @@ func TestMemberAccessService_AttachCredential_DuplicateActive(t *testing.T) {
 	}
 
 	// Provision second member and try to attach the same credential.
-	m2, err := svc.ProvisionMember(ctx, "member", "", nil, nil)
+	m2, err := svc.ProvisionMember(ctx, "", nil, nil)
 	if err != nil {
 		t.Fatalf("ProvisionMember m2: %v", err)
 	}
@@ -594,11 +593,10 @@ func TestMemberAccessService_AttachCredential_DuplicateInactive(t *testing.T) {
 	ctx := context.Background()
 	dbConn, writer := openSvcTestDB(t)
 	maStore := sqlitestore.NewMemberAccessStore(dbConn, writer)
-	roleStore := sqlitestore.NewRoleStore(dbConn, writer)
 
-	svc := service.NewMemberAccessService(maStore, roleStore)
+	svc := service.NewMemberAccessService(maStore)
 
-	m1, err := svc.ProvisionMember(ctx, "member", "", nil, nil)
+	m1, err := svc.ProvisionMember(ctx, "", nil, nil)
 	if err != nil {
 		t.Fatalf("ProvisionMember: %v", err)
 	}
@@ -611,7 +609,7 @@ func TestMemberAccessService_AttachCredential_DuplicateInactive(t *testing.T) {
 		t.Fatalf("SetStatus expired: %v", err)
 	}
 
-	m2, err := svc.ProvisionMember(ctx, "member", "", nil, nil)
+	m2, err := svc.ProvisionMember(ctx, "", nil, nil)
 	if err != nil {
 		t.Fatalf("ProvisionMember m2: %v", err)
 	}
@@ -647,7 +645,7 @@ func TestAccess_FirmwareEnrolledCredential_IsGranted(t *testing.T) {
 	// ── End firmware side ──
 
 	seedModule(t, dbConn, moduleID)
-	if err := maStore.CreateMember(ctx, memberUUID, "member", "", store.ProvisioningStatusActive, nil, nil); err != nil {
+	if err := maStore.CreateMember(ctx, memberUUID, "", store.ProvisioningStatusActive, nil, nil); err != nil {
 		t.Fatalf("CreateMember: %v", err)
 	}
 	if err := maStore.AttachCredential(ctx, memberUUID, enrolledHash); err != nil {
@@ -700,7 +698,7 @@ func TestAccessService_FailOpen_UnauthorizedModuleIsDenied(t *testing.T) {
 
 	credHash := service.HashCredentialID([]byte{0x04, 0xBB, 0xCC, 0xDD}, nil)
 
-	if err := maStore.CreateMember(ctx, memberUUID, "member", "", store.ProvisioningStatusActive, nil, nil); err != nil {
+	if err := maStore.CreateMember(ctx, memberUUID, "", store.ProvisioningStatusActive, nil, nil); err != nil {
 		t.Fatalf("CreateMember: %v", err)
 	}
 	if err := maStore.AttachCredential(ctx, memberUUID, credHash); err != nil {

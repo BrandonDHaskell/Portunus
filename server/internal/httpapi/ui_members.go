@@ -86,14 +86,6 @@ func (s *Server) handleUIMembersDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// All roles — used by the assign-role form.
-	roles, err := s.roleService.ListRoles(r.Context())
-	if err != nil {
-		s.logger.Printf("ui list roles for member detail: %v", err)
-	} else {
-		d.Roles = roles
-	}
-
 	// Recent access events (only if a credential is attached).
 	if len(rec.CredentialHash) == 32 && s.accessService != nil {
 		events, err := s.accessService.ListEventsByCredential(r.Context(), rec.CredentialHash, 50)
@@ -112,15 +104,6 @@ func (s *Server) handleUIMembersDetail(w http.ResponseWriter, r *http.Request) {
 // handleUIMembersNew serves GET /admin/ui/members/new.
 func (s *Server) handleUIMembersNew(w http.ResponseWriter, r *http.Request) {
 	d := newUIPageData(r, "members")
-
-	roles, err := s.roleService.ListRoles(r.Context())
-	if err != nil {
-		s.logger.Printf("ui new member: list roles: %v", err)
-		d.Flash = "Failed to load roles."
-		d.FlashType = "error"
-	}
-	d.Roles = roles
-
 	render.render(w, "members_provision", d)
 }
 
@@ -131,7 +114,6 @@ func (s *Server) handleUIMembersCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	roleID := r.FormValue("role_id")
 	expiresAtStr := r.FormValue("expires_at")
 	inactivityStr := r.FormValue("inactivity_limit_days")
 
@@ -162,22 +144,14 @@ func (s *Server) handleUIMembersCreate(w http.ResponseWriter, r *http.Request) {
 		createdBy = sess.AdminUUID
 	}
 
-	rec, err := s.memberAccessService.ProvisionMember(r.Context(), roleID, createdBy, expiresAt, inactivityDays)
+	rec, err := s.memberAccessService.ProvisionMember(r.Context(), createdBy, expiresAt, inactivityDays)
 	if err != nil {
-		if errors.Is(err, service.ErrRoleIDRequired) {
-			flashRedirect(w, r, "/admin/ui/members/new", "A role is required.", "error")
-			return
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			flashRedirect(w, r, "/admin/ui/members/new", "Selected role does not exist.", "error")
-			return
-		}
 		s.logger.Printf("ui provision member: %v", err)
 		flashRedirect(w, r, "/admin/ui/members/new", "Failed to provision member.", "error")
 		return
 	}
 
-	s.logger.Printf("admin ui: provisioned member uuid=%s role=%s by=%s", rec.UUID, rec.RoleID, createdBy)
+	s.logger.Printf("admin ui: provisioned member uuid=%s by=%s", rec.UUID, createdBy)
 	http.Redirect(w, r, "/admin/ui/members/"+rec.UUID+"?flash=Member+provisioned.+Copy+UUID+below.&ft=success", http.StatusSeeOther)
 }
 
@@ -222,37 +196,6 @@ func (s *Server) handleUIMembersAttachCredential(w http.ResponseWriter, r *http.
 	flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Credential attached.", "success")
 }
 
-// handleUIMembersAssignRole handles POST /admin/ui/members/{member_uuid}/role.
-func (s *Server) handleUIMembersAssignRole(w http.ResponseWriter, r *http.Request) {
-	memberUUID := r.PathValue("member_uuid")
-	if err := r.ParseForm(); err != nil {
-		flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Invalid form submission.", "error")
-		return
-	}
-
-	roleID := r.FormValue("role_id")
-	if err := s.memberAccessService.AssignRole(r.Context(), memberUUID, roleID); err != nil {
-		switch {
-		case errors.Is(err, service.ErrMemberNotFound):
-			http.NotFound(w, r)
-			return
-		case errors.Is(err, service.ErrRoleIDRequired):
-			flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "A role is required.", "error")
-			return
-		case errors.Is(err, store.ErrNotFound):
-			flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Selected role does not exist.", "error")
-			return
-		default:
-			s.logger.Printf("ui assign role to member %s: %v", memberUUID, err)
-			flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Failed to assign role.", "error")
-			return
-		}
-	}
-
-	s.logger.Printf("admin ui: assigned role %q to member %s", roleID, memberUUID)
-	flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Role updated.", "success")
-}
-
 // handleUIMembersApprove handles POST /admin/ui/members/{member_uuid}/approve.
 func (s *Server) handleUIMembersApprove(w http.ResponseWriter, r *http.Request) {
 	memberUUID := r.PathValue("member_uuid")
@@ -261,7 +204,6 @@ func (s *Server) handleUIMembersApprove(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	roleID := r.FormValue("role_id")
 	expiresAtStr := r.FormValue("expires_at")
 	inactivityStr := r.FormValue("inactivity_limit_days")
 
@@ -276,14 +218,15 @@ func (s *Server) handleUIMembersApprove(w http.ResponseWriter, r *http.Request) 
 		expiresAt = &u
 	}
 
-	var inactivityDays *int
-	if inactivityStr != "" {
-		var n int
-		if _, err := parseIntFormValue(inactivityStr, &n); err != nil || n < 1 {
-			flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Inactivity limit must be a positive number.", "error")
-			return
-		}
-		inactivityDays = &n
+	// Inactivity is required at approval time.
+	if inactivityStr == "" {
+		flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Inactivity limit is required when approving a member.", "error")
+		return
+	}
+	var inactivityDays int
+	if _, err := parseIntFormValue(inactivityStr, &inactivityDays); err != nil || inactivityDays < 1 {
+		flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Inactivity limit must be a positive number.", "error")
+		return
 	}
 
 	sess := sessionFromContext(r.Context())
@@ -292,7 +235,7 @@ func (s *Server) handleUIMembersApprove(w http.ResponseWriter, r *http.Request) 
 		approvedBy = sess.AdminUUID
 	}
 
-	if err := s.memberAccessService.ApprovePending(r.Context(), memberUUID, roleID, approvedBy, expiresAt, inactivityDays); err != nil {
+	if err := s.memberAccessService.ApprovePending(r.Context(), memberUUID, approvedBy, expiresAt, &inactivityDays); err != nil {
 		msg := "Failed to approve member."
 		switch {
 		case errors.Is(err, service.ErrMemberNotFound):
@@ -300,10 +243,8 @@ func (s *Server) handleUIMembersApprove(w http.ResponseWriter, r *http.Request) 
 			return
 		case errors.Is(err, service.ErrMemberNotPending):
 			msg = "Member is not pending authorization."
-		case errors.Is(err, service.ErrRoleIDRequired):
-			msg = "A role is required."
-		case errors.Is(err, store.ErrNotFound):
-			msg = "Selected role does not exist."
+		case errors.Is(err, service.ErrInactivityLimitRequired):
+			msg = "Inactivity limit is required."
 		default:
 			s.logger.Printf("ui approve pending member %s: %v", memberUUID, err)
 		}
@@ -467,8 +408,6 @@ func (s *Server) uiMemberRoutes(mux *http.ServeMux) {
 		perm(permissions.MemberEnroll, s.handleUIMembersApprove))
 	mux.HandleFunc("POST /admin/ui/members/{member_uuid}/credential",
 		perm(permissions.MemberEnroll, s.handleUIMembersAttachCredential))
-	mux.HandleFunc("POST /admin/ui/members/{member_uuid}/role",
-		perm(permissions.MemberAssignRole, s.handleUIMembersAssignRole))
 	mux.HandleFunc("POST /admin/ui/members/{member_uuid}/disable",
 		perm(permissions.MemberDisable, s.handleUIMembersDisable))
 	mux.HandleFunc("POST /admin/ui/members/{member_uuid}/enable",

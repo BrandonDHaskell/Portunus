@@ -15,7 +15,7 @@ import (
 var (
 	ErrMemberNotFound              = errors.New("member not found")
 	ErrMemberUUIDRequired          = errors.New("member_uuid is required")
-	ErrRoleIDRequired              = errors.New("role_id is required")
+	ErrInactivityLimitRequired     = errors.New("inactivity_limit_days is required when approving a member")
 	ErrCredentialHashRequired      = errors.New("credential_hash is required")
 	ErrDuplicateCredentialActive   = errors.New("credential already assigned to an active member")
 	ErrDuplicateCredentialPending  = errors.New("credential already attached to a pending_authorization member")
@@ -25,37 +25,24 @@ var (
 
 type MemberAccessService struct {
 	memberStore store.MemberAccessStore
-	roleStore   store.RoleStore
 }
 
-func NewMemberAccessService(ms store.MemberAccessStore, rs store.RoleStore) *MemberAccessService {
-	return &MemberAccessService{memberStore: ms, roleStore: rs}
+func NewMemberAccessService(ms store.MemberAccessStore) *MemberAccessService {
+	return &MemberAccessService{memberStore: ms}
 }
 
 // ProvisionMember creates a new member_access record with a fresh v4 UUID.
 // createdByUUID may be empty for system-initiated provisioning.
 func (s *MemberAccessService) ProvisionMember(
 	ctx context.Context,
-	roleID, createdByUUID string,
+	createdByUUID string,
 	expiresAt *time.Time,
 	inactivityLimitDays *int,
 ) (*store.MemberAccessRecord, error) {
-	roleID = strings.TrimSpace(roleID)
-	if roleID == "" {
-		return nil, ErrRoleIDRequired
-	}
-
-	if _, err := s.roleStore.GetRole(ctx, roleID); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, fmt.Errorf("role %q not found: %w", roleID, store.ErrNotFound)
-		}
-		return nil, fmt.Errorf("get role: %w", err)
-	}
-
 	memberUUID := uuid.New().String()
 
 	if err := s.memberStore.CreateMember(
-		ctx, memberUUID, roleID, createdByUUID,
+		ctx, memberUUID, createdByUUID,
 		store.ProvisioningStatusPendingAuthorization,
 		expiresAt, inactivityLimitDays,
 	); err != nil {
@@ -120,39 +107,6 @@ func (s *MemberAccessService) checkCredentialUniqueness(ctx context.Context, cre
 	default:
 		return ErrDuplicateCredentialActive
 	}
-}
-
-// AssignRole changes the role of an existing member.
-func (s *MemberAccessService) AssignRole(ctx context.Context, memberUUID, roleID string) error {
-	memberUUID = strings.TrimSpace(memberUUID)
-	roleID = strings.TrimSpace(roleID)
-	if memberUUID == "" {
-		return ErrMemberUUIDRequired
-	}
-	if roleID == "" {
-		return ErrRoleIDRequired
-	}
-
-	if _, err := s.roleStore.GetRole(ctx, roleID); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return fmt.Errorf("role %q not found: %w", roleID, store.ErrNotFound)
-		}
-		return fmt.Errorf("get role: %w", err)
-	}
-
-	if err := s.memberStore.AssignRole(ctx, memberUUID, roleID); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return ErrMemberNotFound
-		}
-		return fmt.Errorf("assign role: %w", err)
-	}
-	return nil
-}
-
-// PromoteGuest reassigns a guest member to a new role. Preserves UUID and
-// credential_hash so audit continuity is maintained.
-func (s *MemberAccessService) PromoteGuest(ctx context.Context, memberUUID, newRoleID string) error {
-	return s.AssignRole(ctx, memberUUID, newRoleID)
 }
 
 // Disable sets enabled = false on the member.
@@ -230,32 +184,25 @@ func (s *MemberAccessService) ListPendingAuthorizations(ctx context.Context) ([]
 	return s.memberStore.ListPendingAuthorizations(ctx)
 }
 
-// ApprovePending assigns a role to a pending_authorization member and activates it.
+// ApprovePending activates a pending_authorization member.
+// inactivityLimitDays is required — the admin must explicitly choose a window.
+// expiresAt is optional; nil means no hard deadline.
 // The approver UUID comes from the authenticated admin session, never the client.
 func (s *MemberAccessService) ApprovePending(
 	ctx context.Context,
-	memberUUID, roleID, approvedByUUID string,
+	memberUUID, approvedByUUID string,
 	expiresAt *time.Time,
 	inactivityLimitDays *int,
 ) error {
 	memberUUID = strings.TrimSpace(memberUUID)
-	roleID = strings.TrimSpace(roleID)
 	if memberUUID == "" {
 		return ErrMemberUUIDRequired
 	}
-	if roleID == "" {
-		return ErrRoleIDRequired
+	if inactivityLimitDays == nil {
+		return ErrInactivityLimitRequired
 	}
-	role, err := s.roleStore.GetRole(ctx, roleID)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return fmt.Errorf("role %q not found: %w", roleID, store.ErrNotFound)
-		}
-		return fmt.Errorf("get role: %w", err)
-	}
-	expiresAt, inactivityLimitDays = applyRoleDefaults(role, expiresAt, inactivityLimitDays)
 
-	if err := s.memberStore.ApprovePending(ctx, memberUUID, roleID, approvedByUUID, expiresAt, inactivityLimitDays); err != nil {
+	if err := s.memberStore.ApprovePending(ctx, memberUUID, approvedByUUID, expiresAt, inactivityLimitDays); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return ErrMemberNotFound
 		}
@@ -265,18 +212,4 @@ func (s *MemberAccessService) ApprovePending(
 		return fmt.Errorf("approve pending: %w", err)
 	}
 	return nil
-}
-
-// applyRoleDefaults fills expiry/inactivity from the role's defaults when the
-// caller did not specify them.
-func applyRoleDefaults(role *store.RoleRecord, expiresAt *time.Time, inactivityLimitDays *int) (*time.Time, *int) {
-	if expiresAt == nil && role.DefaultExpiryDays != nil {
-		t := time.Now().UTC().AddDate(0, 0, *role.DefaultExpiryDays)
-		expiresAt = &t
-	}
-	if inactivityLimitDays == nil && role.DefaultInactivityDays != nil {
-		v := *role.DefaultInactivityDays
-		inactivityLimitDays = &v
-	}
-	return expiresAt, inactivityLimitDays
 }

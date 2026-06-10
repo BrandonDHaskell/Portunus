@@ -129,8 +129,6 @@ func NewServer(d Dependencies) *Server {
 			requirePermission(permissions.MemberEnroll, s.handleAdminProvisionMember))
 		mux.HandleFunc("POST /admin/v1/members/{member_uuid}/credential",
 			requirePermission(permissions.MemberEnroll, s.handleAdminAttachCredential))
-		mux.HandleFunc("PUT /admin/v1/members/{member_uuid}/role",
-			requirePermission(permissions.MemberAssignRole, s.handleAdminAssignRole))
 		mux.HandleFunc("POST /admin/v1/members/{member_uuid}/approve",
 			requirePermission(permissions.MemberEnroll, s.handleAdminApprovePending))
 		mux.HandleFunc("POST /admin/v1/members/{member_uuid}/disable",

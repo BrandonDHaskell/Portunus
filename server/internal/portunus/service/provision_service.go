@@ -15,22 +15,16 @@ import (
 
 var ErrProvisionCredentialUIDRequired = errors.New("credential_uid is required")
 
-// capturePlaceholderRole is assigned to device-captured pending members.
-// An admin reassigns it at approval time. Path 2 (operator enrolment) has
-// been removed; capture is now the only provisioning path.
-const capturePlaceholderRole = "guest"
-
 // ProvisionService handles device-initiated member provisioning.
 //
-// Capture path: a PEU scan with no operator badge creates one
-// pending_authorization member. An admin approves it later via the console.
+// Capture path: a PEU scan creates one pending_authorization member.
+// An admin approves it later via the console.
 //
 // Only PEU (provisioning_enrollment_unit) modules may call Provision. ACU
 // (access_control_unit) modules are blocked at the module-type gate.
 type ProvisionService struct {
 	registry             *DeviceRegistry
 	memberStore          store.MemberAccessStore
-	roleStore            store.RoleStore
 	accessEvents         store.AccessEventStore
 	auditStore           store.AuditStore // may be nil; writes are best-effort
 	credentialHashSecret []byte
@@ -39,7 +33,6 @@ type ProvisionService struct {
 func NewProvisionService(
 	registry *DeviceRegistry,
 	memberStore store.MemberAccessStore,
-	roleStore store.RoleStore,
 	accessEvents store.AccessEventStore,
 	credentialHashSecret []byte,
 	auditStore store.AuditStore,
@@ -47,7 +40,6 @@ func NewProvisionService(
 	return &ProvisionService{
 		registry:             registry,
 		memberStore:          memberStore,
-		roleStore:            roleStore,
 		accessEvents:         accessEvents,
 		auditStore:           auditStore,
 		credentialHashSecret: credentialHashSecret,
@@ -112,7 +104,7 @@ func (s *ProvisionService) capture(
 	}
 
 	memberUUID := uuid.New().String()
-	if err := s.memberStore.CreateMember(ctx, memberUUID, capturePlaceholderRole, "",
+	if err := s.memberStore.CreateMember(ctx, memberUUID, "",
 		store.ProvisioningStatusPendingAuthorization, nil, nil); err != nil {
 		return types.ProvisionCredentialResponse{}, fmt.Errorf("create pending member: %w", err)
 	}

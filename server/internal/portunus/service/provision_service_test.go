@@ -2,7 +2,7 @@ package service_test
 
 // Integration tests for ProvisionService.
 //
-// Capture path: PEU + no operator UID → pending_authorization created.
+// Capture path: PEU + credential UID → pending_authorization created.
 //
 // Gate checks:
 //   - ACU module → unauthorized (PEU gate)
@@ -26,7 +26,6 @@ const testModuleID = "prov-module-001"
 func newProvisionSvc(t *testing.T) (
 	*service.ProvisionService,
 	store.MemberAccessStore,
-	store.RoleStore,
 	*memory.AccessEventStore,
 ) {
 	t.Helper()
@@ -34,15 +33,14 @@ func newProvisionSvc(t *testing.T) (
 	seedModule(t, conn, testModuleID)
 
 	maStore := sqlitestore.NewMemberAccessStore(conn, writer)
-	roleStore := sqlitestore.NewRoleStore(conn, writer)
 	eventStore := memory.NewAccessEventStore()
 	registry := service.NewDeviceRegistry(memory.NewDeviceStore([]string{testModuleID}))
 
 	svc := service.NewProvisionService(
-		registry, maStore, roleStore, eventStore,
+		registry, maStore, eventStore,
 		testSecret, nil,
 	)
-	return svc, maStore, roleStore, eventStore
+	return svc, maStore, eventStore
 }
 
 func captureReq(credUID []byte) types.ProvisionCredentialRequest {
@@ -70,13 +68,12 @@ VALUES ('acu-module', 1, ?, ?, ?)`, now, now, now); err != nil {
 	}
 
 	maStore := sqlitestore.NewMemberAccessStore(conn, writer)
-	roleStore := sqlitestore.NewRoleStore(conn, writer)
 	eventStore := memory.NewAccessEventStore()
 	deviceStore := sqlitestore.NewDeviceStore(conn, writer)
 	registry := service.NewDeviceRegistry(deviceStore)
 
 	svc := service.NewProvisionService(
-		registry, maStore, roleStore, eventStore,
+		registry, maStore, eventStore,
 		testSecret, nil,
 	)
 
@@ -96,7 +93,7 @@ VALUES ('acu-module', 1, ?, ?, ?)`, now, now, now); err != nil {
 // ── Capture path ──────────────────────────────────────────────────────────────
 
 func TestProvision_Capture_CreatesNewPendingMember(t *testing.T) {
-	svc, maStore, _, _ := newProvisionSvc(t)
+	svc, maStore, _ := newProvisionSvc(t)
 	credUID := []byte{0x04, 0xAA, 0xBB, 0xCC}
 
 	resp, err := svc.Provision(context.Background(), captureReq(credUID))
@@ -120,7 +117,7 @@ func TestProvision_Capture_CreatesNewPendingMember(t *testing.T) {
 }
 
 func TestProvision_Capture_DuplicateScan_ReturnsDuplicatePending(t *testing.T) {
-	svc, _, _, _ := newProvisionSvc(t)
+	svc, _, _ := newProvisionSvc(t)
 	credUID := []byte{0x04, 0x11, 0x22, 0x33}
 
 	resp1, err := svc.Provision(context.Background(), captureReq(credUID))

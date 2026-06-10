@@ -93,7 +93,7 @@ func main() {
 	accessSvc.SetLogger(logger)
 
 	// Member access + module authorization services.
-	memberAccessSvc := service.NewMemberAccessService(memberAccessStore, roleStore)
+	memberAccessSvc := service.NewMemberAccessService(memberAccessStore)
 	moduleAuthSvc := service.NewModuleAuthorizationService(moduleAuthStore)
 
 	// Enable member_access + module_authorizations path in the access service.
@@ -111,7 +111,7 @@ func main() {
 	defer expiryWorker.Stop()
 
 	// Provisioning service: handles device-initiated provisioning from PROVISIONING_CONSOLE modules.
-	provisionSvc := service.NewProvisionService(registry, memberAccessStore, roleStore, accessEventStore, credentialHashSecret, auditStore)
+	provisionSvc := service.NewProvisionService(registry, memberAccessStore, accessEventStore, credentialHashSecret, auditStore)
 
 	// Admin service for module and door management via REST API.
 	adminSvc := service.NewAdminService(moduleAdminStore, credentialHashSecret)

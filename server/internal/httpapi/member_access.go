@@ -86,22 +86,14 @@ func (s *Server) handleAdminProvisionMember(w http.ResponseWriter, r *http.Reque
 		createdByUUID = sess.AdminUUID
 	}
 
-	rec, err := s.memberAccessService.ProvisionMember(r.Context(), req.RoleID, createdByUUID, expiresAt, req.InactivityLimitDays)
+	rec, err := s.memberAccessService.ProvisionMember(r.Context(), createdByUUID, expiresAt, req.InactivityLimitDays)
 	if err != nil {
-		if errors.Is(err, service.ErrRoleIDRequired) {
-			writeError(w, http.StatusBadRequest, "missing_role_id", err.Error())
-			return
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusBadRequest, "role_not_found", "the specified role does not exist")
-			return
-		}
 		s.logger.Printf("admin provision member: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "failed to provision member")
 		return
 	}
 
-	s.logger.Printf("admin: provisioned member uuid=%s role=%s", rec.UUID, rec.RoleID)
+	s.logger.Printf("admin: provisioned member uuid=%s", rec.UUID)
 	s.audit(r, "member.create", "member", rec.UUID, "success", "")
 	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "member": memberRecordToInfo(rec)})
 }
@@ -137,16 +129,14 @@ func (s *Server) handleAdminApprovePending(w http.ResponseWriter, r *http.Reques
 		approvedByUUID = sess.AdminUUID
 	}
 
-	if err := s.memberAccessService.ApprovePending(r.Context(), memberUUID, req.RoleID, approvedByUUID, expiresAt, req.InactivityLimitDays); err != nil {
+	if err := s.memberAccessService.ApprovePending(r.Context(), memberUUID, approvedByUUID, expiresAt, req.InactivityLimitDays); err != nil {
 		switch {
 		case errors.Is(err, service.ErrMemberNotFound):
 			writeError(w, http.StatusNotFound, "not_found", "member not found")
 		case errors.Is(err, service.ErrMemberNotPending):
 			writeError(w, http.StatusConflict, "not_pending", "member is not pending authorization")
-		case errors.Is(err, service.ErrRoleIDRequired):
-			writeError(w, http.StatusBadRequest, "missing_role_id", err.Error())
-		case errors.Is(err, store.ErrNotFound):
-			writeError(w, http.StatusBadRequest, "role_not_found", "the specified role does not exist")
+		case errors.Is(err, service.ErrInactivityLimitRequired):
+			writeError(w, http.StatusBadRequest, "missing_inactivity_limit", err.Error())
 		default:
 			s.logger.Printf("admin approve pending: %v", err)
 			writeError(w, http.StatusInternalServerError, "internal_error", "failed to approve member")
@@ -200,39 +190,6 @@ func (s *Server) handleAdminAttachCredential(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "member_uuid": memberUUID})
 }
 
-func (s *Server) handleAdminAssignRole(w http.ResponseWriter, r *http.Request) {
-	memberUUID := r.PathValue("member_uuid")
-	if memberUUID == "" {
-		writeError(w, http.StatusBadRequest, "missing_member_uuid", "member_uuid path parameter is required")
-		return
-	}
-
-	var req types.AssignRoleRequest
-	r.Body = http.MaxBytesReader(w, r.Body, maxAdminBody)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "bad_json", "invalid JSON body")
-		return
-	}
-
-	if err := s.memberAccessService.AssignRole(r.Context(), memberUUID, req.RoleID); err != nil {
-		switch {
-		case errors.Is(err, service.ErrMemberNotFound):
-			writeError(w, http.StatusNotFound, "not_found", "member not found")
-		case errors.Is(err, service.ErrRoleIDRequired):
-			writeError(w, http.StatusBadRequest, "missing_role_id", err.Error())
-		case errors.Is(err, store.ErrNotFound):
-			writeError(w, http.StatusBadRequest, "role_not_found", "the specified role does not exist")
-		default:
-			s.logger.Printf("admin assign role: %v", err)
-			writeError(w, http.StatusInternalServerError, "internal_error", "failed to assign role")
-		}
-		return
-	}
-
-	s.logger.Printf("admin: assigned role %s to member %s", req.RoleID, memberUUID)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "member_uuid": memberUUID, "role_id": req.RoleID})
-}
-
 func (s *Server) handleAdminDisableMember(w http.ResponseWriter, r *http.Request) {
 	memberUUID := r.PathValue("member_uuid")
 	if memberUUID == "" {
@@ -283,7 +240,6 @@ func (s *Server) handleAdminArchiveMember(w http.ResponseWriter, r *http.Request
 func memberRecordToInfo(rec *store.MemberAccessRecord) types.MemberInfo {
 	info := types.MemberInfo{
 		UUID:                rec.UUID,
-		RoleID:              rec.RoleID,
 		Status:              string(rec.Status),
 		Enabled:             rec.Enabled,
 		ProvisioningStatus:  string(rec.ProvisioningStatus),
@@ -298,6 +254,9 @@ func memberRecordToInfo(rec *store.MemberAccessRecord) types.MemberInfo {
 	}
 	if rec.ExpiresAt != nil {
 		info.ExpiresAt = rec.ExpiresAt.Format(time.RFC3339)
+	}
+	if rec.ActivatedAt != nil {
+		info.ActivatedAt = rec.ActivatedAt.Format(time.RFC3339)
 	}
 	if rec.LastAccessAt != nil {
 		info.LastAccessAt = rec.LastAccessAt.Format(time.RFC3339)
