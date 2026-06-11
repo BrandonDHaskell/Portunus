@@ -45,8 +45,8 @@ func anyActor() service.GrantActor {
 	return service.GrantActor{
 		AdminUUID: "admin-uuid",
 		Perms: map[string]struct{}{
-			permissions.ModuleAuthGrantAny:   {},
-			permissions.ModuleAuthRevokeAny:  {},
+			permissions.ModuleAuthGrantAny:  {},
+			permissions.ModuleAuthRevokeAny: {},
 		},
 	}
 }
