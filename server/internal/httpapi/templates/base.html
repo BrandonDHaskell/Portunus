@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{block "title" .}}Portunus Admin{{end}}</title>
+<script>(function(){var t=localStorage.getItem('theme')||(window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');document.documentElement.setAttribute('data-theme',t);})();</script>
 <link rel="stylesheet" href="/admin/ui/static/style.css">
 </head>
 <body>
@@ -22,11 +23,23 @@
     </form>
   </span>
   {{end}}
+  <button id="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark theme" style="background:none;border:none;cursor:pointer;font-size:16px;padding:0 .25rem;line-height:1;color:var(--text-muted)">☾</button>
 </nav>
 <main>
   {{if .Flash}}<div class="flash {{.FlashType}}">{{.Flash}}</div>{{end}}
   {{block "content" .}}{{end}}
 </main>
 <script src="/admin/ui/static/htmx.min.js"></script>
+<script>
+function toggleTheme(){
+  var h=document.documentElement;
+  var next=h.getAttribute('data-theme')==='dark'?'light':'dark';
+  h.setAttribute('data-theme',next);
+  localStorage.setItem('theme',next);
+  document.getElementById('theme-toggle').textContent=next==='dark'?'☀':'☾';
+}
+document.getElementById('theme-toggle').textContent=
+  document.documentElement.getAttribute('data-theme')==='dark'?'☀':'☾';
+</script>
 </body>
 </html>{{end}}
