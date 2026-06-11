@@ -28,14 +28,12 @@ The standard door-control module. Provides:
 
 ### PROVISIONING_CONSOLE
 
-A two-scan credential enrollment console. No door-strike hardware required. Provides:
+A single-scan credential capture console. No door-strike hardware required. Provides:
 
 - MFRC522 RFID credential reading over SPI
 - WiFi station connectivity
-- a `ProvisioningFSM` that implements the two-scan enrollment flow:
-  - scan 1: operator credential (must match the configured `PORTUNUS_OPERATOR_UUID`)
-  - scan 2: the new credential to enroll
-- on-device SHA-256 hashing of the new credential (via mbedTLS) before transmission
+- a `ProvisioningFSM` that implements the capture enrollment flow: read one credential, hash on-device, submit to the server; an admin approves the resulting pending request via the console
+- on-device SHA-256 hashing of the credential (via mbedTLS) before transmission
 - `POST /v1/provision_credential` submission to the Portunus server
 - HMAC-SHA256 request signing
 

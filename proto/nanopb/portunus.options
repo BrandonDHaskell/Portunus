@@ -39,14 +39,10 @@ portunus.v1.AccessResponse.module_id                 max_size:33
 portunus.v1.AccessResponse.server_time               max_size:40
 
 # ── ProvisionCredentialRequest ──────────────────────────────────────────
-#   module_id               – same as other messages
-#   role_id                 – same headroom as module_id
-#   credential_uid          – raw RFID UID bytes; ISO 14443 max UID is 10 bytes
-#   operator_credential_uid – same format as credential_uid (scan-1 UID)
+#   module_id      – same as other messages
+#   credential_uid – raw RFID UID bytes; ISO 14443 max UID is 10 bytes
 portunus.v1.ProvisionCredentialRequest.module_id                max_size:33
-portunus.v1.ProvisionCredentialRequest.role_id                  max_size:33
 portunus.v1.ProvisionCredentialRequest.credential_uid           max_size:10
-portunus.v1.ProvisionCredentialRequest.operator_credential_uid  max_size:10
 
 # ── ProvisionCredentialResponse ─────────────────────────────────────────
 #   member_uuid – UUID = 36 + NUL

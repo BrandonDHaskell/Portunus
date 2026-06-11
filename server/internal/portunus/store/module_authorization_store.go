@@ -47,4 +47,9 @@ type ModuleAuthorizationStore interface {
 	// ListByModule returns all authorizations for a module, ordered by
 	// granted_at_ms DESC.
 	ListByModule(ctx context.Context, moduleID string) ([]ModuleAuthorizationRecord, error)
+
+	// HasActiveAuthorization reports whether memberUUID holds a non-revoked,
+	// non-expired authorization on moduleID. Returns the authorization_id when
+	// true so callers can record it in audit details.
+	HasActiveAuthorization(ctx context.Context, memberUUID, moduleID string) (authorizationID int64, ok bool, err error)
 }

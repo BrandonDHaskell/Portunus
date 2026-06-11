@@ -14,8 +14,7 @@ func TestMigration_DefaultRolesExist(t *testing.T) {
 	conn := openTestDB(t)
 	ctx := context.Background()
 
-	expected := []string{"admin", "operator", "viewer", "member", "guest"}
-	for _, id := range expected {
+	for _, id := range []string{"admin", "operator", "viewer"} {
 		var count int
 		err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM roles WHERE role_id = ?`, id).Scan(&count)
 		if err != nil {
@@ -23,6 +22,17 @@ func TestMigration_DefaultRolesExist(t *testing.T) {
 		}
 		if count != 1 {
 			t.Errorf("expected role %q to exist after migration, count=%d", id, count)
+		}
+	}
+
+	for _, id := range []string{"member", "guest"} {
+		var count int
+		err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM roles WHERE role_id = ?`, id).Scan(&count)
+		if err != nil {
+			t.Fatalf("query role %q: %v", id, err)
+		}
+		if count != 0 {
+			t.Errorf("expected role %q to be absent after migration 0024, count=%d", id, count)
 		}
 	}
 }
@@ -44,22 +54,6 @@ func TestMigration_SystemRolesFlagged(t *testing.T) {
 	}
 }
 
-func TestMigration_NonSystemRoles(t *testing.T) {
-	conn := openTestDB(t)
-	ctx := context.Background()
-
-	for _, id := range []string{"member", "guest"} {
-		var isSystem int
-		err := conn.QueryRowContext(ctx, `SELECT is_system FROM roles WHERE role_id = ?`, id).Scan(&isSystem)
-		if err != nil {
-			t.Fatalf("query is_system for %q: %v", id, err)
-		}
-		if isSystem != 0 {
-			t.Errorf("expected role %q to have is_system=0, got %d", id, isSystem)
-		}
-	}
-}
-
 // ── CreateRole ────────────────────────────────────────────────────────────────
 
 func TestRoleStore_CreateRole_InsertsRow(t *testing.T) {
@@ -68,7 +62,7 @@ func TestRoleStore_CreateRole_InsertsRow(t *testing.T) {
 	rs := sqlitestore.NewRoleStore(conn, w)
 	ctx := context.Background()
 
-	if err := rs.CreateRole(ctx, "custom", "Custom Role", "A test role", nil, nil); err != nil {
+	if err := rs.CreateRole(ctx, "custom", "Custom Role", "A test role"); err != nil {
 		t.Fatalf("CreateRole: %v", err)
 	}
 
@@ -87,34 +81,12 @@ func TestRoleStore_CreateRole_SetsIsSystemFalse(t *testing.T) {
 	rs := sqlitestore.NewRoleStore(conn, w)
 	ctx := context.Background()
 
-	_ = rs.CreateRole(ctx, "custom2", "Another Role", "", nil, nil)
+	_ = rs.CreateRole(ctx, "custom2", "Another Role", "")
 
 	var isSystem int
 	conn.QueryRowContext(ctx, `SELECT is_system FROM roles WHERE role_id = 'custom2'`).Scan(&isSystem)
 	if isSystem != 0 {
 		t.Errorf("expected is_system=0 for user-created role, got %d", isSystem)
-	}
-}
-
-func TestRoleStore_CreateRole_WithDefaultPolicies(t *testing.T) {
-	conn := openTestDB(t)
-	w := newTestWriter(t, conn)
-	rs := sqlitestore.NewRoleStore(conn, w)
-	ctx := context.Background()
-
-	expiry := 30
-	inactivity := 90
-	_ = rs.CreateRole(ctx, "policy_role", "Policy Role", "", &expiry, &inactivity)
-
-	rec, err := rs.GetRole(ctx, "policy_role")
-	if err != nil {
-		t.Fatalf("GetRole: %v", err)
-	}
-	if rec.DefaultExpiryDays == nil || *rec.DefaultExpiryDays != 30 {
-		t.Errorf("unexpected DefaultExpiryDays: %v", rec.DefaultExpiryDays)
-	}
-	if rec.DefaultInactivityDays == nil || *rec.DefaultInactivityDays != 90 {
-		t.Errorf("unexpected DefaultInactivityDays: %v", rec.DefaultInactivityDays)
 	}
 }
 
@@ -156,8 +128,8 @@ func TestRoleStore_ListRoles_IncludesSeeded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRoles: %v", err)
 	}
-	if len(roles) < 5 {
-		t.Errorf("expected at least 5 roles (seeded), got %d", len(roles))
+	if len(roles) < 3 {
+		t.Errorf("expected at least 3 roles (admin/operator/viewer), got %d", len(roles))
 	}
 }
 
@@ -180,7 +152,7 @@ func TestRoleStore_DeleteRole_NonSystemDeleted(t *testing.T) {
 	rs := sqlitestore.NewRoleStore(conn, w)
 	ctx := context.Background()
 
-	_ = rs.CreateRole(ctx, "temp_role", "Temp", "", nil, nil)
+	_ = rs.CreateRole(ctx, "temp_role", "Temp", "")
 	if err := rs.DeleteRole(ctx, "temp_role"); err != nil {
 		t.Fatalf("DeleteRole: %v", err)
 	}
@@ -262,7 +234,7 @@ func TestRoleStore_Permissions_DeleteCascades(t *testing.T) {
 	rs := sqlitestore.NewRoleStore(conn, w)
 	ctx := context.Background()
 
-	_ = rs.CreateRole(ctx, "cascade_role", "Cascade", "", nil, nil)
+	_ = rs.CreateRole(ctx, "cascade_role", "Cascade", "")
 	_ = rs.SetRolePermissions(ctx, "cascade_role", []string{"door.unlock_remote"})
 	_ = rs.DeleteRole(ctx, "cascade_role")
 

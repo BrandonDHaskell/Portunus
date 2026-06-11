@@ -33,12 +33,12 @@ const (
 // MemberAccessRecord represents a row in the member_access table.
 type MemberAccessRecord struct {
 	UUID                string
-	RoleID              string
 	CredentialHash      []byte // nil until enrolled
 	Status              MemberStatus
 	Enabled             bool
 	ExpiresAt           *time.Time
 	InactivityLimitDays *int
+	ActivatedAt         *time.Time // set at ApprovePending; nil while pending
 	LastAccessAt        *time.Time
 	CreatedAt           time.Time
 	CreatedByUUID       string
@@ -53,7 +53,7 @@ type MemberAccessStore interface {
 	// CreateMember inserts a new member_access row with the given identity and
 	// policy. uuid must be a v4 UUID string. createdByUUID may be empty for
 	// bootstrap scenarios.
-	CreateMember(ctx context.Context, uuid, roleID, createdByUUID string,
+	CreateMember(ctx context.Context, uuid, createdByUUID string,
 		provisioningStatus ProvisioningStatus,
 		expiresAt *time.Time, inactivityLimitDays *int) error
 
@@ -85,9 +85,6 @@ type MemberAccessStore interface {
 	// SetProvisioningStatus updates provisioning_status.
 	SetProvisioningStatus(ctx context.Context, uuid string, status ProvisioningStatus) error
 
-	// AssignRole changes the role for an existing member.
-	AssignRole(ctx context.Context, uuid, roleID string) error
-
 	// UpdateLastAccess records the time of a granted access event.
 	UpdateLastAccess(ctx context.Context, uuid string, t time.Time) error
 
@@ -102,15 +99,20 @@ type MemberAccessStore interface {
 
 	// ExpireByInactivity sets status = 'expired' for active records where
 	// inactivity_limit_days is non-null and
-	// (last_access_at_ms + inactivity_limit_days*86400000) <= cutoffMs, or
-	// (last_access_at_ms IS NULL and created_at_ms + inactivity_limit_days*86400000) <= cutoffMs.
-	// Returns the number of rows transitioned.
+	// COALESCE(last_access_at_ms, activated_at_ms, created_at_ms) +
+	// inactivity_limit_days*86400000 <= now. Returns the number of rows
+	// transitioned.
 	ExpireByInactivity(ctx context.Context, now time.Time) (int, error)
 
-	// ApprovePending promotes a pending_authorization member to active in one
-	// statement: assigns the role, sets status and provisioning_status to active,
-	// applies policy fields, and records the approver. Returns ErrNotFound if the
-	// member does not exist, ErrMemberNotPending if it is not pending_authorization.
-	ApprovePending(ctx context.Context, uuid, roleID, approvedByUUID string,
+	// ApprovePending promotes a pending_authorization member to active: sets
+	// status and provisioning_status to active, records activated_at_ms and the
+	// approver, applies policy fields. Returns ErrNotFound if the member does
+	// not exist, ErrMemberNotPending if it is not pending_authorization.
+	ApprovePending(ctx context.Context, uuid, approvedByUUID string,
 		expiresAt *time.Time, inactivityLimitDays *int) error
+
+	// ArchiveStalePending transitions pending_authorization rows whose
+	// created_at_ms + ttlDays*86400000 < now to status='archived'. Returns the
+	// number of rows affected.
+	ArchiveStalePending(ctx context.Context, now time.Time, ttlDays int) (int64, error)
 }

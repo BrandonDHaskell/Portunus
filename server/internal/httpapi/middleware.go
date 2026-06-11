@@ -79,3 +79,26 @@ func hmacAuthMiddleware(logger *log.Logger, secret string, next http.Handler) ht
 		next.ServeHTTP(w, r)
 	})
 }
+
+// requireEitherPermission wraps a handler and enforces that the session holds
+// at least one of perm1 or perm2. Used for routes where _held and _any
+// variants are both acceptable; the service layer performs the scope check.
+func requireEitherPermission(perm1, perm2 string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sess := sessionFromContext(r.Context())
+		if sess == nil {
+			writeError(w, http.StatusUnauthorized, "unauthenticated", "valid session required")
+			return
+		}
+		if sess.MustChangePW {
+			writeError(w, http.StatusForbidden, "password_change_required",
+				"you must change your password before performing other actions")
+			return
+		}
+		if !sess.HasPermission(perm1) && !sess.HasPermission(perm2) {
+			writeError(w, http.StatusForbidden, "forbidden", "insufficient permissions")
+			return
+		}
+		next(w, r)
+	}
+}

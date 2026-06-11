@@ -10,19 +10,17 @@ var ErrRoleIsSystem = errors.New("cannot modify or delete a system role")
 
 // RoleRecord represents a row in the roles table.
 type RoleRecord struct {
-	RoleID                string
-	Name                  string
-	Description           string
-	IsSystem              bool
-	DefaultExpiryDays     *int
-	DefaultInactivityDays *int
-	CreatedAt             time.Time
+	RoleID      string
+	Name        string
+	Description string
+	IsSystem    bool
+	CreatedAt   time.Time
 }
 
 // RoleStore manages runtime-configurable roles and their permission sets.
 type RoleStore interface {
 	// CreateRole inserts a new non-system role.
-	CreateRole(ctx context.Context, roleID, name, description string, defaultExpiryDays, defaultInactivityDays *int) error
+	CreateRole(ctx context.Context, roleID, name, description string) error
 
 	// GetRole returns the role with the given ID, or ErrNotFound.
 	GetRole(ctx context.Context, roleID string) (*RoleRecord, error)
@@ -32,7 +30,7 @@ type RoleStore interface {
 
 	// UpdateRole changes the mutable fields of a non-system role.
 	// Returns ErrRoleIsSystem if is_system = 1, ErrNotFound if the role does not exist.
-	UpdateRole(ctx context.Context, roleID, name, description string, defaultExpiryDays, defaultInactivityDays *int) error
+	UpdateRole(ctx context.Context, roleID, name, description string) error
 
 	// DeleteRole removes a role. Returns ErrRoleIsSystem if is_system = 1,
 	// ErrNotFound if the role does not exist.

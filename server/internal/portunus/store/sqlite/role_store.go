@@ -19,15 +19,13 @@ func NewRoleStore(db *sql.DB, writer *dbpkg.Worker) *RoleStore {
 	return &RoleStore{db: db, writer: writer}
 }
 
-func (s *RoleStore) CreateRole(ctx context.Context, roleID, name, description string, defaultExpiryDays, defaultInactivityDays *int) error {
+func (s *RoleStore) CreateRole(ctx context.Context, roleID, name, description string) error {
 	now := time.Now().UTC().UnixMilli()
 	return s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
-INSERT INTO roles(role_id, name, description, is_system,
-                 default_expiry_days, default_inactivity_days,
-                 created_at_ms, updated_at_ms)
-VALUES (?, ?, ?, 0, ?, ?, ?, ?);
-`, roleID, name, description, defaultExpiryDays, defaultInactivityDays, now, now)
+INSERT INTO roles(role_id, name, description, is_system, created_at_ms, updated_at_ms)
+VALUES (?, ?, ?, 0, ?, ?);
+`, roleID, name, description, now, now)
 		if err != nil {
 			return fmt.Errorf("CreateRole: %w", err)
 		}
@@ -39,28 +37,24 @@ func (s *RoleStore) GetRole(ctx context.Context, roleID string) (*store.RoleReco
 	var (
 		id, name, desc string
 		isSystem       int
-		expiryDays     sql.NullInt64
-		inactivityDays sql.NullInt64
 		createdMs      int64
 	)
 	err := s.db.QueryRowContext(ctx, `
-SELECT role_id, name, COALESCE(description,''), is_system,
-       default_expiry_days, default_inactivity_days, created_at_ms
+SELECT role_id, name, COALESCE(description,''), is_system, created_at_ms
 FROM roles WHERE role_id = ?;
-`, roleID).Scan(&id, &name, &desc, &isSystem, &expiryDays, &inactivityDays, &createdMs)
+`, roleID).Scan(&id, &name, &desc, &isSystem, &createdMs)
 	if err == sql.ErrNoRows {
 		return nil, store.ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("GetRole: %w", err)
 	}
-	return scanRoleRecord(id, name, desc, isSystem, expiryDays, inactivityDays, createdMs), nil
+	return scanRoleRecord(id, name, desc, isSystem, createdMs), nil
 }
 
 func (s *RoleStore) ListRoles(ctx context.Context) ([]store.RoleRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT role_id, name, COALESCE(description,''), is_system,
-       default_expiry_days, default_inactivity_days, created_at_ms
+SELECT role_id, name, COALESCE(description,''), is_system, created_at_ms
 FROM roles ORDER BY name;
 `)
 	if err != nil {
@@ -73,19 +67,17 @@ FROM roles ORDER BY name;
 		var (
 			id, name, desc string
 			isSystem       int
-			expiryDays     sql.NullInt64
-			inactivityDays sql.NullInt64
 			createdMs      int64
 		)
-		if err := rows.Scan(&id, &name, &desc, &isSystem, &expiryDays, &inactivityDays, &createdMs); err != nil {
+		if err := rows.Scan(&id, &name, &desc, &isSystem, &createdMs); err != nil {
 			return nil, fmt.Errorf("ListRoles scan: %w", err)
 		}
-		roles = append(roles, *scanRoleRecord(id, name, desc, isSystem, expiryDays, inactivityDays, createdMs))
+		roles = append(roles, *scanRoleRecord(id, name, desc, isSystem, createdMs))
 	}
 	return roles, rows.Err()
 }
 
-func (s *RoleStore) UpdateRole(ctx context.Context, roleID, name, description string, defaultExpiryDays, defaultInactivityDays *int) error {
+func (s *RoleStore) UpdateRole(ctx context.Context, roleID, name, description string) error {
 	now := time.Now().UTC().UnixMilli()
 	return s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		var isSystem int
@@ -100,9 +92,9 @@ func (s *RoleStore) UpdateRole(ctx context.Context, roleID, name, description st
 			return store.ErrRoleIsSystem
 		}
 		res, err := tx.ExecContext(ctx, `
-UPDATE roles SET name = ?, description = ?, default_expiry_days = ?, default_inactivity_days = ?, updated_at_ms = ?
+UPDATE roles SET name = ?, description = ?, updated_at_ms = ?
 WHERE role_id = ?;
-`, name, description, defaultExpiryDays, defaultInactivityDays, now, roleID)
+`, name, description, now, roleID)
 		if err != nil {
 			return fmt.Errorf("UpdateRole: %w", err)
 		}
@@ -175,21 +167,12 @@ SELECT permission FROM role_permissions WHERE role_id = ? ORDER BY permission;
 	return perms, rows.Err()
 }
 
-func scanRoleRecord(id, name, desc string, isSystem int, expiryDays, inactivityDays sql.NullInt64, createdMs int64) *store.RoleRecord {
-	rec := &store.RoleRecord{
+func scanRoleRecord(id, name, desc string, isSystem int, createdMs int64) *store.RoleRecord {
+	return &store.RoleRecord{
 		RoleID:      id,
 		Name:        name,
 		Description: desc,
 		IsSystem:    isSystem == 1,
 		CreatedAt:   time.UnixMilli(createdMs).UTC(),
 	}
-	if expiryDays.Valid {
-		v := int(expiryDays.Int64)
-		rec.DefaultExpiryDays = &v
-	}
-	if inactivityDays.Valid {
-		v := int(inactivityDays.Int64)
-		rec.DefaultInactivityDays = &v
-	}
-	return rec
 }

@@ -12,15 +12,6 @@
   </p>
   <form method="POST" action="/admin/ui/members">
     <div class="form-group">
-      <label for="role_id">Role <span style="color:var(--red)">*</span></label>
-      <select id="role_id" name="role_id" required>
-        <option value="">— Select a role —</option>
-        {{range .Roles}}
-        <option value="{{.RoleID}}" {{if eq .RoleID $.Form.role_id}}selected{{end}}>{{.Name}}</option>
-        {{end}}
-      </select>
-    </div>
-    <div class="form-group">
       <label for="expires_at">Hard Expiry Date (optional)</label>
       <input id="expires_at" name="expires_at" type="date" value="{{.Form.expires_at}}">
       <p class="hint">Leave blank for no hard deadline. Member is transitioned to <em>expired</em> at midnight UTC on this date.</p>

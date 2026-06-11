@@ -40,7 +40,7 @@ A key detail in the current implementation: several controls are **configuration
 | Admin session-cookie auth | Implemented | Login/logout/change-password endpoints; `portunus_session` cookie |
 | Module commissioning / enabled / revoked checks | Implemented | SQLite-backed `DeviceStore.IsKnown()` |
 | Keyed HMAC-SHA256 hashing of credential IDs | Implemented | Credential registration, access checks, audit events |
-| On-device credential hashing (PROVISIONING_CONSOLE) | Implemented | mbedTLS SHA-256 on ESP32 before transmission |
+| On-device SHA-256 hashing before transmission (PROVISIONING_CONSOLE capture path) | Implemented | mbedTLS SHA-256 on ESP32; raw UID never leaves the device |
 | Member + module authorization access path | Implemented | Production access decision path since PR 4 |
 | Request body size limits | Implemented | HTTP API handlers |
 | Read-header timeout | Implemented | HTTP server |
@@ -182,7 +182,7 @@ The projection format is `"{type}|{module_id}|{key_field}"`:
 |---|---|
 | `SendHeartbeat` | `heartbeat\|{module_id}\|{sequence}` |
 | `RequestAccess` | `access\|{module_id}\|{credential_id}` |
-| `ProvisionCredential` | `provision\|{module_id}\|{operator_uuid}` |
+| `ProvisionCredential` | `provision\|{module_id}\|{hex(credential_uid)}` |
 
 This differs from the HTTP path, which signs the raw body bytes. The projection approach is used on the gRPC path to avoid spurious HMAC mismatches caused by wire-format differences between Nanopb (on the ESP32) and the Go protobuf library (on the server). Both use the same pre-shared secret.
 
@@ -216,6 +216,30 @@ The server also checks whether the module is known. In the SQLite-backed `Device
 This is the current server-side definition of an enrolled module.
 
 Unknown modules are denied access, but the server still updates its last-seen timestamp entry for operational visibility.
+
+---
+
+## Grant-scoping model
+
+Module authorization grants are controlled by two permission variants that differ in scope:
+
+### `module_auth.grant_any` / `module_auth.revoke_any`
+
+Unscoped. An admin holding these permissions may grant or revoke any module authorization for any member, regardless of what the admin's own badge can open. The system `admin` role holds these permissions by genesis — granting into an empty database requires at least one unscoped actor.
+
+### `module_auth.grant_held` / `module_auth.revoke_held`
+
+Scoped to the modules the acting admin's linked member currently holds. An admin can only grant a module to a member if their own `member_uuid` link resolves to an `active`, `enabled` member who holds a non-revoked, non-expired `module_authorizations` row for that module. The `operator` role holds these permissions.
+
+### Fail-closed properties
+
+- **Unlinked admin:** an admin without a `member_uuid` link who holds only `grant_held` cannot grant anything — scope resolves to the empty set.
+- **Lapsed link:** if the admin's linked member row is archived, suspended, or has its authorizations revoked, the scope closes automatically via ON DELETE SET NULL on `admin_users.member_uuid` and the door's standard member-status checks.
+- **Scope is evaluated at grant time only.** Existing grants are not cascaded when a grantor later loses access.
+
+### Last-admin protection
+
+The system refuses to expire or disable the last non-expired, enabled admin account. This applies symmetrically to `expires_at_ms` on `admin_users` — setting an expiry that would leave no reachable admin is rejected.
 
 ---
 
@@ -257,23 +281,21 @@ WARNING: PORTUNUS_CREDENTIAL_HASH_SECRET not set — credential IDs hashed witho
 
 This fallback exists only for local development and integration testing. It must never be used in a deployment where credential data is expected to persist or migrate.
 
-### Admin enrollment flows
-
-There are two admin-side credential enrollment paths.
+### Admin credential enrollment
 
 **Member credential attachment** (`POST /admin/v1/members/{member_uuid}/credential`): the caller supplies the pre-computed `credential_hash` as a 64-character hex string. The server stores the 32-byte hash in `member_access`. The admin web UI accepts a raw credential UID and hashes it server-side with `HMAC-SHA256(secret, rawUID)` before forwarding to this path.
 
-**Admin-badge registration** (`POST /admin/v1/admin-users/{admin_uuid}/credential`): the server receives a raw `credential_id`, parses the colon-separated UID, computes `HMAC-SHA256(secret, rawUID)`, and stores the 32-byte hash in `admin_user_credentials` (migration 0017). Admin badges are resolved at provisioning time: PROVISIONING_CONSOLE scan-1 identifies the operator by looking up the hash in `admin_user_credentials`.
+### PROVISIONING_CONSOLE capture path
 
-### PROVISIONING_CONSOLE enrollment flow
+The PROVISIONING_CONSOLE module uses a single-scan capture flow:
 
-When a credential is enrolled through a PROVISIONING_CONSOLE module, the firmware:
+1. The firmware reads one credential from the RFID reader.
+2. It computes `SHA-256(raw_UID_bytes)` **on-device** using mbedTLS before transmitting.
+3. The hash (not the raw UID) is sent to `POST /v1/provision_credential`.
+4. The server re-hashes using `HMAC-SHA256(secret, hash)` and creates a `member_access` row with `provisioning_status = 'pending_authorization'`.
+5. An admin approves the pending row via the console, supplying explicit expiry and inactivity limits. Approval sets `provisioning_status = 'active'` and records `activated_at_ms`.
 
-1. reads the second credential scan
-2. computes `SHA-256(credential_id)` **on-device** using mbedTLS before transmitting
-3. sends the hash (not the raw ID) to `POST /v1/provision_credential`
-
-The server then re-hashes using HMAC-SHA256 to produce the stored hash. Raw credential IDs never leave the device.
+Raw credential UIDs never leave the device.
 
 ### Access decision flow
 
@@ -320,7 +342,7 @@ The `admin_users.must_change_pw` flag is set to `1` on new accounts. An account 
 
 Admin users are linked to RBAC roles via `admin_users.role_id`. The role controls which named permissions the account holds. An account with `enabled = 0` cannot log in regardless of credentials or session state.
 
-The admin role is seeded (migration 0010) with every permission defined in the `permissions` package — currently **27 permissions** across module, door, admin-user, role, member, module-auth, and audit-log groups. The `permissions.All()` function is the single authoritative list. Migration 0016 removed the obsolete `credential.*` permission rows that were present in earlier snapshots.
+The admin role holds every permission defined in the `permissions` package — currently **28 permissions** across module, door, admin-user, role, member, module-auth, and audit-log groups. The `permissions.All()` function is the single authoritative list. The grant/revoke permissions for module authorizations are scoped: `module_auth.grant_any` / `module_auth.revoke_any` are unscoped (held by `admin`); `module_auth.grant_held` / `module_auth.revoke_held` are scoped to modules the actor's linked member currently holds (held by `operator`).
 
 ### Admin web UI
 

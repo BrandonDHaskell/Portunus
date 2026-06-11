@@ -92,7 +92,7 @@ The firmware follows a domain-driven layering strategy designed to separate hard
 
 - *SystemFSM* (ACCESS_POINT) — Transitions through `BOOT → INITIALIZING → OPERATIONAL → ERROR`. In the operational state it runs two FreeRTOS tasks: the FSM main loop (event processing, reed switch polling, unlock timer management) and a card polling sub-task. Programs against `ICredentialReader`, `IAccessPoint`, and `IFeedback`.
 
-- *ProvisioningFSM* (PROVISIONING_CONSOLE) — Implements a two-scan credential enrollment flow: `IDLE → AWAITING_CREDENTIAL → SENDING → IDLE`. Scan 1 (operator presence) advances state. Scan 2 causes the new credential's UID to be SHA-256 hashed on-device via mbedTLS; the hash is bundled into an `EVENT_PROVISION_REQUEST` and published to the event bus for `server_comm` to forward. Programs against `ICredentialReader` and `IFeedback` — no door-strike hardware is needed or used.
+- *ProvisioningFSM* (PROVISIONING_CONSOLE) — Implements the capture enrollment flow: `IDLE → AWAITING_CREDENTIAL → SENDING → IDLE`. One credential tap causes the UID to be SHA-256 hashed on-device via mbedTLS; the hash is bundled into an `EVENT_PROVISION_REQUEST` and published to the event bus for `server_comm` to forward. Programs against `ICredentialReader` and `IFeedback` — no door-strike hardware is needed or used.
 
 **Interfaces (portunus_interfaces/)** — Pure virtual C++ classes defining the contracts between the FSM and hardware. `ICredentialReader` exposes `read()` and `halt()`. `IAccessPoint` exposes `unlock()`, `lock()`, and `is_open()`. `IFeedback` exposes `indicate(feedback_type_t)`. Any pointer may be `nullptr` to indicate absent hardware — the FSM sets the corresponding capability flag to false and adapts.
 
@@ -121,7 +121,7 @@ Event types are statically defined in `event_types.h`, grouped by subsystem:
 | Provisioning | `EVENT_PROVISION_REQUEST` | ProvisioningFSM | server_comm | PC only |
 | Provisioning | `EVENT_PROVISION_SUCCESS`, `EVENT_PROVISION_FAILED` | server_comm | ProvisioningFSM | PC only |
 
-¹ In ACCESS_POINT, `server_comm` subscribes to `CREDENTIAL_READ` to forward access requests. In PROVISIONING_CONSOLE, `server_comm` subscribes to `EVENT_PROVISION_REQUEST` instead; `ProvisioningFSM` consumes `CREDENTIAL_READ` internally to drive its two-scan state machine.
+¹ In ACCESS_POINT, `server_comm` subscribes to `CREDENTIAL_READ` to forward access requests. In PROVISIONING_CONSOLE, `server_comm` subscribes to `EVENT_PROVISION_REQUEST` instead; `ProvisioningFSM` consumes `CREDENTIAL_READ` internally and publishes the provision request after hashing on-device.
 
 *AP = ACCESS_POINT variant. PC = PROVISIONING_CONSOLE variant.*
 
@@ -212,13 +212,13 @@ The operator credential (scan 1) is discarded after advancing state — it serve
 | Task | Priority | Stack | Responsibility | Variant |
 |---|---|---|---|---|
 | `evt_dispatch` | 5 | 4 KB | Event bus dispatcher — invokes subscriber callbacks | Both |
-| `fsm` | 5 | 4 KB | FSM main loop — SystemFSM (AP): event processing, reed switch polling, unlock timer; ProvisioningFSM (PC): two-scan state machine | Both |
+| `fsm` | 5 | 4 KB | FSM main loop — SystemFSM (AP): event processing, reed switch polling, unlock timer; ProvisioningFSM (PC): capture enrollment state machine | Both |
 | `card_poll` | 4 | 4 KB | MFRC522 polling — SPI reads, publishes `CREDENTIAL_READ` events | Both |
 | `led_pattern` | 3 | 2 KB | LED blink patterns — non-blocking, preemptive | Both |
 | `heartbeat` | 3 | 2 KB | Periodic heartbeat event generation | Both |
 | `server_comm` | 2 | 6–10 KB | HTTP/gRPC I/O — blocking network calls on a dedicated stack | Both |
 
-The `server_comm` task uses a larger stack (10 KB) when gRPC is enabled to accommodate the nghttp2 HTTP/2 session state. In PROVISIONING_CONSOLE, `server_comm` handles `EVENT_PROVISION_REQUEST` events instead of `CREDENTIAL_READ` events; the `fsm` and `card_poll` tasks run with the same priorities and stacks but drive the ProvisioningFSM two-scan flow.
+The `server_comm` task uses a larger stack (10 KB) when gRPC is enabled to accommodate the nghttp2 HTTP/2 session state. In PROVISIONING_CONSOLE, `server_comm` handles `EVENT_PROVISION_REQUEST` events instead of `CREDENTIAL_READ` events; the `fsm` and `card_poll` tasks run with the same priorities and stacks but drive the ProvisioningFSM capture enrollment flow.
 
 ---
 

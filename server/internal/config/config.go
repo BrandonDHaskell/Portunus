@@ -56,6 +56,7 @@ type Config struct {
 
 	// Expiry worker
 	ExpiryWorkerIntervalMinutes int // how often member expiry sweeps run (default 60)
+	PendingTTLDays              int // how many days before stale pending rows are archived; 0 disables (default 7)
 
 	// TLS. When both files are set, the server serves HTTPS using them.
 	// When unset under the ci profile, the server generates an ephemeral
@@ -72,10 +73,6 @@ type Config struct {
 	// CredentialHashSecret keys the HMAC-SHA256 credential-ID hashing.
 	// Generate with: openssl rand -hex 32. Required in prod.
 	CredentialHashSecret string
-
-	// OperatorProvisioningEnabled enables Path 2 (two-scan operator enrolment).
-	// Default off: set PORTUNUS_OPERATOR_PROVISIONING_ENABLED=true.
-	OperatorProvisioningEnabled bool
 }
 
 // Validate enforces per-profile invariants.
@@ -121,8 +118,6 @@ func FromEnv() (Config, error) {
 
 	allowAll := strings.EqualFold(os.Getenv("PORTUNUS_ALLOW_ALL"), "true") ||
 		os.Getenv("PORTUNUS_ALLOW_ALL") == "1"
-	operatorProvisioning := strings.EqualFold(os.Getenv("PORTUNUS_OPERATOR_PROVISIONING_ENABLED"), "true") ||
-		os.Getenv("PORTUNUS_OPERATOR_PROVISIONING_ENABLED") == "1"
 
 	return Config{
 		HTTPAddr: getenvDefault("PORTUNUS_HTTP_ADDR", ":8080"),
@@ -136,13 +131,12 @@ func FromEnv() (Config, error) {
 		HeartbeatRetentionDays:      getenvInt("PORTUNUS_HEARTBEAT_RETENTION_DAYS", 30),
 		PruneIntervalHours:          getenvInt("PORTUNUS_PRUNE_INTERVAL_HOURS", 6),
 		ExpiryWorkerIntervalMinutes: getenvInt("PORTUNUS_EXPIRY_WORKER_INTERVAL_MINUTES", 60),
+		PendingTTLDays:              getenvInt("PORTUNUS_PENDING_TTL_DAYS", 7),
 
 		TLSCertFile:          strings.TrimSpace(os.Getenv("PORTUNUS_TLS_CERT_FILE")),
 		TLSKeyFile:           strings.TrimSpace(os.Getenv("PORTUNUS_TLS_KEY_FILE")),
 		HMACSecret:           os.Getenv("PORTUNUS_HMAC_SECRET"),
 		CredentialHashSecret: os.Getenv("PORTUNUS_CREDENTIAL_HASH_SECRET"),
-
-		OperatorProvisioningEnabled: operatorProvisioning,
 	}, nil
 }
 

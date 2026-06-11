@@ -22,14 +22,12 @@ var (
 
 // RoleInfo is the view type for role management pages.
 type RoleInfo struct {
-	RoleID                string
-	Name                  string
-	Description           string
-	IsSystem              bool
-	DefaultExpiryDays     *int
-	DefaultInactivityDays *int
-	CreatedAt             string
-	Permissions           []string
+	RoleID      string
+	Name        string
+	Description string
+	IsSystem    bool
+	CreatedAt   string
+	Permissions []string
 }
 
 // RoleService manages roles and their permission sets.
@@ -43,7 +41,7 @@ func NewRoleService(roles store.RoleStore) *RoleService {
 
 // CreateRole creates a new non-system role.  The role_id is derived from the
 // name (lowercase, spaces → underscores, non-alnum stripped).
-func (s *RoleService) CreateRole(ctx context.Context, name, description string, defaultExpiryDays, defaultInactivityDays *int) (*RoleInfo, error) {
+func (s *RoleService) CreateRole(ctx context.Context, name, description string) (*RoleInfo, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, fmt.Errorf("name is required")
@@ -53,18 +51,16 @@ func (s *RoleService) CreateRole(ctx context.Context, name, description string, 
 		return nil, fmt.Errorf("name produces an empty role_id; use alphanumeric characters")
 	}
 
-	if err := s.roles.CreateRole(ctx, roleID, name, strings.TrimSpace(description), defaultExpiryDays, defaultInactivityDays); err != nil {
+	if err := s.roles.CreateRole(ctx, roleID, name, strings.TrimSpace(description)); err != nil {
 		return nil, fmt.Errorf("create role: %w", err)
 	}
 
 	return &RoleInfo{
-		RoleID:                roleID,
-		Name:                  name,
-		Description:           strings.TrimSpace(description),
-		IsSystem:              false,
-		DefaultExpiryDays:     defaultExpiryDays,
-		DefaultInactivityDays: defaultInactivityDays,
-		CreatedAt:             time.Now().UTC().Format(time.RFC3339),
+		RoleID:      roleID,
+		Name:        name,
+		Description: strings.TrimSpace(description),
+		IsSystem:    false,
+		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}, nil
 }
 
@@ -101,12 +97,12 @@ func (s *RoleService) GetRole(ctx context.Context, roleID string) (*RoleInfo, er
 }
 
 // UpdateRole changes the mutable metadata of a non-system role.
-func (s *RoleService) UpdateRole(ctx context.Context, roleID, name, description string, defaultExpiryDays, defaultInactivityDays *int) error {
+func (s *RoleService) UpdateRole(ctx context.Context, roleID, name, description string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return fmt.Errorf("name is required")
 	}
-	if err := s.roles.UpdateRole(ctx, roleID, name, strings.TrimSpace(description), defaultExpiryDays, defaultInactivityDays); err != nil {
+	if err := s.roles.UpdateRole(ctx, roleID, name, strings.TrimSpace(description)); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return ErrRoleNotFound
 		}
@@ -147,13 +143,11 @@ func (s *RoleService) GetPermissions(ctx context.Context, roleID string) ([]stri
 
 func roleRecordToInfo(r *store.RoleRecord) RoleInfo {
 	return RoleInfo{
-		RoleID:                r.RoleID,
-		Name:                  r.Name,
-		Description:           r.Description,
-		IsSystem:              r.IsSystem,
-		DefaultExpiryDays:     r.DefaultExpiryDays,
-		DefaultInactivityDays: r.DefaultInactivityDays,
-		CreatedAt:             r.CreatedAt.Format(time.RFC3339),
+		RoleID:      r.RoleID,
+		Name:        r.Name,
+		Description: r.Description,
+		IsSystem:    r.IsSystem,
+		CreatedAt:   r.CreatedAt.Format(time.RFC3339),
 	}
 }
 

@@ -1,19 +1,13 @@
 /**
  * @file provisioning_fsm.cpp
- * @brief PEU (Provisioning & Enrollment Unit) 7-state FSM implementation.
+ * @brief PEU (Provisioning & Enrollment Unit) capture-only FSM.
  *
- * Two provisioning paths:
+ * Capture path:
+ *   Armed → card tap → CAPTURE_SEND → server parks as pending_authorization.
+ *   No operator badge involved; admin approves later via the web UI.
  *
- *   Path 1 — Capture (CAPTURE mode):
- *     Armed → card tap → CAPTURE_SEND → server parks as pending_authorization.
- *     No operator badge involved; admin approves later via the web UI.
- *
- *   Path 2 — Operator enrolment (OPERATOR_ENROLL mode):
- *     Armed → scan-1 (operator badge) → ENROLL_SCAN2 → scan-2 (new member)
- *     → ENROLL_SEND → server creates an active member directly.
- *
- * The arm button cycles: IDLE → ARMED(CAPTURE) → ARMED(ENROLL) → IDLE.
- * Timeouts auto-cancel any armed state and return to Idle (or armed if
+ * The arm button cycles: IDLE → ARMED → IDLE (press again to cancel).
+ * Timeouts auto-cancel any armed state and return to Idle (or Armed if
  * no arm button is present).
  */
 
@@ -159,15 +153,14 @@ portunus_err_t ProvisioningFSM::start()
         return PORTUNUS_ERR_TASK_CREATE;
     }
 
-    // Initial state: Idle if arm button present, Armed(CAPTURE) otherwise.
+    // Initial state: Idle if arm button present, Armed otherwise.
     if (m_has_arm) {
         enter_idle();
     } else {
-        enter_armed(PEU_MODE_CAPTURE);
+        enter_armed();
     }
 
-    ESP_LOGI(TAG, "PEU FSM running — role=%s  scan2_timeout=%dms  arm_timeout=%dms",
-             CONFIG_PORTUNUS_DEFAULT_ROLE_ID,
+    ESP_LOGI(TAG, "PEU FSM running — scan_timeout=%dms  arm_timeout=%dms",
              CONFIG_PORTUNUS_PROVISION_TIMEOUT_MS,
              CONFIG_PORTUNUS_ARM_TIMEOUT_MS);
 
@@ -213,9 +206,8 @@ void ProvisioningFSM::poll()
             event_bus_publish(&evt);
         }
 
-        // Poll the credential reader only in states that need a card scan.
-        peu_state_t state = m_state;
-        if (state == PEU_STATE_ARMED || state == PEU_STATE_ENROLL_SCAN2) {
+        // Poll the credential reader only when armed and waiting for a card.
+        if (m_state == PEU_STATE_ARMED) {
             credential_t cred;
             if (m_reader->read(&cred) == PORTUNUS_OK) {
                 portunus_event_t evt;
@@ -293,16 +285,7 @@ void ProvisioningFSM::check_timeout()
         if (m_has_arm) {
             enter_idle();
         } else {
-            enter_armed(PEU_MODE_CAPTURE); // no button: reset, don't go idle
-        }
-        break;
-
-    case PEU_STATE_ENROLL_SCAN2:
-        ESP_LOGW(TAG, "Scan-2 timeout — returning to Idle");
-        if (m_has_arm) {
-            enter_idle();
-        } else {
-            enter_armed(PEU_MODE_CAPTURE);
+            enter_armed(); // no button: reset, don't go idle
         }
         break;
 
@@ -326,18 +309,13 @@ void ProvisioningFSM::handle_arm_requested()
         break;
 
     case PEU_STATE_IDLE:
-        ESP_LOGI(TAG, "Arm button (from IDLE) → ARMED(CAPTURE)");
-        enter_armed(PEU_MODE_CAPTURE);
+        ESP_LOGI(TAG, "Arm button (from IDLE) → ARMED");
+        enter_armed();
         break;
 
     case PEU_STATE_ARMED:
-        if (m_mode == PEU_MODE_CAPTURE) {
-            ESP_LOGI(TAG, "Arm button (from ARMED CAPTURE) → ARMED(ENROLL)");
-            enter_armed(PEU_MODE_OPERATOR_ENROLL);
-        } else {
-            ESP_LOGI(TAG, "Arm button (from ARMED ENROLL) → IDLE (cancel)");
-            enter_idle();
-        }
+        ESP_LOGI(TAG, "Arm button (from ARMED) → IDLE (cancel)");
+        enter_idle();
         break;
 
     default:
@@ -351,69 +329,28 @@ void ProvisioningFSM::handle_credential_read(const event_credential_read_t *cred
     char uid_str[CREDENTIAL_UID_HEX_STR_LEN];
     credential_uid_to_hex(&cred->credential, uid_str, sizeof(uid_str));
 
-    switch (m_state) {
-    case PEU_STATE_ARMED:
-        if (m_mode == PEU_MODE_CAPTURE) {
-            ESP_LOGI(TAG, "Card read in CAPTURE mode — UID: %s", uid_str);
-            publish_capture_request(cred);
-            m_state       = PEU_STATE_CAPTURE_SEND;
-            m_deadline_ms = 0;
-            if (m_has_feedback) {
-                m_feedback->indicate(feedback_type_t::CARD_READ);
-            }
-        } else {
-            // OPERATOR_ENROLL: scan-1 is the operator badge.
-            ESP_LOGI(TAG, "Scan-1 (operator) in ENROLL mode — UID: %s", uid_str);
-            m_operator_cred = cred->credential;
-            m_state         = PEU_STATE_ENROLL_SCAN2;
-            m_deadline_ms   = now_ms() + CONFIG_PORTUNUS_PROVISION_TIMEOUT_MS;
-            if (m_has_feedback) {
-                m_feedback->indicate(feedback_type_t::CARD_READ);
-            }
-        }
-        break;
-
-    case PEU_STATE_ENROLL_SCAN2: {
-        // Scan-2: the new member card.
-        ESP_LOGI(TAG, "Scan-2 (new member) — UID: %s — sending enrol request", uid_str);
-        if (!m_has_network) {
-            ESP_LOGW(TAG, "Network unavailable — cannot enrol");
-            if (m_has_arm) {
-                enter_idle();
-            } else {
-                enter_armed(PEU_MODE_CAPTURE);
-            }
-            return;
-        }
-        publish_enroll_request(cred);
-        m_state       = PEU_STATE_ENROLL_SEND;
-        m_deadline_ms = 0;
-        if (m_has_feedback) {
-            m_feedback->indicate(feedback_type_t::CARD_READ);
-        }
-        break;
+    if (m_state != PEU_STATE_ARMED) {
+        ESP_LOGD(TAG, "Credential read ignored in state %d", (int)m_state);
+        return;
     }
 
-    default:
-        // Ignore card reads in SLEEP, IDLE, *_SEND, RESULT states.
-        ESP_LOGD(TAG, "Credential read ignored in state %d", (int)m_state);
-        break;
+    ESP_LOGI(TAG, "Card read — UID: %s", uid_str);
+    publish_capture_request(cred);
+    m_state       = PEU_STATE_CAPTURE_SEND;
+    m_deadline_ms = 0;
+    if (m_has_feedback) {
+        m_feedback->indicate(feedback_type_t::CARD_READ);
     }
 }
 
 void ProvisioningFSM::handle_provision_result(const event_provision_result_t *result)
 {
-    if (m_state != PEU_STATE_CAPTURE_SEND && m_state != PEU_STATE_ENROLL_SEND) {
+    if (m_state != PEU_STATE_CAPTURE_SEND) {
         return;
     }
 
     feedback_type_t fb;
     switch (result->reason) {
-    case PROVISION_RESULT_SUCCESS:
-        ESP_LOGI(TAG, "Provisioning SUCCESS — member_uuid=%s", result->member_uuid);
-        fb = feedback_type_t::PEU_RESULT_SUCCESS;
-        break;
-
     case PROVISION_RESULT_PENDING_CREATED:
         ESP_LOGI(TAG, "Capture accepted — pending admin approval (member_uuid=%s)",
                  result->member_uuid);
@@ -428,8 +365,7 @@ void ProvisioningFSM::handle_provision_result(const event_provision_result_t *re
         break;
 
     case PROVISION_RESULT_UNAUTHORIZED:
-    case PROVISION_RESULT_INVALID_ROLE:
-        ESP_LOGW(TAG, "Provisioning UNAUTHORIZED/INVALID_ROLE — detail=%s", result->detail);
+        ESP_LOGW(TAG, "Provisioning UNAUTHORIZED — detail=%s", result->detail);
         fb = feedback_type_t::PEU_RESULT_UNAUTHORIZED;
         break;
 
@@ -464,22 +400,14 @@ void ProvisioningFSM::enter_idle()
     ESP_LOGI(TAG, "FSM → IDLE (idle_timeout=%dms)", CONFIG_PORTUNUS_IDLE_TIMEOUT_MS);
 }
 
-void ProvisioningFSM::enter_armed(peu_mode_t mode)
+void ProvisioningFSM::enter_armed()
 {
-    m_mode        = mode;
     m_state       = PEU_STATE_ARMED;
     m_deadline_ms = now_ms() + CONFIG_PORTUNUS_ARM_TIMEOUT_MS;
-
-    feedback_type_t fb = (mode == PEU_MODE_CAPTURE)
-        ? feedback_type_t::PEU_ARMED_CAPTURE
-        : feedback_type_t::PEU_ARMED_ENROLL;
-
     if (m_has_feedback) {
-        m_feedback->indicate(fb);
+        m_feedback->indicate(feedback_type_t::PEU_ARMED_CAPTURE);
     }
-    ESP_LOGI(TAG, "FSM → ARMED(%s)  arm_timeout=%dms",
-             mode == PEU_MODE_CAPTURE ? "CAPTURE" : "ENROLL",
-             CONFIG_PORTUNUS_ARM_TIMEOUT_MS);
+    ESP_LOGI(TAG, "FSM → ARMED  arm_timeout=%dms", CONFIG_PORTUNUS_ARM_TIMEOUT_MS);
 }
 
 void ProvisioningFSM::enter_result(feedback_type_t fb)
@@ -497,7 +425,7 @@ void ProvisioningFSM::enter_idle_after_result()
     if (m_has_arm) {
         enter_idle();
     } else {
-        enter_armed(PEU_MODE_CAPTURE);
+        enter_armed();
     }
 }
 
@@ -509,41 +437,9 @@ void ProvisioningFSM::publish_capture_request(const event_credential_read_t *cre
     memset(&evt, 0, sizeof(evt));
     evt.id = EVENT_PROVISION_REQUEST;
 
-    // No operator UID for capture path.
     memcpy(evt.payload.provision_request.credential_uid,
            cred->credential.uid, cred->credential.uid_len);
     evt.payload.provision_request.credential_uid_len = cred->credential.uid_len;
-
-    strncpy(evt.payload.provision_request.role_id,
-            CONFIG_PORTUNUS_DEFAULT_ROLE_ID,
-            sizeof(evt.payload.provision_request.role_id) - 1);
-
-    evt.payload.provision_request.provision_mode = PEU_PROVISION_MODE_CAPTURE;
-
-    event_bus_publish(&evt);
-}
-
-void ProvisioningFSM::publish_enroll_request(const event_credential_read_t *cred)
-{
-    portunus_event_t evt;
-    memset(&evt, 0, sizeof(evt));
-    evt.id = EVENT_PROVISION_REQUEST;
-
-    // Scan-1: operator badge UID.
-    memcpy(evt.payload.provision_request.operator_credential_uid,
-           m_operator_cred.uid, m_operator_cred.uid_len);
-    evt.payload.provision_request.operator_credential_uid_len = m_operator_cred.uid_len;
-
-    // Scan-2: new member card UID.
-    memcpy(evt.payload.provision_request.credential_uid,
-           cred->credential.uid, cred->credential.uid_len);
-    evt.payload.provision_request.credential_uid_len = cred->credential.uid_len;
-
-    strncpy(evt.payload.provision_request.role_id,
-            CONFIG_PORTUNUS_DEFAULT_ROLE_ID,
-            sizeof(evt.payload.provision_request.role_id) - 1);
-
-    evt.payload.provision_request.provision_mode = PEU_PROVISION_MODE_OPERATOR_ENROLL;
 
     event_bus_publish(&evt);
 }

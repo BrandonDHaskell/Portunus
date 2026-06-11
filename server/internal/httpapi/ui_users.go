@@ -3,6 +3,7 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/permissions"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
@@ -99,7 +100,94 @@ func (s *Server) handleUIUsersEdit(w http.ResponseWriter, r *http.Request) {
 	}
 	d.Roles = roles
 
+	// Load linked member info so the template can show status.
+	if user.MemberUUID != "" && s.memberAccessService != nil {
+		rec, err := s.memberAccessService.GetMember(r.Context(), user.MemberUUID)
+		if err == nil {
+			info := memberRecordToInfo(rec)
+			d.Member = &info
+		}
+	}
+
 	render.render(w, "users_edit", d)
+}
+
+// handleUIUsersSetExpiry handles POST /admin/ui/users/{uuid}/expiry.
+func (s *Server) handleUIUsersSetExpiry(w http.ResponseWriter, r *http.Request) {
+	uuid := r.PathValue("uuid")
+	if err := r.ParseForm(); err != nil {
+		flashRedirect(w, r, "/admin/ui/users/"+uuid, "Invalid form submission.", "error")
+		return
+	}
+
+	raw := r.FormValue("expires_at")
+	var expiresAt *time.Time
+	if raw != "" {
+		t, err := time.Parse("2006-01-02", raw)
+		if err != nil {
+			flashRedirect(w, r, "/admin/ui/users/"+uuid, "Invalid date format.", "error")
+			return
+		}
+		// Treat the date as end-of-day UTC so the account is usable on the
+		// chosen day itself.
+		eod := time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 0, time.UTC)
+		expiresAt = &eod
+	}
+
+	if err := s.adminUserService.SetExpiry(r.Context(), uuid, expiresAt); err != nil {
+		if errors.Is(err, service.ErrAdminUserNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		if errors.Is(err, service.ErrLastAdmin) {
+			flashRedirect(w, r, "/admin/ui/users/"+uuid, "Cannot set expiry on the last qualifying admin account.", "error")
+			return
+		}
+		s.logger.Printf("ui set expiry: %v", err)
+		flashRedirect(w, r, "/admin/ui/users/"+uuid, "Failed to update expiry.", "error")
+		return
+	}
+
+	if expiresAt == nil {
+		flashRedirect(w, r, "/admin/ui/users/"+uuid, "Account expiry cleared.", "success")
+	} else {
+		flashRedirect(w, r, "/admin/ui/users/"+uuid, "Account expiry updated.", "success")
+	}
+}
+
+// handleUIUsersSetMemberLink handles POST /admin/ui/users/{uuid}/member.
+func (s *Server) handleUIUsersSetMemberLink(w http.ResponseWriter, r *http.Request) {
+	uuid := r.PathValue("uuid")
+	if err := r.ParseForm(); err != nil {
+		flashRedirect(w, r, "/admin/ui/users/"+uuid, "Invalid form submission.", "error")
+		return
+	}
+
+	raw := r.FormValue("member_uuid")
+	var memberUUID *string
+	if raw != "" {
+		memberUUID = &raw
+	}
+
+	if err := s.adminUserService.SetMemberLink(r.Context(), uuid, memberUUID); err != nil {
+		if errors.Is(err, service.ErrAdminUserNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		if errors.Is(err, store.ErrMemberAlreadyLinked) {
+			flashRedirect(w, r, "/admin/ui/users/"+uuid, "That member is already linked to another admin account.", "error")
+			return
+		}
+		s.logger.Printf("ui set member link: %v", err)
+		flashRedirect(w, r, "/admin/ui/users/"+uuid, "Failed to update member link.", "error")
+		return
+	}
+
+	if memberUUID == nil {
+		flashRedirect(w, r, "/admin/ui/users/"+uuid, "Member link cleared.", "success")
+	} else {
+		flashRedirect(w, r, "/admin/ui/users/"+uuid, "Member linked.", "success")
+	}
 }
 
 // handleUIUsersAssignRole handles POST /admin/ui/users/{uuid}/role.
@@ -191,4 +279,8 @@ func (s *Server) uiUserRoutes(mux *http.ServeMux) {
 		perm(permissions.AdminUserDisable, s.handleUIUsersDisable))
 	mux.HandleFunc("POST /admin/ui/users/{uuid}/enable",
 		perm(permissions.AdminUserDisable, s.handleUIUsersEnable))
+	mux.HandleFunc("POST /admin/ui/users/{uuid}/expiry",
+		perm(permissions.AdminUserEdit, s.handleUIUsersSetExpiry))
+	mux.HandleFunc("POST /admin/ui/users/{uuid}/member",
+		perm(permissions.AdminUserEdit, s.handleUIUsersSetMemberLink))
 }

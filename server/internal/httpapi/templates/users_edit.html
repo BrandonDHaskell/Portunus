@@ -27,6 +27,7 @@
         {{else}}
           <span class="badge badge-red">Disabled</span>
         {{end}}
+        {{if .User.IsExpired}}<span class="badge badge-red">Expired</span>{{end}}
         {{if .User.MustChangePW}}<span class="badge badge-yellow">Password change required</span>{{end}}
       </div>
     </div>
@@ -49,6 +50,59 @@
       <form method="POST" action="/admin/ui/users/{{.User.UUID}}/enable" style="display:inline">
         <button class="btn btn-secondary" type="submit">Enable Account</button>
       </form>
+      {{end}}
+    </div>
+  </form>
+</div>
+
+<div class="card" style="max-width:480px;margin-top:1.5rem">
+  <h2 style="margin-top:0">Account Expiry</h2>
+  <form method="POST" action="/admin/ui/users/{{.User.UUID}}/expiry">
+    <div class="form-group">
+      <label for="expires_at">Expires on (leave blank for no expiry)</label>
+      <input id="expires_at" name="expires_at" type="date"
+        value="{{if .User.ExpiresAt}}{{slice .User.ExpiresAt 0 10}}{{end}}">
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" type="submit">Save Expiry</button>
+      {{if .User.ExpiresAt}}
+      <button class="btn btn-secondary" type="submit" name="expires_at" value="">Clear Expiry</button>
+      {{end}}
+    </div>
+  </form>
+</div>
+
+<div class="card" style="max-width:480px;margin-top:1.5rem">
+  <h2 style="margin-top:0">Linked Member</h2>
+  {{if .Member}}
+  <div class="form-group">
+    <label>Current link</label>
+    <div style="margin-top:.25rem">
+      <span class="font-mono">{{.Member.UUID}}</span>
+      &nbsp;
+      {{if eq .Member.Status "active"}}
+        <span class="badge badge-green">active</span>
+      {{else if eq .Member.Status "expired"}}
+        <span class="badge badge-red">expired</span>
+      {{else if eq .Member.Status "suspended"}}
+        <span class="badge badge-yellow">suspended</span>
+      {{else}}
+        <span class="badge badge-red">{{.Member.Status}}</span>
+      {{end}}
+      {{if .Member.CredentialHash}}<span class="badge badge-blue">credential enrolled</span>{{else}}<span class="badge badge-yellow">no credential</span>{{end}}
+    </div>
+  </div>
+  {{end}}
+  <form method="POST" action="/admin/ui/users/{{.User.UUID}}/member">
+    <div class="form-group">
+      <label for="member_uuid">Member UUID (leave blank to unlink)</label>
+      <input id="member_uuid" name="member_uuid" type="text" class="font-mono"
+        value="{{.User.MemberUUID}}" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" type="submit">Save Link</button>
+      {{if .User.MemberUUID}}
+      <button class="btn btn-secondary" type="submit" name="member_uuid" value="">Unlink</button>
       {{end}}
     </div>
   </form>

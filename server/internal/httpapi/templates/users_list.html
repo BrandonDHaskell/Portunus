@@ -25,6 +25,7 @@
         {{else}}
           <span class="badge badge-red">Disabled</span>
         {{end}}
+        {{if .IsExpired}}<span class="badge badge-red">Expired</span>{{end}}
         {{if .MustChangePW}}<span class="badge badge-yellow">PW change required</span>{{end}}
       </td>
       <td class="text-muted">{{if .LastLoginAt}}{{.LastLoginAt}}{{else}}Never{{end}}</td>

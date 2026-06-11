@@ -291,8 +291,8 @@ func seedMember(t *testing.T, conn *sql.DB, uuid string) {
 	t.Helper()
 	nowMs := time.Now().UTC().UnixMilli()
 	_, err := conn.ExecContext(context.Background(), `
-INSERT OR IGNORE INTO member_access(uuid, role_id, status, enabled, provisioning_status, created_at_ms)
-VALUES (?, 'member', 'active', 1, 'active', ?);`, uuid, nowMs)
+INSERT OR IGNORE INTO member_access(uuid, status, enabled, provisioning_status, created_at_ms)
+VALUES (?, 'active', 1, 'active', ?);`, uuid, nowMs)
 	if err != nil {
 		t.Fatalf("seedMember(%s): %v", uuid, err)
 	}

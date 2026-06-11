@@ -27,5 +27,3 @@ PB_BIND(portunus_v1_ProvisionCredentialResponse, portunus_v1_ProvisionCredential
 
 
 
-
-

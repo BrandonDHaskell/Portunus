@@ -192,16 +192,22 @@ func (s *Server) handleUIModulesGrantAuthorization(w http.ResponseWriter, r *htt
 	}
 
 	sess := sessionFromContext(r.Context())
-	grantedBy := ""
+	actor := service.GrantActor{}
 	if sess != nil {
-		grantedBy = sess.AdminUUID
+		actor = service.GrantActor{
+			AdminUUID:  sess.AdminUUID,
+			MemberUUID: sess.MemberUUID,
+			Perms:      sess.Permissions,
+		}
 	}
 
-	if err := s.moduleAuthService.GrantAuthorization(r.Context(), memberUUID, moduleID, grantedBy, expiresAt, ""); err != nil {
+	if err := s.moduleAuthService.GrantAuthorization(r.Context(), actor, memberUUID, moduleID, expiresAt, ""); err != nil {
 		msg := "Failed to grant authorization."
 		switch {
 		case errors.Is(err, service.ErrAuthorizationAlreadyExists):
 			msg = "An active authorization already exists for that member."
+		case errors.Is(err, service.ErrGrantOutOfScope):
+			msg = "Your linked member does not currently hold access to that module."
 		case errors.Is(err, service.ErrMemberUUIDRequired), errors.Is(err, service.ErrModuleIDRequired):
 			msg = "Member and module are required."
 		default:
@@ -211,7 +217,7 @@ func (s *Server) handleUIModulesGrantAuthorization(w http.ResponseWriter, r *htt
 		return
 	}
 
-	s.logger.Printf("admin ui: granted authorization module=%s member=%s by=%s", moduleID, memberUUID, grantedBy)
+	s.logger.Printf("admin ui: granted authorization module=%s member=%s by=%s", moduleID, memberUUID, actor.AdminUUID)
 	flashRedirect(w, r, "/admin/ui/modules/"+moduleID, "Authorization granted.", "success")
 }
 
@@ -220,22 +226,29 @@ func (s *Server) handleUIModulesRevokeAuthorization(w http.ResponseWriter, r *ht
 	memberUUID := r.PathValue("member_uuid")
 
 	sess := sessionFromContext(r.Context())
-	revokedBy := ""
+	actor := service.GrantActor{}
 	if sess != nil {
-		revokedBy = sess.AdminUUID
+		actor = service.GrantActor{
+			AdminUUID:  sess.AdminUUID,
+			MemberUUID: sess.MemberUUID,
+			Perms:      sess.Permissions,
+		}
 	}
 
-	if err := s.moduleAuthService.RevokeAuthorization(r.Context(), memberUUID, moduleID, revokedBy); err != nil {
-		if errors.Is(err, service.ErrAuthorizationNotFound) {
+	if err := s.moduleAuthService.RevokeAuthorization(r.Context(), actor, memberUUID, moduleID); err != nil {
+		switch {
+		case errors.Is(err, service.ErrAuthorizationNotFound):
 			flashRedirect(w, r, "/admin/ui/modules/"+moduleID, "No active authorization found for that member.", "error")
-			return
+		case errors.Is(err, service.ErrGrantOutOfScope):
+			flashRedirect(w, r, "/admin/ui/modules/"+moduleID, "Your linked member does not currently hold access to that module.", "error")
+		default:
+			s.logger.Printf("ui revoke authorization module=%s member=%s: %v", moduleID, memberUUID, err)
+			flashRedirect(w, r, "/admin/ui/modules/"+moduleID, "Failed to revoke authorization.", "error")
 		}
-		s.logger.Printf("ui revoke authorization module=%s member=%s: %v", moduleID, memberUUID, err)
-		flashRedirect(w, r, "/admin/ui/modules/"+moduleID, "Failed to revoke authorization.", "error")
 		return
 	}
 
-	s.logger.Printf("admin ui: revoked authorization module=%s member=%s by=%s", moduleID, memberUUID, revokedBy)
+	s.logger.Printf("admin ui: revoked authorization module=%s member=%s by=%s", moduleID, memberUUID, actor.AdminUUID)
 	flashRedirect(w, r, "/admin/ui/modules/"+moduleID, "Authorization revoked.", "success")
 }
 
@@ -334,11 +347,11 @@ func (s *Server) uiModuleRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/ui/modules/{module_id}/delete",
 		perm(permissions.ModuleDelete, s.handleUIModulesDelete))
 
-	// Module authorizations (module-centric)
+	// Module authorizations (module-centric; either _held or _any passes the gate).
 	mux.HandleFunc("POST /admin/ui/modules/{module_id}/authorizations",
-		perm(permissions.ModuleAuthGrant, s.handleUIModulesGrantAuthorization))
+		requireUIEitherPermission(permissions.ModuleAuthGrantHeld, permissions.ModuleAuthGrantAny, s.handleUIModulesGrantAuthorization))
 	mux.HandleFunc("POST /admin/ui/modules/{module_id}/authorizations/{member_uuid}/revoke",
-		perm(permissions.ModuleAuthRevoke, s.handleUIModulesRevokeAuthorization))
+		requireUIEitherPermission(permissions.ModuleAuthRevokeHeld, permissions.ModuleAuthRevokeAny, s.handleUIModulesRevokeAuthorization))
 
 	// Doors
 	mux.HandleFunc("GET /admin/ui/doors",

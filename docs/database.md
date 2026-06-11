@@ -2,7 +2,7 @@
 
 Current-state reference for the Portunus server database: schema, migrations, write behavior, retention, and practical operational notes.
 
-**Last updated:** April 2026
+**Last updated:** June 2026
 
 ---
 
@@ -33,15 +33,15 @@ This matches the current server design and reduces lock contention in a single-p
 
 ## Current database responsibilities
 
-Today the database is responsible for nine main concerns:
+Today the database is responsible for eight main concerns:
 
 1. **Inventory of doors and modules**
 2. **Current module snapshot data** such as last seen time, last firmware version, and last RSSI
 3. **Append-only heartbeat history**
-4. **Member and admin credential hashes** stored as HMAC-SHA256 values in `member_access` (door-access members) and `admin_user_credentials` (admin RFID badges used for operator identification on the provisioning path)
+4. **Member credential hashes** stored as HMAC-SHA256 values in `member_access`
 5. **Append-only access audit events** for grant and deny decisions
-6. **RBAC roles and permissions** defining what actions admin users are authorized to perform
-7. **Member lifecycle state** including enrollment status, expiry, and module authorization grants
+6. **RBAC roles and permissions** defining what actions admin console users are authorized to perform
+7. **Member lifecycle state** including enrollment status, expiry, activation, and module authorization grants
 8. **Admin user accounts and server-side sessions** for the session-cookie-based admin API
 9. **Admin action audit log** recording every state-changing action performed through the admin API
 
@@ -82,6 +82,7 @@ Represents access modules known to the server.
 | `last_fw_version` | TEXT | nullable | Last reported firmware version |
 | `last_wifi_rssi` | INTEGER | nullable | Last reported RSSI |
 | `last_strike_unlocked` | INTEGER | nullable, CHECK 0/1 | **Present in schema but not currently populated by the active write path** |
+| `module_type` | TEXT | NOT NULL default `access_control_unit`, CHECK in `access_control_unit`, `provisioning_enrollment_unit` | ACU modules make door-unlock decisions; PEU modules drive the capture enrollment path |
 | `created_at_ms` | INTEGER | NOT NULL | Unix epoch milliseconds |
 | `updated_at_ms` | INTEGER | NOT NULL | Unix epoch milliseconds |
 
@@ -170,20 +171,18 @@ So the schema is slightly ahead of the data actually being written.
 
 ### `roles`
 
-Defines named RBAC roles that can be assigned to members and admin users. Added in migration `0005`.
+Defines named RBAC roles for admin console users. Physical access policy is expressed exclusively through `module_authorizations`, not through roles. Added in migration `0005`; shrunk to console-only in migration `0024`.
 
 | Column | Type | Constraints | Notes |
 |---|---|---|---|
-| `role_id` | TEXT | PRIMARY KEY | Stable identifier such as `admin`, `member`, `guest` |
+| `role_id` | TEXT | PRIMARY KEY | Stable identifier such as `admin`, `operator`, `viewer` |
 | `name` | TEXT | NOT NULL UNIQUE | Human-readable display name |
 | `description` | TEXT | nullable | Optional description |
 | `is_system` | INTEGER | NOT NULL default `0`, CHECK 0/1 | System roles cannot be deleted |
-| `default_expiry_days` | INTEGER | nullable | Default membership duration when assigned this role |
-| `default_inactivity_days` | INTEGER | nullable | Inactivity window after which status changes to expired |
 | `created_at_ms` | INTEGER | NOT NULL | Unix epoch milliseconds |
 | `updated_at_ms` | INTEGER | NOT NULL | Unix epoch milliseconds |
 
-Five system roles are seeded by migration `0008`: `admin`, `operator`, `viewer`, `member`, `guest`.
+Three system roles are seeded by migrations `0008` and `0024`: `admin`, `operator`, `viewer`. The `member` and `guest` roles seeded by `0008` were removed by `0024` when members became roleless.
 
 ---
 
@@ -197,35 +196,35 @@ Maps roles to named permission constants. Added in migration `0005`.
 | `permission` | TEXT | NOT NULL | Named permission constant |
 | `granted_at_ms` | INTEGER | NOT NULL | Unix epoch milliseconds |
 
-Primary key is `(role_id, permission)`. Twenty-nine permissions are seeded into the `admin` role by migration `0010`.
+Primary key is `(role_id, permission)`. The `admin` role holds 28 active permissions (seeded by migration `0010`; updated by migrations `0016`, `0019`, `0022`, `0023`, and `0026`).
 
 ---
 
 ### `member_access`
 
-Unified identity table for members and guests. A guest is a member row with the `guest` role; promotion to member is a role reassignment — the UUID and credential hash never change. Added in migration `0006`.
+Identity table for members. Members are roleless — what a member can open is expressed exclusively through `module_authorizations` grants. Added in migration `0006`; `role_id` removed and `activated_at_ms` added in migration `0023`.
 
 | Column | Type | Constraints | Notes |
 |---|---|---|---|
 | `uuid` | TEXT | PRIMARY KEY | Stable member identifier |
-| `role_id` | TEXT | NOT NULL, FK → `roles(role_id)` | Current role assignment |
 | `credential_hash` | BLOB | nullable UNIQUE, CHECK null or length=32 | HMAC-SHA256 of the enrolled credential; null until physical enrollment |
 | `status` | TEXT | NOT NULL default `active`, CHECK in `active`, `suspended`, `expired`, `archived` | Lifecycle status |
 | `enabled` | INTEGER | NOT NULL default `1`, CHECK 0/1 | Manual enable/disable flag independent of status |
-| `expires_at_ms` | INTEGER | nullable | Hard expiry timestamp; null means no expiry |
-| `inactivity_limit_days` | INTEGER | nullable | Inactivity window override; null inherits from role |
+| `expires_at_ms` | INTEGER | nullable | Hard expiry timestamp set by approving admin; null means no expiry |
+| `inactivity_limit_days` | INTEGER | nullable, CHECK > 0 | Inactivity window chosen by approving admin; null means no inactivity check |
+| `activated_at_ms` | INTEGER | nullable | Set by admin approval; inactivity clock starts here |
 | `last_access_at_ms` | INTEGER | nullable | Updated on every granted access event |
 | `created_at_ms` | INTEGER | NOT NULL | Unix epoch milliseconds |
 | `created_by_uuid` | TEXT | nullable | Admin UUID who created the member |
-| `promoted_from_uuid` | TEXT | nullable | Source guest UUID on guest-to-member promotion |
+| `promoted_from_uuid` | TEXT | nullable | Reserved; was used for guest-to-member promotion path |
 | `provisioning_status` | TEXT | NOT NULL default `active`, CHECK in `pending_authorization`, `active`, `incomplete` | Enrollment queue state |
 | `archived_at_ms` | INTEGER | nullable | Set when status transitions to `archived` |
 | `archived_by_uuid` | TEXT | nullable | Admin UUID who archived the member |
 
 #### provisioning_status semantics
 
-- `pending_authorization`: enrolled via PROVISIONING_CONSOLE but not yet approved by an admin
-- `active`: fully authorized; access decisions use this row
+- `pending_authorization`: credential captured by a PEU module and awaiting admin approval
+- `active`: admin-approved; access decisions use this row; `activated_at_ms` is set
 - `incomplete`: enrollment started but not completed
 
 ---
@@ -252,7 +251,7 @@ Revocation is a soft-delete: `revoked_at_ms` is set and the row is kept for audi
 
 ### `admin_users`
 
-Server operator accounts. Passwords are bcrypt-hashed. Added in migration `0009`; `role_id` and `enabled` added in migration `0011`.
+Server operator accounts. Passwords are bcrypt-hashed. Added in migration `0009`; `role_id` and `enabled` added in migration `0011`; `expires_at_ms` and `member_uuid` added in migration `0025`.
 
 | Column | Type | Constraints | Notes |
 |---|---|---|---|
@@ -262,6 +261,8 @@ Server operator accounts. Passwords are bcrypt-hashed. Added in migration `0009`
 | `must_change_pw` | INTEGER | NOT NULL default `1`, CHECK 0/1 | Forces password reset on first login |
 | `role_id` | TEXT | nullable, FK → `roles(role_id)` | RBAC role; existing users default to `admin` role on upgrade |
 | `enabled` | INTEGER | NOT NULL default `1`, CHECK 0/1 | Disabled accounts cannot log in |
+| `expires_at_ms` | INTEGER | nullable | Account hard expiry; null means no expiry. Enforced at login and per-request session resolution. The last non-expired admin account is protected from expiry. |
+| `member_uuid` | TEXT | nullable, FK → `member_access(uuid)` ON DELETE SET NULL, UNIQUE | Links the console account to the admin's own badge identity. Used to resolve grant scope for `module_auth.grant_held`. |
 | `created_at_ms` | INTEGER | NOT NULL | Unix epoch milliseconds |
 | `updated_at_ms` | INTEGER | NOT NULL | Unix epoch milliseconds |
 | `last_login_at_ms` | INTEGER | nullable | Updated on successful login |
@@ -283,13 +284,14 @@ Server-side session store for cookie-based admin authentication. Added in migrat
 
 ### `audit_log`
 
-Records every state-changing action performed through the admin API. Added in migration `0013`.
+Records every state-changing action performed through the admin API or by system workers. Added in migration `0013`; rebuilt in migration `0021` to support admin, member, and system actors.
 
 | Column | Type | Constraints | Notes |
 |---|---|---|---|
 | `id` | TEXT | PRIMARY KEY | Opaque event identifier |
 | `occurred_at_ms` | INTEGER | NOT NULL | Unix epoch milliseconds |
-| `actor_uuid` | TEXT | nullable, FK → `admin_users(uuid)` ON DELETE SET NULL | Admin who performed the action; null accommodates future system-generated events |
+| `actor_uuid` | TEXT | nullable | UUID of the actor; no FK constraint (actors may be admins, members, or system) |
+| `actor_type` | TEXT | NOT NULL default `system`, CHECK in `admin`, `member`, `system` | Actor category |
 | `action` | TEXT | NOT NULL | Name of the action performed |
 | `resource_type` | TEXT | nullable | Category of the affected resource (e.g. `member`, `module`) |
 | `resource_id` | TEXT | nullable | Identifier of the affected resource |
@@ -305,26 +307,6 @@ Four indexes support queries by time, actor, action name, and resource:
 | `idx_audit_log_actor` | `actor_uuid` |
 | `idx_audit_log_action` | `action` |
 | `idx_audit_log_resource` | `resource_type, resource_id` |
-
----
-
-### `admin_user_credentials`
-
-Maps RFID badge hashes to admin user accounts. Added in migration `0017`.
-
-This is **not** the old `credentials` table. It stores HMAC-SHA256 hashes of admin RFID badges so the provisioning FSM can identify the operator on scan 1 of the two-scan enrollment flow, replacing the prior compile-time `CONFIG_PORTUNUS_OPERATOR_UUID` constant. Uses the same `HashCredentialID(secret, raw_UID_bytes)` algorithm as `member_access.credential_hash`.
-
-| Column | Type | Constraints | Notes |
-|---|---|---|---|
-| `credential_hash` | BLOB | PRIMARY KEY, CHECK length = 32 | HMAC-SHA256 hash of the admin's RFID badge raw UID |
-| `admin_user_uuid` | TEXT | NOT NULL, FK → `admin_users(uuid)` ON DELETE CASCADE | Owning admin account |
-| `created_at_ms` | INTEGER | NOT NULL | Unix epoch milliseconds |
-
-One index supports lookups by admin account:
-
-| Index | Columns |
-|---|---|
-| `idx_admin_user_credentials_uuid` | `admin_user_uuid` |
 
 ---
 
@@ -406,9 +388,8 @@ Current foreign key behavior in the schema:
 - Deleting a `module` cascades to `module_authorizations`
 - Deleting a `role` cascades to `role_permissions`
 - Deleting a `member_access` row cascades to `module_authorizations`
+- Deleting a `member_access` row sets referencing `admin_users.member_uuid` to `NULL` (closes the admin's grant scope without blocking member lifecycle operations)
 - Deleting an `admin_users` row cascades to `sessions`
-- Deleting an `admin_users` row sets `audit_log.actor_uuid` to `NULL`
-- Deleting an `admin_users` row cascades to `admin_user_credentials`
 
 This preserves audit history where practical while still allowing entities to be removed.
 
@@ -465,6 +446,12 @@ Replaced the `cards` indexes dropped with that table. Migration `0016` later dro
 | `idx_sessions_admin_uuid` | `sessions` | `admin_uuid` | Sessions for a given admin user |
 | `idx_sessions_expires` | `sessions` | `expires_at_ms` | Session expiry cleanup |
 
+### Migration `0025` — admin user superuser fields
+
+| Index | Table | Filter | Columns | Current purpose |
+|---|---|---|---|---|
+| `uidx_admin_users_member_uuid` | `admin_users` | `member_uuid IS NOT NULL` | `member_uuid` | Enforces one admin account per linked member identity (UNIQUE) |
+
 ---
 
 ## Migration system
@@ -504,14 +491,24 @@ If a migration fails, the transaction is rolled back and server startup fails.
 | `0007` | `0007_module_authorizations.sql` | Adds `module_authorizations` table with soft-delete partial UNIQUE index |
 | `0008` | `0008_seed_default_roles.sql` | Seeds five built-in roles: `admin`, `operator`, `viewer`, `member`, `guest` |
 | `0009` | `0009_admin_users_sessions.sql` | Adds `admin_users` and `sessions` tables for session-cookie-based admin auth |
-| `0010` | `0010_seed_admin_role_permissions.sql` | Seeds 29 named permissions into the `admin` role |
+| `0010` | `0010_seed_admin_role_permissions.sql` | Seeds 30 named permissions into the `admin` role (some renamed or removed by later migrations) |
 | `0011` | `0011_admin_users_add_role.sql` | Adds `role_id` FK and `enabled` column to `admin_users`; backfills existing users to `admin` role |
 | `0012` | `0012_seed_operator_viewer_permissions.sql` | Seeds permissions for the `operator` and `viewer` system roles |
 | `0013` | `0013_audit_log.sql` | Adds `audit_log` table with four indexes for time, actor, action, and resource queries |
 | `0014` | `0014_seed_audit_log_permissions.sql` | Seeds `audit_log.list` permission for `admin`, `operator`, and `viewer` roles |
 | `0015` | `0015_clear_credential_hashes.sql` | Clears pre-existing `credential_hash` values in `member_access` that were computed under broken schemes; affected members must re-enroll |
 | `0016` | `0016_drop_credentials_table.sql` | Drops the `credentials` table, removes its `credential.*` role permissions rows, and rebuilds `access_events` without the FK to `credentials` |
-| `0017` | `0017_admin_user_credentials.sql` | Adds `admin_user_credentials` table mapping admin RFID badge hashes to admin users for provisioning-operator identification |
+| `0017` | `0017_admin_user_credentials.sql` | Added `admin_user_credentials` for two-scan operator identification (superseded — dropped in `0018`) |
+| `0018` | `0018_drop_admin_user_credentials.sql` | Drops `admin_user_credentials`; operator identification via that table was replaced by the single capture path |
+| `0019` | `0019_remove_stale_credential_permissions.sql` | Removes lingering `credential.*` permission rows from `role_permissions` left by migrations `0015`–`0016` |
+| `0020` | `0020_module_type.sql` | Adds `module_type` column to `modules` (`access_control_unit` or `provisioning_enrollment_unit`); existing rows default to ACU |
+| `0021` | `0021_audit_log_actor.sql` | Rebuilds `audit_log` to add `actor_type` column and remove the FK constraint on `actor_uuid`, supporting admin, member, and system actors |
+| `0022` | `0022_retire_member_provision.sql` | Renames `member.provision` → `member.enroll` in `role_permissions`; removes the two-scan operator-enrollment meaning of that permission |
+| `0023` | `0023_member_access_roleless.sql` | Removes `role_id` from `member_access`, adds `activated_at_ms`; removes `member.assign_role` from `role_permissions` |
+| `0024` | `0024_roles_console_only.sql` | Removes `member` and `guest` seed roles; drops `default_expiry_days` and `default_inactivity_days` from `roles` |
+| `0025` | `0025_admin_users_superuser.sql` | Adds `expires_at_ms` and `member_uuid` to `admin_users` with a partial UNIQUE index on `member_uuid` |
+| `0026` | `0026_scoped_module_auth_permissions.sql` | Splits `module_auth.grant` → `grant_any` (admin) + `grant_held` (operator); splits `module_auth.revoke` symmetrically |
+| `0027` | `0027_reseed_role_permissions.sql` | Compensating migration: re-seeds all `role_permissions` rows wiped by migration `0024`. Root cause: `PRAGMA foreign_keys = OFF` is silently ignored inside a transaction (SQLite constraint), so `DROP TABLE roles` in `0024` executed with FK enforcement on and cascade-deleted all `role_permissions` rows. Seeds admin (28), operator (11), and viewer (8) permissions using `INSERT OR IGNORE` for idempotency. |
 
 ### Current compatibility note
 
@@ -782,8 +779,6 @@ ORDER BY received_at_ms DESC;
 
 ### Registered credentials
 
-Member RFID badges enrolled via `member_access`:
-
 ```sql
 SELECT
   m.uuid AS member_uuid,
@@ -797,20 +792,7 @@ WHERE m.credential_hash IS NOT NULL
 ORDER BY m.created_at_ms DESC;
 ```
 
-Admin RFID badges registered in `admin_user_credentials`:
-
-```sql
-SELECT
-  auc.admin_user_uuid,
-  au.username,
-  hex(auc.credential_hash) AS credential_hash,
-  datetime(auc.created_at_ms / 1000, 'unixepoch') AS created_at
-FROM admin_user_credentials auc
-JOIN admin_users au ON au.uuid = auc.admin_user_uuid
-ORDER BY auc.created_at_ms DESC;
-```
-
-### All members with role and credential status
+### All members with credential and activation status
 
 ```sql
 SELECT
@@ -818,12 +800,11 @@ SELECT
   m.status,
   m.provisioning_status,
   m.enabled,
-  r.name AS role,
   CASE WHEN m.credential_hash IS NULL THEN 'not enrolled' ELSE 'enrolled' END AS credential_status,
+  datetime(m.activated_at_ms / 1000, 'unixepoch') AS activated_at,
   datetime(m.last_access_at_ms / 1000, 'unixepoch') AS last_access,
   datetime(m.expires_at_ms / 1000, 'unixepoch') AS expires_at
 FROM member_access m
-LEFT JOIN roles r ON r.role_id = m.role_id
 ORDER BY m.created_at_ms DESC;
 ```
 
@@ -898,7 +879,6 @@ UNION ALL SELECT 'module_authorizations', COUNT(*) FROM module_authorizations
 UNION ALL SELECT 'admin_users', COUNT(*) FROM admin_users
 UNION ALL SELECT 'sessions', COUNT(*) FROM sessions
 UNION ALL SELECT 'audit_log', COUNT(*) FROM audit_log
-UNION ALL SELECT 'admin_user_credentials', COUNT(*) FROM admin_user_credentials
 UNION ALL SELECT 'schema_migrations', COUNT(*) FROM schema_migrations;
 ```
 

@@ -3,35 +3,29 @@ package types
 // ── Member provisioning types ────────────────────────────────────────────────
 
 type ProvisionMemberRequest struct {
-	RoleID              string `json:"role_id"`
 	ExpiresAt           string `json:"expires_at,omitempty"`            // RFC 3339; omit for no hard deadline
 	InactivityLimitDays *int   `json:"inactivity_limit_days,omitempty"` // nil = no inactivity policy
 }
 
 // ApprovePendingRequest promotes a pending_authorization member to active.
 type ApprovePendingRequest struct {
-	RoleID              string `json:"role_id"`
-	ExpiresAt           string `json:"expires_at,omitempty"`            // RFC 3339; omit to use role default
-	InactivityLimitDays *int   `json:"inactivity_limit_days,omitempty"` // nil = use role default
+	ExpiresAt           string `json:"expires_at,omitempty"`  // RFC 3339; omit for no hard deadline
+	InactivityLimitDays *int   `json:"inactivity_limit_days"` // required
 }
 
 type AttachCredentialRequest struct {
 	CredentialHashHex string `json:"credential_hash"` // hex-encoded 32-byte SHA-256
 }
 
-type AssignRoleRequest struct {
-	RoleID string `json:"role_id"`
-}
-
 // MemberInfo is the JSON representation of a member_access row.
 type MemberInfo struct {
 	UUID                string `json:"uuid"`
-	RoleID              string `json:"role_id"`
 	CredentialHash      string `json:"credential_hash,omitempty"` // hex prefix — full hash not exposed
 	Status              string `json:"status"`
 	Enabled             bool   `json:"enabled"`
 	ExpiresAt           string `json:"expires_at,omitempty"`
 	InactivityLimitDays *int   `json:"inactivity_limit_days,omitempty"`
+	ActivatedAt         string `json:"activated_at,omitempty"`
 	LastAccessAt        string `json:"last_access_at,omitempty"`
 	ProvisioningStatus  string `json:"provisioning_status"`
 	CreatedAt           string `json:"created_at"`

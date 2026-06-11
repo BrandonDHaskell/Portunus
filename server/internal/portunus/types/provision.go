@@ -1,39 +1,23 @@
 package types
 
-// ProvisionMode is the provisioning path selected by the PEU firmware.
-// When Unspecified the server infers the mode from OperatorCredentialUID presence.
-type ProvisionMode int32
-
-const (
-	ProvisionModeUnspecified    ProvisionMode = 0
-	ProvisionModeCapture        ProvisionMode = 1
-	ProvisionModeOperatorEnroll ProvisionMode = 2
-)
-
 // ProvisionCredentialRequest is the domain type for device-initiated provisioning.
-// CredentialUID carries the scan-2 raw RFID UID bytes (new member card).
-// OperatorCredentialUID carries the scan-1 raw RFID UID bytes (operator badge).
-// The server resolves scan-1 to a member_access record and checks that the
-// member's role carries the member.provision permission.
+// CredentialUID carries the raw RFID UID bytes of the new member's card.
+// Only the capture path is supported: PEU scan → pending_authorization record;
+// an admin approves it via the console.
 type ProvisionCredentialRequest struct {
-	OperatorCredentialUID []byte        `json:"operator_credential_uid"` // scan-1 raw UID (1–10 bytes)
-	ModuleID              string        `json:"module_id"`
-	CredentialUID         []byte        `json:"credential_uid"` // scan-2 raw UID (1–10 bytes)
-	RoleID                string        `json:"role_id"`
-	ProvisionMode         ProvisionMode `json:"provision_mode,omitempty"`
+	ModuleID      string `json:"module_id"`
+	CredentialUID []byte `json:"credential_uid"` // raw UID (1–10 bytes)
 }
 
 // ProvisionStatus represents the outcome of a device-initiated provisioning request.
 type ProvisionStatus string
 
 const (
-	ProvisionStatusSuccess           ProvisionStatus = "success"
 	ProvisionStatusPendingCreated    ProvisionStatus = "pending_created"
 	ProvisionStatusDuplicateActive   ProvisionStatus = "duplicate_active"
 	ProvisionStatusDuplicateInactive ProvisionStatus = "duplicate_inactive"
 	ProvisionStatusDuplicatePending  ProvisionStatus = "duplicate_pending"
 	ProvisionStatusUnauthorized      ProvisionStatus = "unauthorized"
-	ProvisionStatusInvalidRole       ProvisionStatus = "invalid_role"
 )
 
 // ProvisionCredentialResponse is the domain response for device-initiated provisioning.

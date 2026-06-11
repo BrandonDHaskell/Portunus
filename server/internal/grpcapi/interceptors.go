@@ -31,7 +31,7 @@ const hmacHeaderKey = "x-portunus-sig"
 //
 //	Heartbeat:  "heartbeat|{module_id}|{sequence}"
 //	Access:     "access|{module_id}|{credential_id}"
-//	Provision:  "provision|{module_id}|{hex(operator_credential_uid)}"
+//	Provision:  "provision|{module_id}|{hex(credential_uid)}"
 func hmacProjection(req interface{}) ([]byte, error) {
 	switch m := req.(type) {
 	case *pb.HeartbeatRequest:
@@ -39,9 +39,9 @@ func hmacProjection(req interface{}) ([]byte, error) {
 	case *pb.AccessRequest:
 		return []byte(fmt.Sprintf("access|%s|%s", m.ModuleId, m.CredentialId)), nil
 	case *pb.ProvisionCredentialRequest:
-		// operator_credential_uid (raw RFID bytes) is what the firmware sends.
-		// operator_uuid is empty at this point — the server resolves it after auth.
-		return []byte(fmt.Sprintf("provision|%s|%x", m.ModuleId, m.OperatorCredentialUid)), nil
+		// credential_uid (raw RFID bytes of the new member's card) is the
+		// key field for the capture-only path. Matches the firmware projection.
+		return []byte(fmt.Sprintf("provision|%s|%x", m.ModuleId, m.CredentialUid)), nil
 	default:
 		return nil, fmt.Errorf("unsupported request type %T", req)
 	}

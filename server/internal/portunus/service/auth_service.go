@@ -33,6 +33,7 @@ type AdminSession struct {
 	RoleID       string
 	MustChangePW bool
 	Permissions  map[string]struct{}
+	MemberUUID   string // admin_users.member_uuid; empty if no linked member
 }
 
 // HasPermission reports whether the session carries the given permission.
@@ -114,6 +115,10 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (str
 		return "", ErrAccountDisabled
 	}
 
+	if user.ExpiresAt != nil && time.Now().UTC().After(*user.ExpiresAt) {
+		return "", ErrInvalidCredentials
+	}
+
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return "", ErrInvalidCredentials
 	}
@@ -156,9 +161,13 @@ func (s *AuthService) ResolveSession(ctx context.Context, sessionID string) (*Ad
 		return nil, fmt.Errorf("resolve session: load user: %w", err)
 	}
 
-	// Reject sessions for disabled accounts without invalidating the session
-	// token (the user should see "invalid credentials" rather than a hint).
+	// Reject sessions for disabled or expired accounts without invalidating the
+	// session token (the user should see "invalid credentials" rather than a hint).
 	if !user.Enabled {
+		return nil, store.ErrNotFound
+	}
+
+	if user.ExpiresAt != nil && time.Now().UTC().After(*user.ExpiresAt) {
 		return nil, store.ErrNotFound
 	}
 
@@ -177,12 +186,18 @@ func (s *AuthService) ResolveSession(ctx context.Context, sessionID string) (*Ad
 		permSet[p] = struct{}{}
 	}
 
+	memberUUID := ""
+	if user.MemberUUID != nil {
+		memberUUID = *user.MemberUUID
+	}
+
 	return &AdminSession{
 		AdminUUID:    user.UUID,
 		Username:     user.Username,
 		RoleID:       roleID,
 		MustChangePW: user.MustChangePW,
 		Permissions:  permSet,
+		MemberUUID:   memberUUID,
 	}, nil
 }
 

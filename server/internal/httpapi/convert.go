@@ -71,11 +71,8 @@ func accessResponseToProto(r types.AccessResponse) *pb.AccessResponse {
 
 func provisionRequestFromProto(p *pb.ProvisionCredentialRequest) types.ProvisionCredentialRequest {
 	return types.ProvisionCredentialRequest{
-		OperatorCredentialUID: p.GetOperatorCredentialUid(),
-		ModuleID:              p.GetModuleId(),
-		CredentialUID:         p.GetCredentialUid(),
-		RoleID:                p.GetRoleId(),
-		ProvisionMode:         pbconvert.ProtoProvisionModeToDomain(p.GetProvisionMode()),
+		ModuleID:      p.GetModuleId(),
+		CredentialUID: p.GetCredentialUid(),
 	}
 }
 

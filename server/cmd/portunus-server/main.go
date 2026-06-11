@@ -93,8 +93,8 @@ func main() {
 	accessSvc.SetLogger(logger)
 
 	// Member access + module authorization services.
-	memberAccessSvc := service.NewMemberAccessService(memberAccessStore, roleStore)
-	moduleAuthSvc := service.NewModuleAuthorizationService(moduleAuthStore)
+	memberAccessSvc := service.NewMemberAccessService(memberAccessStore)
+	moduleAuthSvc := service.NewModuleAuthorizationService(moduleAuthStore, memberAccessStore, auditStore)
 
 	// Enable member_access + module_authorizations path in the access service.
 	accessSvc.SetMemberAccessStore(memberAccessStore)
@@ -104,14 +104,15 @@ func main() {
 	}
 
 	// Expiry worker: transitions member records to 'expired' on a scheduled interval.
-	expiryWorker := service.NewExpiryWorker(memberAccessStore, service.ExpiryWorkerConfig{
+	expiryWorker := service.NewExpiryWorker(memberAccessStore, auditStore, service.ExpiryWorkerConfig{
 		IntervalMinutes: cfg.ExpiryWorkerIntervalMinutes,
+		PendingTTLDays:  cfg.PendingTTLDays,
 	}, logger)
 	expiryWorker.Start(ctx)
 	defer expiryWorker.Stop()
 
 	// Provisioning service: handles device-initiated provisioning from PROVISIONING_CONSOLE modules.
-	provisionSvc := service.NewProvisionService(registry, memberAccessStore, moduleAuthStore, roleStore, accessEventStore, credentialHashSecret, cfg.OperatorProvisioningEnabled, auditStore)
+	provisionSvc := service.NewProvisionService(registry, memberAccessStore, accessEventStore, credentialHashSecret, auditStore)
 
 	// Admin service for module and door management via REST API.
 	adminSvc := service.NewAdminService(moduleAdminStore, credentialHashSecret)

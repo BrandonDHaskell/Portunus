@@ -202,7 +202,7 @@ static bool get_rssi(int32_t *out)
  * Projection formats (must match hmacProjection() in grpcapi/interceptors.go):
  *   Heartbeat:   "heartbeat|{module_id}|{sequence}"
  *   Access:      "access|{module_id}|{credential_id}"
- *   Provision:   "provision|{module_id}|{hex(operator_credential_uid)}"
+ *   Provision:   "provision|{module_id}|{hex(credential_uid)}"
  *
  * @param method         gRPC method path (e.g. "/portunus.v1.PortunusService/SendHeartbeat")
  * @param req_buf        Nanopb-encoded protobuf request body
@@ -600,7 +600,7 @@ static void publish_provision_result(provision_result_reason_t reason,
 {
     portunus_event_t evt;
     memset(&evt, 0, sizeof(evt));
-    evt.id = (reason == PROVISION_RESULT_SUCCESS)
+    evt.id = (reason == PROVISION_RESULT_PENDING_CREATED)
              ? EVENT_PROVISION_SUCCESS
              : EVENT_PROVISION_FAILED;
 
@@ -618,27 +618,16 @@ static void publish_provision_result(provision_result_reason_t reason,
 
 static void handle_provision(const event_provision_request_t *req)
 {
-    /* Build ProvisionCredentialRequest */
+    /* Build ProvisionCredentialRequest (capture path only). */
     portunus_v1_ProvisionCredentialRequest pb_req =
         portunus_v1_ProvisionCredentialRequest_init_zero;
 
     strncpy(pb_req.module_id, PORTUNUS_MODULE_ID,
             sizeof(pb_req.module_id) - 1);
-    strncpy(pb_req.role_id, req->role_id,
-            sizeof(pb_req.role_id) - 1);
 
-    /* Scan-1: operator badge UID — server resolves to admin user. */
-    pb_req.operator_credential_uid.size = req->operator_credential_uid_len;
-    memcpy(pb_req.operator_credential_uid.bytes,
-           req->operator_credential_uid,
-           req->operator_credential_uid_len);
-
-    /* Scan-2: new member card UID — server applies HMAC-SHA256 before storing. */
+    /* New member card UID — server applies HMAC-SHA256 before storing. */
     pb_req.credential_uid.size = req->credential_uid_len;
     memcpy(pb_req.credential_uid.bytes, req->credential_uid, req->credential_uid_len);
-
-    /* Explicit provisioning mode — eliminates server-side field-presence inference. */
-    pb_req.provision_mode = static_cast<portunus_v1_ProvisionMode>(req->provision_mode);
 
     /* Encode */
     uint8_t req_buf[portunus_v1_ProvisionCredentialRequest_size];
@@ -654,15 +643,14 @@ static void handle_provision(const event_provision_request_t *req)
     int resp_len = 0;
 
 #if PORTUNUS_USE_GRPC
-    /* Hex-encode operator_credential_uid for the HMAC projection.
-     * operator_uuid is empty here — the server resolves it after verifying the
-     * operator credential. Both sides must agree on this field. */
+    /* Hex-encode credential_uid for the HMAC projection.
+     * Must match hmacProjection() in grpcapi/interceptors.go. */
     char uid_hex[64] = {};
     for (size_t i = 0;
-         i < pb_req.operator_credential_uid.size && i * 2 + 2 < sizeof(uid_hex);
+         i < pb_req.credential_uid.size && i * 2 + 2 < sizeof(uid_hex);
          ++i) {
         snprintf(&uid_hex[i * 2], 3, "%02x",
-                 static_cast<unsigned>(pb_req.operator_credential_uid.bytes[i]));
+                 static_cast<unsigned>(pb_req.credential_uid.bytes[i]));
     }
     char proj[128];
     snprintf(proj, sizeof(proj), "provision|%s|%s", pb_req.module_id, uid_hex);
@@ -717,8 +705,6 @@ static void handle_provision(const event_provision_request_t *req)
     /* Map proto status → internal reason code */
     provision_result_reason_t reason;
     switch (pb_resp.status) {
-    case portunus_v1_ProvisionStatus_PROVISION_STATUS_SUCCESS:
-        reason = PROVISION_RESULT_SUCCESS;            break;
     case portunus_v1_ProvisionStatus_PROVISION_STATUS_PENDING_CREATED:
         reason = PROVISION_RESULT_PENDING_CREATED;    break;
     case portunus_v1_ProvisionStatus_PROVISION_STATUS_DUPLICATE_ACTIVE:
@@ -729,8 +715,6 @@ static void handle_provision(const event_provision_request_t *req)
         reason = PROVISION_RESULT_DUPLICATE_PENDING;  break;
     case portunus_v1_ProvisionStatus_PROVISION_STATUS_UNAUTHORIZED:
         reason = PROVISION_RESULT_UNAUTHORIZED;       break;
-    case portunus_v1_ProvisionStatus_PROVISION_STATUS_INVALID_ROLE:
-        reason = PROVISION_RESULT_INVALID_ROLE;       break;
     default:
         reason = PROVISION_RESULT_COMM_ERROR;         break;
     }

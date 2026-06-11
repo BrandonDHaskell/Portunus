@@ -20,7 +20,7 @@ func NewMemberAccessStore(db *sql.DB, writer *dbpkg.Worker) *MemberAccessStore {
 }
 
 func (s *MemberAccessStore) CreateMember(ctx context.Context,
-	uuid, roleID, createdByUUID string,
+	uuid, createdByUUID string,
 	provisioningStatus store.ProvisioningStatus,
 	expiresAt *time.Time, inactivityLimitDays *int,
 ) error {
@@ -33,12 +33,12 @@ func (s *MemberAccessStore) CreateMember(ctx context.Context,
 	return s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 INSERT INTO member_access(
-  uuid, role_id, status, enabled,
+  uuid, status, enabled,
   expires_at_ms, inactivity_limit_days,
   created_at_ms, created_by_uuid,
   provisioning_status)
-VALUES (?, ?, 'active', 1, ?, ?, ?, ?, ?);
-`, uuid, roleID, expiresAtMs, inactivityLimitDays, now, createdByUUID, string(provisioningStatus))
+VALUES (?, 'active', 1, ?, ?, ?, ?, ?);
+`, uuid, expiresAtMs, inactivityLimitDays, now, createdByUUID, string(provisioningStatus))
 		if err != nil {
 			return fmt.Errorf("CreateMember: %w", err)
 		}
@@ -142,17 +142,6 @@ func (s *MemberAccessStore) SetProvisioningStatus(ctx context.Context, uuid stri
 	})
 }
 
-func (s *MemberAccessStore) AssignRole(ctx context.Context, uuid, roleID string) error {
-	return s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx,
-			`UPDATE member_access SET role_id = ? WHERE uuid = ?;`, roleID, uuid)
-		if err != nil {
-			return fmt.Errorf("AssignRole: %w", err)
-		}
-		return requireOneRow(res, "AssignRole")
-	})
-}
-
 func (s *MemberAccessStore) UpdateLastAccess(ctx context.Context, uuid string, t time.Time) error {
 	ms := t.UTC().UnixMilli()
 	return s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
@@ -205,14 +194,15 @@ func (s *MemberAccessStore) ExpireByInactivity(ctx context.Context, now time.Tim
 	nowMs := now.UTC().UnixMilli()
 	var count int
 	err := s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		// Uses last_access_at_ms when present, falls back to created_at_ms.
+		// Falls back through activated_at_ms then created_at_ms so pending
+		// dwell time does not consume the inactivity window.
 		res, err := tx.ExecContext(ctx, `
 UPDATE member_access
    SET status = 'expired'
  WHERE status = 'active'
    AND inactivity_limit_days IS NOT NULL
    AND (
-     COALESCE(last_access_at_ms, created_at_ms) + (inactivity_limit_days * 86400000)
+     COALESCE(last_access_at_ms, activated_at_ms, created_at_ms) + (inactivity_limit_days * 86400000)
    ) <= ?;
 `, nowMs)
 		if err != nil {
@@ -225,7 +215,7 @@ UPDATE member_access
 	return count, err
 }
 
-func (s *MemberAccessStore) ApprovePending(ctx context.Context, uuid, roleID, approvedByUUID string,
+func (s *MemberAccessStore) ApprovePending(ctx context.Context, uuid, approvedByUUID string,
 	expiresAt *time.Time, inactivityLimitDays *int,
 ) error {
 	var expiresAtMs *int64
@@ -233,6 +223,7 @@ func (s *MemberAccessStore) ApprovePending(ctx context.Context, uuid, roleID, ap
 		ms := expiresAt.UTC().UnixMilli()
 		expiresAtMs = &ms
 	}
+	activatedMs := time.Now().UTC().UnixMilli()
 	return s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		var provStatus string
 		err := tx.QueryRowContext(ctx,
@@ -248,10 +239,11 @@ func (s *MemberAccessStore) ApprovePending(ctx context.Context, uuid, roleID, ap
 		}
 		_, err = tx.ExecContext(ctx, `
 UPDATE member_access
-SET role_id = ?, status = 'active', provisioning_status = 'active',
-    created_by_uuid = ?, expires_at_ms = ?, inactivity_limit_days = ?
+SET status = 'active', provisioning_status = 'active',
+    activated_at_ms = ?, created_by_uuid = ?,
+    expires_at_ms = ?, inactivity_limit_days = ?
 WHERE uuid = ?;
-`, roleID, approvedByUUID, expiresAtMs, inactivityLimitDays, uuid)
+`, activatedMs, approvedByUUID, expiresAtMs, inactivityLimitDays, uuid)
 		if err != nil {
 			return fmt.Errorf("ApprovePending update: %w", err)
 		}
@@ -259,11 +251,31 @@ WHERE uuid = ?;
 	})
 }
 
+func (s *MemberAccessStore) ArchiveStalePending(ctx context.Context, now time.Time, ttlDays int) (int64, error) {
+	nowMs := now.UTC().UnixMilli()
+	ttlMs := int64(ttlDays) * 86400000
+	var count int64
+	err := s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+UPDATE member_access
+   SET status = 'archived', archived_at_ms = ?, archived_by_uuid = NULL
+ WHERE provisioning_status = 'pending_authorization'
+   AND created_at_ms + ? < ?;
+`, nowMs, ttlMs, nowMs)
+		if err != nil {
+			return fmt.Errorf("ArchiveStalePending: %w", err)
+		}
+		count, _ = res.RowsAffected()
+		return nil
+	})
+	return count, err
+}
+
 // ── query helpers ─────────────────────────────────────────────────────────────
 
 const memberAccessSelectSQL = `
-SELECT uuid, role_id, credential_hash, status, enabled,
-       expires_at_ms, inactivity_limit_days, last_access_at_ms,
+SELECT uuid, credential_hash, status, enabled,
+       expires_at_ms, inactivity_limit_days, activated_at_ms, last_access_at_ms,
        created_at_ms, COALESCE(created_by_uuid,''),
        COALESCE(promoted_from_uuid,''), provisioning_status,
        archived_at_ms, COALESCE(archived_by_uuid,'')
@@ -275,19 +287,20 @@ type rowScanner interface {
 
 func scanMemberAccessRow(row rowScanner) (*store.MemberAccessRecord, error) {
 	var (
-		uuid, roleID, statusStr, provStatus string
-		credHash                            []byte
-		enabled                             int
-		expiresMs, lastAccessMs             sql.NullInt64
-		inactivityDays                      sql.NullInt64
-		createdMs                           int64
-		createdBy, promotedFrom             string
-		archivedMs                          sql.NullInt64
-		archivedBy                          string
+		uuid, statusStr, provStatus string
+		credHash                    []byte
+		enabled                     int
+		expiresMs, activatedMs      sql.NullInt64
+		lastAccessMs                sql.NullInt64
+		inactivityDays              sql.NullInt64
+		createdMs                   int64
+		createdBy, promotedFrom     string
+		archivedMs                  sql.NullInt64
+		archivedBy                  string
 	)
 	err := row.Scan(
-		&uuid, &roleID, &credHash, &statusStr, &enabled,
-		&expiresMs, &inactivityDays, &lastAccessMs,
+		&uuid, &credHash, &statusStr, &enabled,
+		&expiresMs, &inactivityDays, &activatedMs, &lastAccessMs,
 		&createdMs, &createdBy, &promotedFrom, &provStatus,
 		&archivedMs, &archivedBy,
 	)
@@ -297,7 +310,6 @@ func scanMemberAccessRow(row rowScanner) (*store.MemberAccessRecord, error) {
 
 	rec := &store.MemberAccessRecord{
 		UUID:               uuid,
-		RoleID:             roleID,
 		CredentialHash:     credHash,
 		Status:             store.MemberStatus(statusStr),
 		Enabled:            enabled == 1,
@@ -314,6 +326,10 @@ func scanMemberAccessRow(row rowScanner) (*store.MemberAccessRecord, error) {
 	if inactivityDays.Valid {
 		v := int(inactivityDays.Int64)
 		rec.InactivityLimitDays = &v
+	}
+	if activatedMs.Valid {
+		t := time.UnixMilli(activatedMs.Int64).UTC()
+		rec.ActivatedAt = &t
 	}
 	if lastAccessMs.Valid {
 		t := time.UnixMilli(lastAccessMs.Int64).UTC()

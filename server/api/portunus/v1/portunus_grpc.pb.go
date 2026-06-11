@@ -77,7 +77,7 @@ type PortunusServiceClient interface {
 	SendHeartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
 	// RequestAccess evaluates a credential-read event and returns an access decision.
 	RequestAccess(ctx context.Context, in *AccessRequest, opts ...grpc.CallOption) (*AccessResponse, error)
-	// ProvisionCredential processes a two-scan provisioning flow from a
+	// ProvisionCredential processes a capture provisioning request from a
 	// PROVISIONING_CONSOLE firmware variant.
 	ProvisionCredential(ctx context.Context, in *ProvisionCredentialRequest, opts ...grpc.CallOption) (*ProvisionCredentialResponse, error)
 }
@@ -142,7 +142,7 @@ type PortunusServiceServer interface {
 	SendHeartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
 	// RequestAccess evaluates a credential-read event and returns an access decision.
 	RequestAccess(context.Context, *AccessRequest) (*AccessResponse, error)
-	// ProvisionCredential processes a two-scan provisioning flow from a
+	// ProvisionCredential processes a capture provisioning request from a
 	// PROVISIONING_CONSOLE firmware variant.
 	ProvisionCredential(context.Context, *ProvisionCredentialRequest) (*ProvisionCredentialResponse, error)
 	mustEmbedUnimplementedPortunusServiceServer()

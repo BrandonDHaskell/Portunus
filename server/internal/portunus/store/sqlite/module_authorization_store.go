@@ -109,6 +109,25 @@ func (s *ModuleAuthorizationStore) ListByModule(ctx context.Context, moduleID st
 	return scanModuleAuthRows(rows)
 }
 
+func (s *ModuleAuthorizationStore) HasActiveAuthorization(ctx context.Context, memberUUID, moduleID string) (int64, bool, error) {
+	var id int64
+	now := time.Now().UTC().UnixMilli()
+	err := s.db.QueryRowContext(ctx, `
+SELECT authorization_id FROM module_authorizations
+ WHERE member_uuid = ? AND module_id = ?
+   AND revoked_at_ms IS NULL
+   AND (expires_at_ms IS NULL OR expires_at_ms > ?)
+ LIMIT 1;
+`, memberUUID, moduleID, now).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("HasActiveAuthorization: %w", err)
+	}
+	return id, true, nil
+}
+
 // ── query helpers ─────────────────────────────────────────────────────────────
 
 const moduleAuthSelectSQL = `

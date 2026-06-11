@@ -126,13 +126,11 @@ func NewServer(d Dependencies) *Server {
 		mux.HandleFunc("GET /admin/v1/members/{member_uuid}",
 			requirePermission(permissions.MemberView, s.handleAdminGetMember))
 		mux.HandleFunc("POST /admin/v1/members",
-			requirePermission(permissions.MemberProvision, s.handleAdminProvisionMember))
+			requirePermission(permissions.MemberEnroll, s.handleAdminProvisionMember))
 		mux.HandleFunc("POST /admin/v1/members/{member_uuid}/credential",
-			requirePermission(permissions.MemberProvision, s.handleAdminAttachCredential))
-		mux.HandleFunc("PUT /admin/v1/members/{member_uuid}/role",
-			requirePermission(permissions.MemberAssignRole, s.handleAdminAssignRole))
+			requirePermission(permissions.MemberEnroll, s.handleAdminAttachCredential))
 		mux.HandleFunc("POST /admin/v1/members/{member_uuid}/approve",
-			requirePermission(permissions.MemberProvision, s.handleAdminApprovePending))
+			requirePermission(permissions.MemberEnroll, s.handleAdminApprovePending))
 		mux.HandleFunc("POST /admin/v1/members/{member_uuid}/disable",
 			requirePermission(permissions.MemberDisable, s.handleAdminDisableMember))
 		mux.HandleFunc("POST /admin/v1/members/{member_uuid}/archive",
@@ -144,9 +142,9 @@ func NewServer(d Dependencies) *Server {
 		mux.HandleFunc("GET /admin/v1/modules/{module_id}/authorizations",
 			requirePermission(permissions.ModuleAuthList, s.handleAdminListAuthorizationsByModule))
 		mux.HandleFunc("POST /admin/v1/modules/{module_id}/authorizations",
-			requirePermission(permissions.ModuleAuthGrant, s.handleAdminGrantModuleAuthorization))
+			requireEitherPermission(permissions.ModuleAuthGrantHeld, permissions.ModuleAuthGrantAny, s.handleAdminGrantModuleAuthorization))
 		mux.HandleFunc("DELETE /admin/v1/modules/{module_id}/authorizations/{member_uuid}",
-			requirePermission(permissions.ModuleAuthRevoke, s.handleAdminRevokeModuleAuthorization))
+			requireEitherPermission(permissions.ModuleAuthRevokeHeld, permissions.ModuleAuthRevokeAny, s.handleAdminRevokeModuleAuthorization))
 		mux.HandleFunc("GET /admin/v1/members/{member_uuid}/authorizations",
 			requirePermission(permissions.ModuleAuthList, s.handleAdminListAuthorizationsByMember))
 	}

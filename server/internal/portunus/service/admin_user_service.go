@@ -24,7 +24,10 @@ type AdminUserInfo struct {
 	Username     string
 	RoleID       string
 	Enabled      bool
+	IsExpired    bool
 	MustChangePW bool
+	ExpiresAt    string // RFC3339; empty = no expiry
+	MemberUUID   string // empty = no linked member
 	CreatedAt    string
 	LastLoginAt  string
 }
@@ -188,7 +191,54 @@ func (s *AdminUserService) AssignRole(ctx context.Context, uuid, roleID string) 
 	return nil
 }
 
+// SetExpiry sets or clears the account expiry for an admin user.
+// Setting any expiry on the last qualifying admin (enabled + not expired) fails
+// with ErrLastAdmin.
+func (s *AdminUserService) SetExpiry(ctx context.Context, uuid string, expiresAt *time.Time) error {
+	if expiresAt != nil {
+		target, err := s.users.GetAdminUserByUUID(ctx, uuid)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return ErrAdminUserNotFound
+			}
+			return fmt.Errorf("set expiry: load user: %w", err)
+		}
+		if target.RoleID == adminRoleID {
+			n, err := s.users.CountEnabledAdminsWithRole(ctx, adminRoleID)
+			if err != nil {
+				return fmt.Errorf("set expiry: count admins: %w", err)
+			}
+			if n <= 1 {
+				return ErrLastAdmin
+			}
+		}
+	}
+	if err := s.users.SetAdminUserExpiry(ctx, uuid, expiresAt); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return ErrAdminUserNotFound
+		}
+		return fmt.Errorf("set expiry: %w", err)
+	}
+	return nil
+}
+
+// SetMemberLink links or unlinks a member_access row to an admin account.
+// Returns ErrMemberAlreadyLinked if the member is already linked to another account.
+func (s *AdminUserService) SetMemberLink(ctx context.Context, uuid string, memberUUID *string) error {
+	if err := s.users.SetAdminUserMemberLink(ctx, uuid, memberUUID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return ErrAdminUserNotFound
+		}
+		if errors.Is(err, store.ErrMemberAlreadyLinked) {
+			return store.ErrMemberAlreadyLinked
+		}
+		return fmt.Errorf("set member link: %w", err)
+	}
+	return nil
+}
+
 func adminUserRecordToInfo(r *store.AdminUserRecord) AdminUserInfo {
+	now := time.Now().UTC()
 	info := AdminUserInfo{
 		UUID:         r.UUID,
 		Username:     r.Username,
@@ -196,6 +246,13 @@ func adminUserRecordToInfo(r *store.AdminUserRecord) AdminUserInfo {
 		Enabled:      r.Enabled,
 		MustChangePW: r.MustChangePW,
 		CreatedAt:    r.CreatedAt.Format(time.RFC3339),
+	}
+	if r.ExpiresAt != nil {
+		info.ExpiresAt = r.ExpiresAt.Format(time.RFC3339)
+		info.IsExpired = now.After(*r.ExpiresAt)
+	}
+	if r.MemberUUID != nil {
+		info.MemberUUID = *r.MemberUUID
 	}
 	if r.LastLoginAt != nil {
 		info.LastLoginAt = r.LastLoginAt.Format(time.RFC3339)
