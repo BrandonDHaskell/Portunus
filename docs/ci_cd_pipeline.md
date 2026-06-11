@@ -294,7 +294,7 @@ task firmware:flash-monitor
 #    - WiFi connects
 #    - Heartbeat OK with known=1
 #    - ACCESS_POINT: credential tap produces access granted/denied
-#    - PROVISIONING_CONSOLE: two-scan flow produces a provision result
+#    - PROVISIONING_CONSOLE: credential tap produces a pending_authorization result
 ```
 
 ---

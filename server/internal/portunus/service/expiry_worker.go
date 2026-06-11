@@ -12,7 +12,7 @@ import (
 // ExpiryWorker periodically transitions member_access rows based on three
 // independent policy axes:
 //   - Hard deadline: expires_at_ms has passed.
-//   - Inactivity:    last_access_at_ms (or created_at_ms) + inactivity_limit_days has passed.
+//   - Inactivity:    COALESCE(last_access_at_ms, activated_at_ms, created_at_ms) + inactivity_limit_days has passed.
 //   - Stale pending: pending_authorization rows older than pendingTTLDays are archived.
 //
 // Modeled after HeartbeatPruner.

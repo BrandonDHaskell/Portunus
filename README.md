@@ -31,7 +31,7 @@ Named after the Roman god of keys and doors.
 Two firmware variants are supported, selected at compile time:
 
 - **ACCESS_POINT** — standard door control: reads a credential, asks the server, actuates the door strike.
-- **PROVISIONING_CONSOLE** — enrollment console: two-scan flow (operator + new credential), hashes on-device, submits a provisioning request to the server.
+- **PROVISIONING_CONSOLE** — enrollment console: reads one credential, hashes on-device, submits a `pending_authorization` request; an admin approves it via the console with explicit expiry and inactivity limits.
 
 ACCESS_POINT runtime flow:
 
@@ -54,7 +54,7 @@ ACCESS_POINT runtime flow:
 - Reed switch monitoring with software debounce
 - LED feedback patterns (granted, denied, credential read, system ready, error)
 - ACCESS_POINT `SystemFSM` with hardware abstraction interfaces and capability-based degradation
-- PROVISIONING_CONSOLE `ProvisioningFSM` — two-scan enrollment flow with on-device HMAC-SHA256 hashing
+- PROVISIONING_CONSOLE `ProvisioningFSM` — single-scan capture path: reads one credential, hashes on-device with SHA-256, submits a `pending_authorization` request; admin approves via console with explicit expiry and inactivity limits
 - FreeRTOS event bus (queue-backed pub/sub) for all inter-component messaging
 - WiFi management with exponential-backoff reconnection
 - Server communication over HTTP/1.1 + protobuf with TLS and HMAC signing
@@ -144,7 +144,7 @@ Portunus/
 │   ├── main/                  Composition root (selects FSM via Kconfig)
 │   ├── core/
 │   │   ├── system_fsm/        ACCESS_POINT state machine
-│   │   └── provisioning_fsm/  PROVISIONING_CONSOLE two-scan enrollment FSM
+│   │   └── provisioning_fsm/  PROVISIONING_CONSOLE capture-path enrollment FSM
 │   ├── components/
 │   │   ├── portunus_interfaces/   ICredentialReader, IAccessPoint, IFeedback
 │   │   ├── portunus_types/        Shared types (credential_t, events, errors)
