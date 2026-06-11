@@ -42,15 +42,21 @@ func (s *Server) handleAdminGrantModuleAuthorization(w http.ResponseWriter, r *h
 		expiresAt = &u
 	}
 
-	grantedBy := ""
+	actor := service.GrantActor{}
 	if sess := sessionFromContext(r.Context()); sess != nil {
-		grantedBy = sess.AdminUUID
+		actor = service.GrantActor{
+			AdminUUID:  sess.AdminUUID,
+			MemberUUID: sess.MemberUUID,
+			Perms:      sess.Permissions,
+		}
 	}
 
-	if err := s.moduleAuthService.GrantAuthorization(r.Context(), req.MemberUUID, moduleID, grantedBy, expiresAt, req.TimeRestriction); err != nil {
+	if err := s.moduleAuthService.GrantAuthorization(r.Context(), actor, req.MemberUUID, moduleID, expiresAt, req.TimeRestriction); err != nil {
 		switch {
 		case errors.Is(err, service.ErrAuthorizationAlreadyExists):
 			writeError(w, http.StatusConflict, "authorization_exists", "an active authorization already exists for this member and module")
+		case errors.Is(err, service.ErrGrantOutOfScope):
+			writeError(w, http.StatusForbidden, "grant_out_of_scope", "actor's linked member does not hold access to this module")
 		case errors.Is(err, service.ErrMemberUUIDRequired):
 			writeError(w, http.StatusBadRequest, "missing_member_uuid", err.Error())
 		case errors.Is(err, service.ErrModuleIDRequired):
@@ -62,7 +68,7 @@ func (s *Server) handleAdminGrantModuleAuthorization(w http.ResponseWriter, r *h
 		return
 	}
 
-	s.logger.Printf("admin: granted authorization member=%s module=%s by=%s", req.MemberUUID, moduleID, grantedBy)
+	s.logger.Printf("admin: granted authorization member=%s module=%s by=%s", req.MemberUUID, moduleID, actor.AdminUUID)
 	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "member_uuid": req.MemberUUID, "module_id": moduleID})
 }
 
@@ -78,22 +84,29 @@ func (s *Server) handleAdminRevokeModuleAuthorization(w http.ResponseWriter, r *
 		return
 	}
 
-	revokedBy := ""
+	revokeActor := service.GrantActor{}
 	if sess := sessionFromContext(r.Context()); sess != nil {
-		revokedBy = sess.AdminUUID
+		revokeActor = service.GrantActor{
+			AdminUUID:  sess.AdminUUID,
+			MemberUUID: sess.MemberUUID,
+			Perms:      sess.Permissions,
+		}
 	}
 
-	if err := s.moduleAuthService.RevokeAuthorization(r.Context(), memberUUID, moduleID, revokedBy); err != nil {
-		if errors.Is(err, service.ErrAuthorizationNotFound) {
+	if err := s.moduleAuthService.RevokeAuthorization(r.Context(), revokeActor, memberUUID, moduleID); err != nil {
+		switch {
+		case errors.Is(err, service.ErrAuthorizationNotFound):
 			writeError(w, http.StatusNotFound, "not_found", "no active authorization found for this member and module")
-			return
+		case errors.Is(err, service.ErrGrantOutOfScope):
+			writeError(w, http.StatusForbidden, "grant_out_of_scope", "actor's linked member does not hold access to this module")
+		default:
+			s.logger.Printf("admin revoke module authorization: %v", err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "failed to revoke authorization")
 		}
-		s.logger.Printf("admin revoke module authorization: %v", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "failed to revoke authorization")
 		return
 	}
 
-	s.logger.Printf("admin: revoked authorization member=%s module=%s by=%s", memberUUID, moduleID, revokedBy)
+	s.logger.Printf("admin: revoked authorization member=%s module=%s by=%s", memberUUID, moduleID, revokeActor.AdminUUID)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "member_uuid": memberUUID, "module_id": moduleID, "status": "revoked"})
 }
 

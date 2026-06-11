@@ -142,9 +142,9 @@ func NewServer(d Dependencies) *Server {
 		mux.HandleFunc("GET /admin/v1/modules/{module_id}/authorizations",
 			requirePermission(permissions.ModuleAuthList, s.handleAdminListAuthorizationsByModule))
 		mux.HandleFunc("POST /admin/v1/modules/{module_id}/authorizations",
-			requirePermission(permissions.ModuleAuthGrant, s.handleAdminGrantModuleAuthorization))
+			requireEitherPermission(permissions.ModuleAuthGrantHeld, permissions.ModuleAuthGrantAny, s.handleAdminGrantModuleAuthorization))
 		mux.HandleFunc("DELETE /admin/v1/modules/{module_id}/authorizations/{member_uuid}",
-			requirePermission(permissions.ModuleAuthRevoke, s.handleAdminRevokeModuleAuthorization))
+			requireEitherPermission(permissions.ModuleAuthRevokeHeld, permissions.ModuleAuthRevokeAny, s.handleAdminRevokeModuleAuthorization))
 		mux.HandleFunc("GET /admin/v1/members/{member_uuid}/authorizations",
 			requirePermission(permissions.ModuleAuthList, s.handleAdminListAuthorizationsByMember))
 	}

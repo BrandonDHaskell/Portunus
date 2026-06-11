@@ -33,6 +33,7 @@ type AdminSession struct {
 	RoleID       string
 	MustChangePW bool
 	Permissions  map[string]struct{}
+	MemberUUID   string // admin_users.member_uuid; empty if no linked member
 }
 
 // HasPermission reports whether the session carries the given permission.
@@ -185,12 +186,18 @@ func (s *AuthService) ResolveSession(ctx context.Context, sessionID string) (*Ad
 		permSet[p] = struct{}{}
 	}
 
+	memberUUID := ""
+	if user.MemberUUID != nil {
+		memberUUID = *user.MemberUUID
+	}
+
 	return &AdminSession{
 		AdminUUID:    user.UUID,
 		Username:     user.Username,
 		RoleID:       roleID,
 		MustChangePW: user.MustChangePW,
 		Permissions:  permSet,
+		MemberUUID:   memberUUID,
 	}, nil
 }
 

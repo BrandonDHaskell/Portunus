@@ -94,7 +94,7 @@ func main() {
 
 	// Member access + module authorization services.
 	memberAccessSvc := service.NewMemberAccessService(memberAccessStore)
-	moduleAuthSvc := service.NewModuleAuthorizationService(moduleAuthStore)
+	moduleAuthSvc := service.NewModuleAuthorizationService(moduleAuthStore, memberAccessStore, auditStore)
 
 	// Enable member_access + module_authorizations path in the access service.
 	accessSvc.SetMemberAccessStore(memberAccessStore)

@@ -204,6 +204,27 @@ func requireUIPermission(perm string, next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// requireUIEitherPermission guards a UI route requiring at least one of perm1
+// or perm2. The service layer performs the actual scope check.
+func requireUIEitherPermission(perm1, perm2 string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sess := sessionFromContext(r.Context())
+		if sess == nil {
+			http.Redirect(w, r, "/admin/ui/login", http.StatusSeeOther)
+			return
+		}
+		if sess.MustChangePW {
+			http.Redirect(w, r, "/admin/ui/change-password", http.StatusSeeOther)
+			return
+		}
+		if !sess.HasPermission(perm1) && !sess.HasPermission(perm2) {
+			http.Redirect(w, r, "/admin/ui/?flash=Insufficient+permissions&ft=error", http.StatusSeeOther)
+			return
+		}
+		next(w, r)
+	}
+}
+
 // flashRedirect redirects with a flash message and type as query params.
 func flashRedirect(w http.ResponseWriter, r *http.Request, dest, msg, flashType string) {
 	u := dest + "?flash=" + urlEncode(msg) + "&ft=" + flashType

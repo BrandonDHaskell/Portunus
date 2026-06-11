@@ -38,9 +38,13 @@ const (
 	MemberArchive = "member.archive"
 
 	// Module authorization management
-	ModuleAuthGrant  = "module_auth.grant"
-	ModuleAuthRevoke = "module_auth.revoke"
-	ModuleAuthList   = "module_auth.list"
+	// _held: actor may only grant/revoke modules their linked member currently holds.
+	// _any:  unscoped; seeded to the admin role.
+	ModuleAuthGrantHeld  = "module_auth.grant_held"
+	ModuleAuthGrantAny   = "module_auth.grant_any"
+	ModuleAuthRevokeHeld = "module_auth.revoke_held"
+	ModuleAuthRevokeAny  = "module_auth.revoke_any"
+	ModuleAuthList       = "module_auth.list"
 
 	// Audit log
 	AuditLogList = "audit_log.list"
@@ -55,7 +59,7 @@ func All() []string {
 		AdminUserCreate, AdminUserList, AdminUserEdit, AdminUserDisable,
 		RoleList, RoleCreate, RoleEdit, RoleDelete, RoleAssignPermission,
 		MemberEnroll, MemberList, MemberView, MemberDisable, MemberArchive,
-		ModuleAuthGrant, ModuleAuthRevoke, ModuleAuthList,
+		ModuleAuthGrantHeld, ModuleAuthGrantAny, ModuleAuthRevokeHeld, ModuleAuthRevokeAny, ModuleAuthList,
 		AuditLogList,
 	}
 }

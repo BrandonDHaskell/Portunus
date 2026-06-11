@@ -335,16 +335,22 @@ func (s *Server) handleUIGrantAuthorization(w http.ResponseWriter, r *http.Reque
 	}
 
 	sess := sessionFromContext(r.Context())
-	grantedBy := ""
+	actor := service.GrantActor{}
 	if sess != nil {
-		grantedBy = sess.AdminUUID
+		actor = service.GrantActor{
+			AdminUUID:  sess.AdminUUID,
+			MemberUUID: sess.MemberUUID,
+			Perms:      sess.Permissions,
+		}
 	}
 
-	if err := s.moduleAuthService.GrantAuthorization(r.Context(), memberUUID, moduleID, grantedBy, expiresAt, ""); err != nil {
+	if err := s.moduleAuthService.GrantAuthorization(r.Context(), actor, memberUUID, moduleID, expiresAt, ""); err != nil {
 		msg := "Failed to grant authorization."
 		switch {
 		case errors.Is(err, service.ErrAuthorizationAlreadyExists):
 			msg = "An active authorization already exists for that module."
+		case errors.Is(err, service.ErrGrantOutOfScope):
+			msg = "Your linked member does not currently hold access to that module."
 		case errors.Is(err, service.ErrMemberUUIDRequired), errors.Is(err, service.ErrModuleIDRequired):
 			msg = "Member UUID and module are required."
 		default:
@@ -354,7 +360,7 @@ func (s *Server) handleUIGrantAuthorization(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	s.logger.Printf("admin ui: granted authorization member=%s module=%s by=%s", memberUUID, moduleID, grantedBy)
+	s.logger.Printf("admin ui: granted authorization member=%s module=%s by=%s", memberUUID, moduleID, actor.AdminUUID)
 	flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Module authorization granted.", "success")
 }
 
@@ -364,22 +370,29 @@ func (s *Server) handleUIRevokeAuthorization(w http.ResponseWriter, r *http.Requ
 	moduleID := r.PathValue("module_id")
 
 	sess := sessionFromContext(r.Context())
-	revokedBy := ""
+	actor := service.GrantActor{}
 	if sess != nil {
-		revokedBy = sess.AdminUUID
+		actor = service.GrantActor{
+			AdminUUID:  sess.AdminUUID,
+			MemberUUID: sess.MemberUUID,
+			Perms:      sess.Permissions,
+		}
 	}
 
-	if err := s.moduleAuthService.RevokeAuthorization(r.Context(), memberUUID, moduleID, revokedBy); err != nil {
-		if errors.Is(err, service.ErrAuthorizationNotFound) {
+	if err := s.moduleAuthService.RevokeAuthorization(r.Context(), actor, memberUUID, moduleID); err != nil {
+		switch {
+		case errors.Is(err, service.ErrAuthorizationNotFound):
 			flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "No active authorization found for that module.", "error")
-			return
+		case errors.Is(err, service.ErrGrantOutOfScope):
+			flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Your linked member does not currently hold access to that module.", "error")
+		default:
+			s.logger.Printf("ui revoke authorization member=%s module=%s: %v", memberUUID, moduleID, err)
+			flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Failed to revoke authorization.", "error")
 		}
-		s.logger.Printf("ui revoke authorization member=%s module=%s: %v", memberUUID, moduleID, err)
-		flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Failed to revoke authorization.", "error")
 		return
 	}
 
-	s.logger.Printf("admin ui: revoked authorization member=%s module=%s by=%s", memberUUID, moduleID, revokedBy)
+	s.logger.Printf("admin ui: revoked authorization member=%s module=%s by=%s", memberUUID, moduleID, actor.AdminUUID)
 	flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Authorization revoked.", "success")
 }
 
@@ -415,11 +428,12 @@ func (s *Server) uiMemberRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/ui/members/{member_uuid}/archive",
 		perm(permissions.MemberArchive, s.handleUIMembersArchive))
 
-	// Module authorization grant/revoke
+	// Module authorization grant/revoke (either _held or _any variant passes the gate;
+	// the service performs the scope check for _held).
 	mux.HandleFunc("POST /admin/ui/members/{member_uuid}/authorizations",
-		perm(permissions.ModuleAuthGrant, s.handleUIGrantAuthorization))
+		requireUIEitherPermission(permissions.ModuleAuthGrantHeld, permissions.ModuleAuthGrantAny, s.handleUIGrantAuthorization))
 	mux.HandleFunc("POST /admin/ui/members/{member_uuid}/authorizations/{module_id}/revoke",
-		perm(permissions.ModuleAuthRevoke, s.handleUIRevokeAuthorization))
+		requireUIEitherPermission(permissions.ModuleAuthRevokeHeld, permissions.ModuleAuthRevokeAny, s.handleUIRevokeAuthorization))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
