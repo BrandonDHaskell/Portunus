@@ -508,6 +508,7 @@ If a migration fails, the transaction is rolled back and server startup fails.
 | `0024` | `0024_roles_console_only.sql` | Removes `member` and `guest` seed roles; drops `default_expiry_days` and `default_inactivity_days` from `roles` |
 | `0025` | `0025_admin_users_superuser.sql` | Adds `expires_at_ms` and `member_uuid` to `admin_users` with a partial UNIQUE index on `member_uuid` |
 | `0026` | `0026_scoped_module_auth_permissions.sql` | Splits `module_auth.grant` → `grant_any` (admin) + `grant_held` (operator); splits `module_auth.revoke` symmetrically |
+| `0027` | `0027_reseed_role_permissions.sql` | Compensating migration: re-seeds all `role_permissions` rows wiped by migration `0024`. Root cause: `PRAGMA foreign_keys = OFF` is silently ignored inside a transaction (SQLite constraint), so `DROP TABLE roles` in `0024` executed with FK enforcement on and cascade-deleted all `role_permissions` rows. Seeds admin (28), operator (11), and viewer (8) permissions using `INSERT OR IGNORE` for idempotency. |
 
 ### Current compatibility note
 
