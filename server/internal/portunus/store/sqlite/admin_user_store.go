@@ -40,7 +40,7 @@ VALUES (?, ?, ?, ?, 1, 1, ?, ?);
 func (s *AdminUserStore) GetAdminUserByUsername(ctx context.Context, username string) (*store.AdminUserRecord, error) {
 	row := s.db.QueryRowContext(ctx, `
 SELECT uuid, username, password_hash, COALESCE(role_id,'admin'), COALESCE(enabled,1),
-       must_change_pw, created_at_ms, updated_at_ms, last_login_at_ms
+       must_change_pw, expires_at_ms, member_uuid, created_at_ms, updated_at_ms, last_login_at_ms
 FROM admin_users WHERE username = ?;
 `, username)
 	return scanAdminUser(row)
@@ -49,7 +49,7 @@ FROM admin_users WHERE username = ?;
 func (s *AdminUserStore) GetAdminUserByUUID(ctx context.Context, uuid string) (*store.AdminUserRecord, error) {
 	row := s.db.QueryRowContext(ctx, `
 SELECT uuid, username, password_hash, COALESCE(role_id,'admin'), COALESCE(enabled,1),
-       must_change_pw, created_at_ms, updated_at_ms, last_login_at_ms
+       must_change_pw, expires_at_ms, member_uuid, created_at_ms, updated_at_ms, last_login_at_ms
 FROM admin_users WHERE uuid = ?;
 `, uuid)
 	return scanAdminUser(row)
@@ -58,7 +58,7 @@ FROM admin_users WHERE uuid = ?;
 func (s *AdminUserStore) ListAdminUsers(ctx context.Context) ([]store.AdminUserRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT uuid, username, password_hash, COALESCE(role_id,'admin'), COALESCE(enabled,1),
-       must_change_pw, created_at_ms, updated_at_ms, last_login_at_ms
+       must_change_pw, expires_at_ms, member_uuid, created_at_ms, updated_at_ms, last_login_at_ms
 FROM admin_users ORDER BY username;
 `)
 	if err != nil {
@@ -171,14 +171,59 @@ func (s *AdminUserStore) AnyAdminExists(ctx context.Context) (bool, error) {
 }
 
 func (s *AdminUserStore) CountEnabledAdminsWithRole(ctx context.Context, roleID string) (int, error) {
+	nowMs := time.Now().UTC().UnixMilli()
 	var n int
-	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM admin_users WHERE enabled = 1 AND COALESCE(role_id,'admin') = ?;`,
-		roleID).Scan(&n)
+	err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM admin_users
+WHERE enabled = 1 AND COALESCE(role_id,'admin') = ?
+  AND (expires_at_ms IS NULL OR expires_at_ms > ?);`,
+		roleID, nowMs).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("CountEnabledAdminsWithRole: %w", err)
 	}
 	return n, nil
+}
+
+func (s *AdminUserStore) SetAdminUserExpiry(ctx context.Context, uuid string, expiresAt *time.Time) error {
+	now := time.Now().UTC().UnixMilli()
+	var expiresMs interface{}
+	if expiresAt != nil {
+		expiresMs = expiresAt.UTC().UnixMilli()
+	}
+	return s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE admin_users SET expires_at_ms = ?, updated_at_ms = ? WHERE uuid = ?;`,
+			expiresMs, now, uuid)
+		if err != nil {
+			return fmt.Errorf("SetAdminUserExpiry: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return store.ErrNotFound
+		}
+		return nil
+	})
+}
+
+func (s *AdminUserStore) SetAdminUserMemberLink(ctx context.Context, uuid string, memberUUID *string) error {
+	now := time.Now().UTC().UnixMilli()
+	return s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE admin_users SET member_uuid = ?, updated_at_ms = ? WHERE uuid = ?;`,
+			memberUUID, now, uuid)
+		if err != nil {
+			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+				return store.ErrMemberAlreadyLinked
+			}
+			if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
+				return store.ErrNotFound
+			}
+			return fmt.Errorf("SetAdminUserMemberLink: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return store.ErrNotFound
+		}
+		return nil
+	})
 }
 
 // scanAdminUser scans a single *sql.Row.
@@ -186,17 +231,21 @@ func scanAdminUser(row *sql.Row) (*store.AdminUserRecord, error) {
 	var (
 		uuid, username, hash, roleID string
 		enabled, mustChange          int
+		expiresMs                    sql.NullInt64
+		memberUUID                   sql.NullString
 		createdMs, updatedMs         int64
 		lastLoginMs                  sql.NullInt64
 	)
-	err := row.Scan(&uuid, &username, &hash, &roleID, &enabled, &mustChange, &createdMs, &updatedMs, &lastLoginMs)
+	err := row.Scan(&uuid, &username, &hash, &roleID, &enabled, &mustChange,
+		&expiresMs, &memberUUID, &createdMs, &updatedMs, &lastLoginMs)
 	if err == sql.ErrNoRows {
 		return nil, store.ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("scanAdminUser: %w", err)
 	}
-	return buildAdminUserRecord(uuid, username, hash, roleID, enabled, mustChange, createdMs, updatedMs, lastLoginMs), nil
+	return buildAdminUserRecord(uuid, username, hash, roleID, enabled, mustChange,
+		expiresMs, memberUUID, createdMs, updatedMs, lastLoginMs), nil
 }
 
 // scanAdminUserRow scans a row from *sql.Rows.
@@ -204,16 +253,27 @@ func scanAdminUserRow(rows *sql.Rows) (*store.AdminUserRecord, error) {
 	var (
 		uuid, username, hash, roleID string
 		enabled, mustChange          int
+		expiresMs                    sql.NullInt64
+		memberUUID                   sql.NullString
 		createdMs, updatedMs         int64
 		lastLoginMs                  sql.NullInt64
 	)
-	if err := rows.Scan(&uuid, &username, &hash, &roleID, &enabled, &mustChange, &createdMs, &updatedMs, &lastLoginMs); err != nil {
+	if err := rows.Scan(&uuid, &username, &hash, &roleID, &enabled, &mustChange,
+		&expiresMs, &memberUUID, &createdMs, &updatedMs, &lastLoginMs); err != nil {
 		return nil, fmt.Errorf("scanAdminUserRow: %w", err)
 	}
-	return buildAdminUserRecord(uuid, username, hash, roleID, enabled, mustChange, createdMs, updatedMs, lastLoginMs), nil
+	return buildAdminUserRecord(uuid, username, hash, roleID, enabled, mustChange,
+		expiresMs, memberUUID, createdMs, updatedMs, lastLoginMs), nil
 }
 
-func buildAdminUserRecord(uuid, username, hash, roleID string, enabled, mustChange int, createdMs, updatedMs int64, lastLoginMs sql.NullInt64) *store.AdminUserRecord {
+func buildAdminUserRecord(
+	uuid, username, hash, roleID string,
+	enabled, mustChange int,
+	expiresMs sql.NullInt64,
+	memberUUID sql.NullString,
+	createdMs, updatedMs int64,
+	lastLoginMs sql.NullInt64,
+) *store.AdminUserRecord {
 	rec := &store.AdminUserRecord{
 		UUID:         uuid,
 		Username:     username,
@@ -223,6 +283,14 @@ func buildAdminUserRecord(uuid, username, hash, roleID string, enabled, mustChan
 		MustChangePW: mustChange == 1,
 		CreatedAt:    time.UnixMilli(createdMs).UTC(),
 		UpdatedAt:    time.UnixMilli(updatedMs).UTC(),
+	}
+	if expiresMs.Valid {
+		t := time.UnixMilli(expiresMs.Int64).UTC()
+		rec.ExpiresAt = &t
+	}
+	if memberUUID.Valid {
+		s := memberUUID.String
+		rec.MemberUUID = &s
 	}
 	if lastLoginMs.Valid {
 		t := time.UnixMilli(lastLoginMs.Int64).UTC()
