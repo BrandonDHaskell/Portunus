@@ -2,7 +2,12 @@
 {{define "content"}}
 <div class="page-header">
   <h1>Member Detail</h1>
-  <a class="btn btn-secondary" href="/admin/ui/members">← Members</a>
+  <div style="display:flex;gap:.5rem">
+    {{with .Member}}
+    <a class="btn btn-secondary" href="/admin/ui/members/{{.UUID}}/edit">Edit Policy</a>
+    {{end}}
+    <a class="btn btn-secondary" href="/admin/ui/members">← Members</a>
+  </div>
 </div>
 
 {{with .Member}}

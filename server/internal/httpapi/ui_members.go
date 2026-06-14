@@ -256,6 +256,73 @@ func (s *Server) handleUIMembersApprove(w http.ResponseWriter, r *http.Request) 
 	flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Member approved and activated.", "success")
 }
 
+// handleUIMembersEdit serves GET /admin/ui/members/{member_uuid}/edit.
+func (s *Server) handleUIMembersEdit(w http.ResponseWriter, r *http.Request) {
+	memberUUID := r.PathValue("member_uuid")
+	d := newUIPageData(r, "members")
+
+	rec, err := s.memberAccessService.GetMember(r.Context(), memberUUID)
+	if err != nil {
+		if errors.Is(err, service.ErrMemberNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		s.logger.Printf("ui get member for edit: %v", err)
+		flashRedirect(w, r, "/admin/ui/members", "Failed to load member.", "error")
+		return
+	}
+	info := memberRecordToInfo(rec)
+	d.Member = &info
+
+	render.render(w, "members_edit", d)
+}
+
+// handleUIMembersUpdate handles POST /admin/ui/members/{member_uuid}/edit.
+func (s *Server) handleUIMembersUpdate(w http.ResponseWriter, r *http.Request) {
+	memberUUID := r.PathValue("member_uuid")
+	if err := r.ParseForm(); err != nil {
+		flashRedirect(w, r, "/admin/ui/members/"+memberUUID+"/edit", "Invalid form submission.", "error")
+		return
+	}
+
+	expiresAtStr := r.FormValue("expires_at")
+	inactivityStr := r.FormValue("inactivity_limit_days")
+
+	var expiresAt *time.Time
+	if expiresAtStr != "" {
+		t, err := time.Parse("2006-01-02", expiresAtStr)
+		if err != nil {
+			flashRedirect(w, r, "/admin/ui/members/"+memberUUID+"/edit", "Invalid expiry date format (use YYYY-MM-DD).", "error")
+			return
+		}
+		u := t.UTC()
+		expiresAt = &u
+	}
+
+	var inactivityDays *int
+	if inactivityStr != "" {
+		var n int
+		if _, err := parseIntFormValue(inactivityStr, &n); err != nil || n < 1 {
+			flashRedirect(w, r, "/admin/ui/members/"+memberUUID+"/edit", "Inactivity limit must be a positive number.", "error")
+			return
+		}
+		inactivityDays = &n
+	}
+
+	if err := s.memberAccessService.UpdateMemberPolicy(r.Context(), memberUUID, expiresAt, inactivityDays); err != nil {
+		if errors.Is(err, service.ErrMemberNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		s.logger.Printf("ui update member policy %s: %v", memberUUID, err)
+		flashRedirect(w, r, "/admin/ui/members/"+memberUUID+"/edit", "Failed to update member.", "error")
+		return
+	}
+
+	s.logger.Printf("admin ui: updated policy for member %s", memberUUID)
+	flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Member policy updated.", "success")
+}
+
 // handleUIMembersDisable handles POST /admin/ui/members/{member_uuid}/disable.
 func (s *Server) handleUIMembersDisable(w http.ResponseWriter, r *http.Request) {
 	memberUUID := r.PathValue("member_uuid")
@@ -417,6 +484,10 @@ func (s *Server) uiMemberRoutes(mux *http.ServeMux) {
 	// Member detail + actions
 	mux.HandleFunc("GET /admin/ui/members/{member_uuid}",
 		perm(permissions.MemberView, s.handleUIMembersDetail))
+	mux.HandleFunc("GET /admin/ui/members/{member_uuid}/edit",
+		perm(permissions.MemberEdit, s.handleUIMembersEdit))
+	mux.HandleFunc("POST /admin/ui/members/{member_uuid}/edit",
+		perm(permissions.MemberEdit, s.handleUIMembersUpdate))
 	mux.HandleFunc("POST /admin/ui/members/{member_uuid}/approve",
 		perm(permissions.MemberEnroll, s.handleUIMembersApprove))
 	mux.HandleFunc("POST /admin/ui/members/{member_uuid}/credential",

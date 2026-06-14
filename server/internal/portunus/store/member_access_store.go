@@ -111,6 +111,11 @@ type MemberAccessStore interface {
 	ApprovePending(ctx context.Context, uuid, approvedByUUID string,
 		expiresAt *time.Time, inactivityLimitDays *int) error
 
+	// UpdateMemberPolicy updates the policy fields of a member: expires_at and
+	// inactivity_limit_days. Pass nil to clear a field. Returns ErrNotFound if
+	// the member does not exist.
+	UpdateMemberPolicy(ctx context.Context, uuid string, expiresAt *time.Time, inactivityLimitDays *int) error
+
 	// ArchiveStalePending transitions pending_authorization rows whose
 	// created_at_ms + ttlDays*86400000 < now to status='archived'. Returns the
 	// number of rows affected.

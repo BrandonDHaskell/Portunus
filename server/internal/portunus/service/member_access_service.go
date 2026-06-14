@@ -184,6 +184,21 @@ func (s *MemberAccessService) ListPendingAuthorizations(ctx context.Context) ([]
 	return s.memberStore.ListPendingAuthorizations(ctx)
 }
 
+// UpdateMemberPolicy updates expires_at and inactivity_limit_days for any
+// non-archived member. Pass nil to clear a field.
+func (s *MemberAccessService) UpdateMemberPolicy(ctx context.Context, memberUUID string, expiresAt *time.Time, inactivityLimitDays *int) error {
+	if strings.TrimSpace(memberUUID) == "" {
+		return ErrMemberUUIDRequired
+	}
+	if err := s.memberStore.UpdateMemberPolicy(ctx, memberUUID, expiresAt, inactivityLimitDays); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return ErrMemberNotFound
+		}
+		return fmt.Errorf("update member policy: %w", err)
+	}
+	return nil
+}
+
 // ApprovePending activates a pending_authorization member.
 // inactivityLimitDays is required — the admin must explicitly choose a window.
 // expiresAt is optional; nil means no hard deadline.
