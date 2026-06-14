@@ -279,7 +279,7 @@ func TestAccessReasonCodes_FitNanopbBound(t *testing.T) {
 		"member_suspended",
 		"member_archived",
 		"member_disabled",
-		"module_not_authorized",
+		"credential_not_authorized",
 		"authorization_revoked",
 		"authorization_expired",
 		"credential_allowed",

@@ -12,12 +12,13 @@ import (
 )
 
 // newAdminUserSvc wires AdminUserService against in-memory SQLite with real migrations.
-func newAdminUserSvc(t *testing.T) (*service.AdminUserService, store.AdminUserStore, store.RoleStore) {
+func newAdminUserSvc(t *testing.T) (*service.AdminUserService, store.AdminUserStore, store.RoleStore, store.AuditStore) {
 	t.Helper()
 	dbConn, writer := openSvcTestDB(t)
 	us := sqlitestore.NewAdminUserStore(dbConn, writer)
 	rs := sqlitestore.NewRoleStore(dbConn, writer)
-	return service.NewAdminUserService(us, rs), us, rs
+	as := sqlitestore.NewAuditStore(dbConn, writer)
+	return service.NewAdminUserService(us, rs, as), us, rs, as
 }
 
 // seedAdminUser inserts a minimal admin_users row via the store, bypassing bcrypt.
@@ -34,10 +35,26 @@ func seedAdminUser(t *testing.T, us store.AdminUserStore, uuid, roleID string, e
 	}
 }
 
+// requireAuditEntry asserts that exactly one audit entry matching action and
+// resourceID exists in the audit log.
+func requireAuditEntry(t *testing.T, as store.AuditStore, action, resourceID string) {
+	t.Helper()
+	entries, err := as.ListAuditEntries(context.Background(), 50)
+	if err != nil {
+		t.Fatalf("ListAuditEntries: %v", err)
+	}
+	for _, e := range entries {
+		if e.Action == action && e.ResourceID == resourceID {
+			return
+		}
+	}
+	t.Errorf("no audit entry found with action=%q resourceID=%q (got %d entries)", action, resourceID, len(entries))
+}
+
 // ── SetEnabled ────────────────────────────────────────────────────────────────
 
 func TestAdminUserService_SetEnabled_SelfDisableBlocked(t *testing.T) {
-	svc, us, _ := newAdminUserSvc(t)
+	svc, us, _, _ := newAdminUserSvc(t)
 	ctx := context.Background()
 	seedAdminUser(t, us, "uuid-self", "admin", true)
 
@@ -48,7 +65,7 @@ func TestAdminUserService_SetEnabled_SelfDisableBlocked(t *testing.T) {
 }
 
 func TestAdminUserService_SetEnabled_LastAdminDisableBlocked(t *testing.T) {
-	svc, us, _ := newAdminUserSvc(t)
+	svc, us, _, _ := newAdminUserSvc(t)
 	ctx := context.Background()
 	seedAdminUser(t, us, "uuid-only", "admin", true)
 
@@ -60,7 +77,7 @@ func TestAdminUserService_SetEnabled_LastAdminDisableBlocked(t *testing.T) {
 }
 
 func TestAdminUserService_SetEnabled_NonLastAdminCanBeDisabled(t *testing.T) {
-	svc, us, _ := newAdminUserSvc(t)
+	svc, us, _, _ := newAdminUserSvc(t)
 	ctx := context.Background()
 	seedAdminUser(t, us, "uuid-a", "admin", true)
 	seedAdminUser(t, us, "uuid-b", "admin", true)
@@ -72,7 +89,7 @@ func TestAdminUserService_SetEnabled_NonLastAdminCanBeDisabled(t *testing.T) {
 }
 
 func TestAdminUserService_SetEnabled_NonAdminRoleUserCanBeDisabled(t *testing.T) {
-	svc, us, _ := newAdminUserSvc(t)
+	svc, us, _, _ := newAdminUserSvc(t)
 	ctx := context.Background()
 	seedAdminUser(t, us, "uuid-admin", "admin", true)
 	seedAdminUser(t, us, "uuid-op", "operator", true)
@@ -83,85 +100,145 @@ func TestAdminUserService_SetEnabled_NonAdminRoleUserCanBeDisabled(t *testing.T)
 	}
 }
 
+func TestAdminUserService_SetEnabled_AuditDisable(t *testing.T) {
+	svc, us, _, as := newAdminUserSvc(t)
+	ctx := context.Background()
+	seedAdminUser(t, us, "uuid-a", "admin", true)
+	seedAdminUser(t, us, "uuid-b", "admin", true)
+
+	if err := svc.SetEnabled(ctx, "uuid-a", "uuid-b", false); err != nil {
+		t.Fatalf("SetEnabled: %v", err)
+	}
+	requireAuditEntry(t, as, "admin_user.disabled", "uuid-a")
+}
+
+func TestAdminUserService_SetEnabled_AuditEnable(t *testing.T) {
+	svc, us, _, as := newAdminUserSvc(t)
+	ctx := context.Background()
+	seedAdminUser(t, us, "uuid-admin", "admin", true)
+	seedAdminUser(t, us, "uuid-op", "operator", false)
+
+	if err := svc.SetEnabled(ctx, "uuid-op", "uuid-admin", true); err != nil {
+		t.Fatalf("SetEnabled: %v", err)
+	}
+	requireAuditEntry(t, as, "admin_user.enabled", "uuid-op")
+}
+
 // ── AssignRole ────────────────────────────────────────────────────────────────
 
 func TestAdminUserService_AssignRole_LastAdminRoleMoveBlocked(t *testing.T) {
-	svc, us, _ := newAdminUserSvc(t)
+	svc, us, _, _ := newAdminUserSvc(t)
 	ctx := context.Background()
 	seedAdminUser(t, us, "uuid-only", "admin", true)
 
-	err := svc.AssignRole(ctx, "uuid-only", "operator")
+	err := svc.AssignRole(ctx, "uuid-caller", "uuid-only", "operator")
 	if !errors.Is(err, service.ErrLastAdmin) {
 		t.Fatalf("expected ErrLastAdmin, got: %v", err)
 	}
 }
 
 func TestAdminUserService_AssignRole_NonLastAdminRoleMoveAllowed(t *testing.T) {
-	svc, us, _ := newAdminUserSvc(t)
+	svc, us, _, _ := newAdminUserSvc(t)
 	ctx := context.Background()
 	seedAdminUser(t, us, "uuid-a", "admin", true)
 	seedAdminUser(t, us, "uuid-b", "admin", true)
 
 	// Moving uuid-a to operator is fine because uuid-b still holds admin.
-	if err := svc.AssignRole(ctx, "uuid-a", "operator"); err != nil {
+	if err := svc.AssignRole(ctx, "uuid-b", "uuid-a", "operator"); err != nil {
 		t.Fatalf("unexpected error moving non-last admin to operator: %v", err)
 	}
 }
 
 func TestAdminUserService_AssignRole_ToAdminAlwaysAllowed(t *testing.T) {
-	svc, us, _ := newAdminUserSvc(t)
+	svc, us, _, _ := newAdminUserSvc(t)
 	ctx := context.Background()
 	seedAdminUser(t, us, "uuid-admin", "admin", true)
 	seedAdminUser(t, us, "uuid-op", "operator", true)
 
 	// Elevating an operator to admin should never be blocked by the last-admin guard.
-	if err := svc.AssignRole(ctx, "uuid-op", "admin"); err != nil {
+	if err := svc.AssignRole(ctx, "uuid-admin", "uuid-op", "admin"); err != nil {
 		t.Fatalf("unexpected error promoting operator to admin: %v", err)
 	}
+}
+
+func TestAdminUserService_AssignRole_AuditRoleAssigned(t *testing.T) {
+	svc, us, _, as := newAdminUserSvc(t)
+	ctx := context.Background()
+	seedAdminUser(t, us, "uuid-a", "admin", true)
+	seedAdminUser(t, us, "uuid-b", "admin", true)
+
+	if err := svc.AssignRole(ctx, "uuid-b", "uuid-a", "operator"); err != nil {
+		t.Fatalf("AssignRole: %v", err)
+	}
+	requireAuditEntry(t, as, "admin_user.role_assigned", "uuid-a")
 }
 
 // ── SetExpiry ─────────────────────────────────────────────────────────────────
 
 func TestAdminUserService_SetExpiry_LastAdminBlocked(t *testing.T) {
-	svc, us, _ := newAdminUserSvc(t)
+	svc, us, _, _ := newAdminUserSvc(t)
 	ctx := context.Background()
 	seedAdminUser(t, us, "uuid-only", "admin", true)
 
 	future := time.Now().Add(24 * time.Hour)
-	err := svc.SetExpiry(ctx, "uuid-only", &future)
+	err := svc.SetExpiry(ctx, "uuid-caller", "uuid-only", &future)
 	if !errors.Is(err, service.ErrLastAdmin) {
 		t.Fatalf("expected ErrLastAdmin, got: %v", err)
 	}
 }
 
 func TestAdminUserService_SetExpiry_ClearAlwaysAllowed(t *testing.T) {
-	svc, us, _ := newAdminUserSvc(t)
+	svc, us, _, _ := newAdminUserSvc(t)
 	ctx := context.Background()
 	seedAdminUser(t, us, "uuid-only", "admin", true)
 
 	// Clearing expiry (nil) must never be blocked by the last-admin guard.
-	if err := svc.SetExpiry(ctx, "uuid-only", nil); err != nil {
+	if err := svc.SetExpiry(ctx, "uuid-caller", "uuid-only", nil); err != nil {
 		t.Fatalf("unexpected error clearing expiry on last admin: %v", err)
 	}
 }
 
 func TestAdminUserService_SetExpiry_NonLastAdminAllowed(t *testing.T) {
-	svc, us, _ := newAdminUserSvc(t)
+	svc, us, _, _ := newAdminUserSvc(t)
 	ctx := context.Background()
 	seedAdminUser(t, us, "uuid-a", "admin", true)
 	seedAdminUser(t, us, "uuid-b", "admin", true)
 
 	future := time.Now().Add(24 * time.Hour)
 	// Setting expiry on uuid-a is fine because uuid-b still qualifies.
-	if err := svc.SetExpiry(ctx, "uuid-a", &future); err != nil {
+	if err := svc.SetExpiry(ctx, "uuid-b", "uuid-a", &future); err != nil {
 		t.Fatalf("unexpected error setting expiry on non-last admin: %v", err)
 	}
+}
+
+func TestAdminUserService_SetExpiry_AuditExpirySet(t *testing.T) {
+	svc, us, _, as := newAdminUserSvc(t)
+	ctx := context.Background()
+	seedAdminUser(t, us, "uuid-a", "admin", true)
+	seedAdminUser(t, us, "uuid-b", "admin", true)
+
+	future := time.Now().Add(24 * time.Hour)
+	if err := svc.SetExpiry(ctx, "uuid-b", "uuid-a", &future); err != nil {
+		t.Fatalf("SetExpiry: %v", err)
+	}
+	requireAuditEntry(t, as, "admin_user.expiry_set", "uuid-a")
+}
+
+func TestAdminUserService_SetExpiry_AuditExpiryClear(t *testing.T) {
+	svc, us, _, as := newAdminUserSvc(t)
+	ctx := context.Background()
+	seedAdminUser(t, us, "uuid-only", "admin", true)
+
+	if err := svc.SetExpiry(ctx, "uuid-caller", "uuid-only", nil); err != nil {
+		t.Fatalf("SetExpiry clear: %v", err)
+	}
+	requireAuditEntry(t, as, "admin_user.expiry_set", "uuid-only")
 }
 
 // TestAdminUserService_SetEnabled_ExpiredAdminNotCounted verifies that an
 // expired admin account does not count toward the last-admin threshold.
 func TestAdminUserService_SetEnabled_ExpiredAdminNotCounted(t *testing.T) {
-	_, us, _ := newAdminUserSvc(t)
+	_, us, _, _ := newAdminUserSvc(t)
 	ctx := context.Background()
 
 	// Create two admins, then expire uuid-a via the store directly.
@@ -178,7 +255,7 @@ func TestAdminUserService_SetEnabled_ExpiredAdminNotCounted(t *testing.T) {
 	}
 
 	// Now uuid-b is the only qualifying admin. Disabling uuid-b must fail.
-	svc2, _, _ := newAdminUserSvc(t)
+	svc2, _, _, _ := newAdminUserSvc(t)
 	// Re-wire on same DB — use a fresh svc against the same us.
 	_ = svc2 // svc2 uses a different in-memory DB; re-use the store directly.
 

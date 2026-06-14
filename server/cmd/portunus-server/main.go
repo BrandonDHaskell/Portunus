@@ -124,7 +124,7 @@ func main() {
 	}
 
 	// Admin user and role management services.
-	adminUserSvc := service.NewAdminUserService(adminUserStore, roleStore)
+	adminUserSvc := service.NewAdminUserService(adminUserStore, roleStore, auditStore)
 	roleSvc := service.NewRoleService(roleStore)
 
 	// Acquire the serving certificate once. prod loads it from PEM files; ci

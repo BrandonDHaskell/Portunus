@@ -53,7 +53,8 @@ func (s *Server) handleUIUsersCreate(w http.ResponseWriter, r *http.Request) {
 	password := r.FormValue("password")
 	roleID := r.FormValue("role_id")
 
-	_, err := s.adminUserService.CreateUser(r.Context(), username, password, roleID)
+	sess := sessionFromContext(r.Context())
+	_, err := s.adminUserService.CreateUser(r.Context(), sess.AdminUUID, username, password, roleID)
 	if err != nil {
 		if errors.Is(err, store.ErrUsernameAlreadyExists) {
 			d := newUIPageData(r, "users")
@@ -134,7 +135,8 @@ func (s *Server) handleUIUsersSetExpiry(w http.ResponseWriter, r *http.Request) 
 		expiresAt = &eod
 	}
 
-	if err := s.adminUserService.SetExpiry(r.Context(), uuid, expiresAt); err != nil {
+	sess := sessionFromContext(r.Context())
+	if err := s.adminUserService.SetExpiry(r.Context(), sess.AdminUUID, uuid, expiresAt); err != nil {
 		if errors.Is(err, service.ErrAdminUserNotFound) {
 			http.NotFound(w, r)
 			return
@@ -169,7 +171,8 @@ func (s *Server) handleUIUsersSetMemberLink(w http.ResponseWriter, r *http.Reque
 		memberUUID = &raw
 	}
 
-	if err := s.adminUserService.SetMemberLink(r.Context(), uuid, memberUUID); err != nil {
+	sess := sessionFromContext(r.Context())
+	if err := s.adminUserService.SetMemberLink(r.Context(), sess.AdminUUID, uuid, memberUUID); err != nil {
 		if errors.Is(err, service.ErrAdminUserNotFound) {
 			http.NotFound(w, r)
 			return
@@ -199,7 +202,8 @@ func (s *Server) handleUIUsersAssignRole(w http.ResponseWriter, r *http.Request)
 	}
 
 	roleID := r.FormValue("role_id")
-	if err := s.adminUserService.AssignRole(r.Context(), uuid, roleID); err != nil {
+	sess := sessionFromContext(r.Context())
+	if err := s.adminUserService.AssignRole(r.Context(), sess.AdminUUID, uuid, roleID); err != nil {
 		if errors.Is(err, service.ErrAdminUserNotFound) {
 			http.NotFound(w, r)
 			return
@@ -247,8 +251,9 @@ func (s *Server) handleUIUsersDisable(w http.ResponseWriter, r *http.Request) {
 // handleUIUsersEnable handles POST /admin/ui/users/{uuid}/enable.
 func (s *Server) handleUIUsersEnable(w http.ResponseWriter, r *http.Request) {
 	uuid := r.PathValue("uuid")
+	sess := sessionFromContext(r.Context())
 
-	if err := s.adminUserService.SetEnabled(r.Context(), uuid, "", true); err != nil {
+	if err := s.adminUserService.SetEnabled(r.Context(), uuid, sess.AdminUUID, true); err != nil {
 		if errors.Is(err, service.ErrAdminUserNotFound) {
 			http.NotFound(w, r)
 			return
