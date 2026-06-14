@@ -251,6 +251,23 @@ WHERE uuid = ?;
 	})
 }
 
+func (s *MemberAccessStore) UpdateMemberPolicy(ctx context.Context, uuid string, expiresAt *time.Time, inactivityLimitDays *int) error {
+	var expiresAtMs *int64
+	if expiresAt != nil {
+		ms := expiresAt.UTC().UnixMilli()
+		expiresAtMs = &ms
+	}
+	return s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE member_access SET expires_at_ms = ?, inactivity_limit_days = ? WHERE uuid = ?;`,
+			expiresAtMs, inactivityLimitDays, uuid)
+		if err != nil {
+			return fmt.Errorf("UpdateMemberPolicy: %w", err)
+		}
+		return requireOneRow(res, "UpdateMemberPolicy")
+	})
+}
+
 func (s *MemberAccessStore) ArchiveStalePending(ctx context.Context, now time.Time, ttlDays int) (int64, error) {
 	nowMs := now.UTC().UnixMilli()
 	ttlMs := int64(ttlDays) * 86400000

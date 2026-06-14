@@ -1,0 +1,54 @@
+{{define "title"}}Edit Member — Portunus Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h1>Edit Member</h1>
+  <a class="btn btn-secondary" href="/admin/ui/members/{{.Member.UUID}}">← Back to Member</a>
+</div>
+
+{{with .Member}}
+<div class="card" style="max-width:520px">
+  <div class="form-group">
+    <label>UUID</label>
+    <input type="text" class="font-mono" value="{{.UUID}}" readonly>
+  </div>
+  <div class="form-group">
+    <label>Status</label>
+    <div style="margin-top:.25rem">
+      {{if eq .Status "active"}}
+        {{if .Enabled}}<span class="badge badge-green">Active</span>
+        {{else}}<span class="badge badge-yellow">Disabled</span>{{end}}
+      {{else if eq .Status "expired"}}
+        <span class="badge badge-red">Expired</span>
+      {{else}}
+        <span class="badge">{{.Status}}</span>
+      {{end}}
+    </div>
+  </div>
+
+  <form method="POST" action="/admin/ui/members/{{.UUID}}/edit" style="margin-top:1.5rem">
+    <h2 style="margin-top:0">Access Policy</h2>
+    <div class="form-group">
+      <label for="expires_at">Hard Expiry (leave blank for no deadline)</label>
+      <input id="expires_at" name="expires_at" type="date"
+        value="{{if .ExpiresAt}}{{slice .ExpiresAt 0 10}}{{end}}">
+    </div>
+    <div class="form-group">
+      <label for="inactivity_limit_days">Inactivity Limit (days, leave blank to disable)</label>
+      <select id="inactivity_limit_days" name="inactivity_limit_days">
+        <option value="">— None —</option>
+        <option value="7"  {{if eq (derefInt .InactivityLimitDays) 7}}selected{{end}}>7 days</option>
+        <option value="14" {{if eq (derefInt .InactivityLimitDays) 14}}selected{{end}}>14 days</option>
+        <option value="30" {{if eq (derefInt .InactivityLimitDays) 30}}selected{{end}}>30 days</option>
+        <option value="90" {{if eq (derefInt .InactivityLimitDays) 90}}selected{{end}}>90 days</option>
+        <option value="180" {{if eq (derefInt .InactivityLimitDays) 180}}selected{{end}}>180 days</option>
+        <option value="365" {{if eq (derefInt .InactivityLimitDays) 365}}selected{{end}}>365 days</option>
+      </select>
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" type="submit">Save Changes</button>
+      <a class="btn btn-secondary" href="/admin/ui/members/{{.UUID}}">Cancel</a>
+    </div>
+  </form>
+</div>
+{{end}}
+{{end}}

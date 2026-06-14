@@ -11,7 +11,6 @@
   <thead>
     <tr>
       <th>UUID</th>
-      <th>Role</th>
       <th>Status</th>
       <th>Provisioning</th>
       <th>Credential</th>
@@ -23,7 +22,6 @@
   {{range .Members}}
     <tr>
       <td class="font-mono" style="font-size:.8rem">{{.UUID}}</td>
-      <td><span class="badge badge-blue">{{.RoleID}}</span></td>
       <td>
         {{if eq .Status "active"}}
           {{if .Enabled}}<span class="badge badge-green">Active</span>
@@ -49,12 +47,13 @@
         {{if .CredentialHash}}{{.CredentialHash}}{{else}}<em>none</em>{{end}}
       </td>
       <td class="text-muted" style="font-size:.85rem">{{.CreatedAt}}</td>
-      <td>
+      <td style="display:flex;gap:.4rem">
         <a class="btn btn-secondary btn-sm" href="/admin/ui/members/{{.UUID}}">View</a>
+        <a class="btn btn-secondary btn-sm" href="/admin/ui/members/{{.UUID}}/edit">Edit</a>
       </td>
     </tr>
   {{else}}
-    <tr><td colspan="7" class="text-muted" style="text-align:center;padding:2rem">No members found.</td></tr>
+    <tr><td colspan="6" class="text-muted" style="text-align:center;padding:2rem">No members found.</td></tr>
   {{end}}
   </tbody>
 </table>

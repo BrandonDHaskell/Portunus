@@ -34,6 +34,7 @@ const (
 	MemberEnroll  = "member.enroll"
 	MemberList    = "member.list"
 	MemberView    = "member.view"
+	MemberEdit    = "member.edit"
 	MemberDisable = "member.disable"
 	MemberArchive = "member.archive"
 
@@ -58,7 +59,7 @@ func All() []string {
 		DoorList, DoorRegister, DoorDelete,
 		AdminUserCreate, AdminUserList, AdminUserEdit, AdminUserDisable,
 		RoleList, RoleCreate, RoleEdit, RoleDelete, RoleAssignPermission,
-		MemberEnroll, MemberList, MemberView, MemberDisable, MemberArchive,
+		MemberEnroll, MemberList, MemberView, MemberEdit, MemberDisable, MemberArchive,
 		ModuleAuthGrantHeld, ModuleAuthGrantAny, ModuleAuthRevokeHeld, ModuleAuthRevokeAny, ModuleAuthList,
 		AuditLogList,
 	}
