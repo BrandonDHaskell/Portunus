@@ -197,8 +197,8 @@ func TestAccessService_MemberPath_NoAuthorization(t *testing.T) {
 	if resp.Granted {
 		t.Error("expected granted=false when no authorization exists")
 	}
-	if resp.Reason != "module_not_authorized" {
-		t.Errorf("expected reason=module_not_authorized, got %q", resp.Reason)
+	if resp.Reason != "credential_not_authorized" {
+		t.Errorf("expected reason=credential_not_authorized, got %q", resp.Reason)
 	}
 }
 
@@ -238,10 +238,10 @@ func TestAccessService_MemberPath_RevokedAuthorization(t *testing.T) {
 	if resp.Granted {
 		t.Error("expected granted=false for revoked authorization")
 	}
-	// After revoke the row exists but revoked_at_ms is set; GetAuthorization
-	// returns the most recent row. The decideMemberAccess path checks RevokedAt.
-	if resp.Reason != "authorization_revoked" && resp.Reason != "module_not_authorized" {
-		t.Errorf("unexpected reason %q", resp.Reason)
+	// After revoke the row still exists with revoked_at_ms set; GetAuthorization
+	// returns it and decideMemberAccess fires the RevokedAt branch.
+	if resp.Reason != "authorization_revoked" {
+		t.Errorf("expected reason=authorization_revoked, got %q", resp.Reason)
 	}
 }
 
@@ -681,13 +681,13 @@ func TestAccess_FirmwareEnrolledCredential_IsGranted(t *testing.T) {
 // guard required by P1-1.  It constructs the service the same way main.go does
 // (both member-access and module-auth stores wired) and asserts that a member
 // whose credential IS enrolled but has NO module authorization is denied with
-// reason "module_not_authorized".
+// reason "credential_not_authorized".
 //
 // If moduleAuthStore were ever accidentally removed from the wiring, the service
 // would error out (branch 3/4 hard-error path), not silently grant.  If the
 // member-access path were accidentally replaced with a credential-only path, this
 // test would catch the regression: "credential_allowed" would appear instead of
-// "module_not_authorized".
+// "credential_not_authorized".
 func TestAccessService_FailOpen_UnauthorizedModuleIsDenied(t *testing.T) {
 	ctx := context.Background()
 	dbConn, writer := openSvcTestDB(t)
@@ -724,7 +724,7 @@ func TestAccessService_FailOpen_UnauthorizedModuleIsDenied(t *testing.T) {
 	if resp.Granted {
 		t.Error("enrolled member with no module authorization must not be granted")
 	}
-	if resp.Reason != "module_not_authorized" {
-		t.Errorf("expected reason=module_not_authorized, got %q — wiring regression?", resp.Reason)
+	if resp.Reason != "credential_not_authorized" {
+		t.Errorf("expected reason=credential_not_authorized, got %q — wiring regression?", resp.Reason)
 	}
 }

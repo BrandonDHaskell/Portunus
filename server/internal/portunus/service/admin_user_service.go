@@ -35,18 +35,19 @@ type AdminUserInfo struct {
 // AdminUserService manages server operator accounts (create, list, edit,
 // disable, assign role).  Auth operations (login/session) stay in AuthService.
 type AdminUserService struct {
-	users store.AdminUserStore
-	roles store.RoleStore
+	users      store.AdminUserStore
+	roles      store.RoleStore
+	auditStore store.AuditStore // may be nil; writes are best-effort
 }
 
-func NewAdminUserService(users store.AdminUserStore, roles store.RoleStore) *AdminUserService {
-	return &AdminUserService{users: users, roles: roles}
+func NewAdminUserService(users store.AdminUserStore, roles store.RoleStore, audit store.AuditStore) *AdminUserService {
+	return &AdminUserService{users: users, roles: roles, auditStore: audit}
 }
 
 // CreateUser creates a new admin user with the given role.
 // The new account starts with must_change_pw = 1 so the operator must set a
 // personal password on first login.
-func (s *AdminUserService) CreateUser(ctx context.Context, username, password, roleID string) (*AdminUserInfo, error) {
+func (s *AdminUserService) CreateUser(ctx context.Context, callerUUID, username, password, roleID string) (*AdminUserInfo, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return nil, fmt.Errorf("username is required")
@@ -81,6 +82,7 @@ func (s *AdminUserService) CreateUser(ctx context.Context, username, password, r
 		return nil, err
 	}
 
+	s.recordAudit(ctx, callerUUID, "admin_user.created", uuid, "success", username+":"+roleID)
 	return &AdminUserInfo{
 		UUID:         uuid,
 		Username:     username,
@@ -147,11 +149,16 @@ func (s *AdminUserService) SetEnabled(ctx context.Context, uuid, callerUUID stri
 		}
 		return fmt.Errorf("set enabled: %w", err)
 	}
+	action := "admin_user.enabled"
+	if !enabled {
+		action = "admin_user.disabled"
+	}
+	s.recordAudit(ctx, callerUUID, action, uuid, "success", "")
 	return nil
 }
 
 // AssignRole assigns a role to an admin user.
-func (s *AdminUserService) AssignRole(ctx context.Context, uuid, roleID string) error {
+func (s *AdminUserService) AssignRole(ctx context.Context, callerUUID, uuid, roleID string) error {
 	roleID = strings.TrimSpace(roleID)
 	if roleID == "" {
 		return fmt.Errorf("role_id is required")
@@ -188,13 +195,14 @@ func (s *AdminUserService) AssignRole(ctx context.Context, uuid, roleID string) 
 		}
 		return fmt.Errorf("assign role: %w", err)
 	}
+	s.recordAudit(ctx, callerUUID, "admin_user.role_assigned", uuid, "success", roleID)
 	return nil
 }
 
 // SetExpiry sets or clears the account expiry for an admin user.
 // Setting any expiry on the last qualifying admin (enabled + not expired) fails
 // with ErrLastAdmin.
-func (s *AdminUserService) SetExpiry(ctx context.Context, uuid string, expiresAt *time.Time) error {
+func (s *AdminUserService) SetExpiry(ctx context.Context, callerUUID, uuid string, expiresAt *time.Time) error {
 	if expiresAt != nil {
 		target, err := s.users.GetAdminUserByUUID(ctx, uuid)
 		if err != nil {
@@ -219,12 +227,17 @@ func (s *AdminUserService) SetExpiry(ctx context.Context, uuid string, expiresAt
 		}
 		return fmt.Errorf("set expiry: %w", err)
 	}
+	details := "cleared"
+	if expiresAt != nil {
+		details = expiresAt.Format(time.RFC3339)
+	}
+	s.recordAudit(ctx, callerUUID, "admin_user.expiry_set", uuid, "success", details)
 	return nil
 }
 
 // SetMemberLink links or unlinks a member_access row to an admin account.
 // Returns ErrMemberAlreadyLinked if the member is already linked to another account.
-func (s *AdminUserService) SetMemberLink(ctx context.Context, uuid string, memberUUID *string) error {
+func (s *AdminUserService) SetMemberLink(ctx context.Context, callerUUID, uuid string, memberUUID *string) error {
 	if err := s.users.SetAdminUserMemberLink(ctx, uuid, memberUUID); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return ErrAdminUserNotFound
@@ -234,7 +247,33 @@ func (s *AdminUserService) SetMemberLink(ctx context.Context, uuid string, membe
 		}
 		return fmt.Errorf("set member link: %w", err)
 	}
+	details := "cleared"
+	if memberUUID != nil {
+		details = *memberUUID
+	}
+	s.recordAudit(ctx, callerUUID, "admin_user.member_linked", uuid, "success", details)
 	return nil
+}
+
+func (s *AdminUserService) recordAudit(ctx context.Context, actorUUID, action, resourceID, result, details string) {
+	if s.auditStore == nil {
+		return
+	}
+	e := store.AuditEntry{
+		ActorUUID:    actorUUID,
+		ActorType:    store.ActorTypeAdmin,
+		Action:       action,
+		ResourceType: "admin_user",
+		ResourceID:   resourceID,
+		Result:       result,
+		Details:      details,
+	}
+	if actorUUID == "" {
+		e.ActorType = store.ActorTypeSystem
+	}
+	if err := s.auditStore.RecordAuditEntry(ctx, e); err != nil {
+		_ = err
+	}
 }
 
 func adminUserRecordToInfo(r *store.AdminUserRecord) AdminUserInfo {

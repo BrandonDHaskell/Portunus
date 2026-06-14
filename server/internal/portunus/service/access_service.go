@@ -282,7 +282,7 @@ func (s *AccessService) decideMemberAccess(
 	auth, err := s.moduleAuthStore.GetAuthorization(ctx, member.UUID, moduleID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return false, "module_not_authorized", "", nil
+			return false, "credential_not_authorized", "", nil
 		}
 		return false, "", "", err
 	}
