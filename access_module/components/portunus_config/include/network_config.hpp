@@ -38,25 +38,13 @@ extern "C" {
 /** Hostname or IP address of the Portunus server. */
 #define PORTUNUS_SERVER_HOST                CONFIG_PORTUNUS_SERVER_HOST
 
-/** TCP port the Portunus server listens on. */
-#define PORTUNUS_SERVER_PORT                CONFIG_PORTUNUS_SERVER_PORT
-
-/** HTTP request timeout (ms) for heartbeat and access-request calls. */
+/** Server request timeout (ms) for gRPC connect and RPC calls. */
 #define PORTUNUS_SERVER_REQUEST_TIMEOUT_MS  CONFIG_PORTUNUS_SERVER_REQUEST_TIMEOUT_MS
 
 /* ── gRPC transport ────────────────────────────────────────────────────────── */
 
-/** 1 when gRPC (HTTP/2) transport is enabled; 0 for HTTP/1.1 fallback. */
-#ifdef CONFIG_PORTUNUS_USE_GRPC
-  #define PORTUNUS_USE_GRPC  1
-#else
-  #define PORTUNUS_USE_GRPC  0
-#endif
-
-/** gRPC server port (only meaningful when PORTUNUS_USE_GRPC == 1). */
-#if PORTUNUS_USE_GRPC
-  #define PORTUNUS_GRPC_SERVER_PORT  CONFIG_PORTUNUS_GRPC_SERVER_PORT
-#endif
+/** TCP port the Portunus server listens on for gRPC (HTTP/2+TLS). */
+#define PORTUNUS_GRPC_SERVER_PORT  CONFIG_PORTUNUS_GRPC_SERVER_PORT
 
 #ifdef __cplusplus
 }
