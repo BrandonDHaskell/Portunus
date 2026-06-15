@@ -71,7 +71,11 @@ portunus_err_t door_strike_init(void)
 
 portunus_err_t door_strike_energize(void)
 {
-    gpio_set_level(static_cast<gpio_num_t>(PIN_DOOR_STRIKE), STRIKE_LEVEL_ACTIVE);
+    esp_err_t err = gpio_set_level(static_cast<gpio_num_t>(PIN_DOOR_STRIKE), STRIKE_LEVEL_ACTIVE);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Strike energize gpio_set_level failed: %s", esp_err_to_name(err));
+        return PORTUNUS_ERR_GPIO_INIT;
+    }
     s_energized = true;
     ESP_LOGI(TAG, "Strike ENERGIZED (unlocked)");
     return PORTUNUS_OK;
@@ -79,7 +83,19 @@ portunus_err_t door_strike_energize(void)
 
 portunus_err_t door_strike_deenergize(void)
 {
-    gpio_set_level(static_cast<gpio_num_t>(PIN_DOOR_STRIKE), STRIKE_LEVEL_INACTIVE);
+    esp_err_t err = gpio_set_level(static_cast<gpio_num_t>(PIN_DOOR_STRIKE), STRIKE_LEVEL_INACTIVE);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Strike de-energize gpio_set_level failed: %s", esp_err_to_name(err));
+        return PORTUNUS_ERR_GPIO_INIT;
+    }
+    /* Readback the output register to confirm the write landed. */
+    int readback = gpio_get_level(static_cast<gpio_num_t>(PIN_DOOR_STRIKE));
+    if (readback != STRIKE_LEVEL_INACTIVE) {
+        ESP_LOGE(TAG, "Strike de-energize readback mismatch: expected %d got %d — door may be unlocked",
+                 STRIKE_LEVEL_INACTIVE, readback);
+        s_energized = true; /* reflect actual hardware state */
+        return PORTUNUS_ERR_GPIO_INIT;
+    }
     s_energized = false;
     ESP_LOGI(TAG, "Strike DE-ENERGIZED (locked)");
     return PORTUNUS_OK;

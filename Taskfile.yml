@@ -237,6 +237,7 @@ tasks:
     cmds:
       - |
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
+        rm -f sdkconfig
         DEFAULTS="sdkconfig.defaults"
         [ -f sdkconfig.defaults.local ] && DEFAULTS="${DEFAULTS};sdkconfig.defaults.local"
         DEFAULTS="${DEFAULTS};sdkconfig.defaults.dev"
