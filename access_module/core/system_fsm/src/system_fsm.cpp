@@ -43,11 +43,13 @@ static const char *TAG = "fsm";
 
 /* ── Task configuration ───────────────────────────────────────────────────── */
 
-static const int FSM_TASK_STACK      = 4096;
-static const int FSM_TASK_PRIORITY   = 5;   /* Above card polling, same as dispatcher */
-static const int POLL_TASK_STACK     = 4096;
-static const int POLL_TASK_PRIORITY  = 4;   /* Between heartbeat (3) and FSM (5) */
-static const int FSM_EVENT_QUEUE_LEN = 8;
+static const int FSM_TASK_STACK             = 4096;
+static const int FSM_TASK_PRIORITY          = 5;   /* Above card polling, same as dispatcher */
+static const int POLL_TASK_STACK            = 4096;
+static const int POLL_TASK_PRIORITY         = 4;   /* Between heartbeat (3) and FSM (5) */
+static const int FSM_EVENT_QUEUE_LEN        = 8;
+static const int READER_HW_ERROR_THRESHOLD  = 5;    /* consecutive non-NO_CREDENTIAL errors before degraded */
+static const int READER_RECOVERY_INTERVAL_MS = 5000; /* ms between reconnection attempts when degraded */
 
 /* ── Helper: current time in milliseconds ─────────────────────────────────── */
 
@@ -285,11 +287,10 @@ void SystemFSM::process_event(const portunus_event_t &event)
 
     case EVENT_CREDENTIAL_READ: {
         const event_credential_read_t *cred = &event.payload.credential_read;
-        char uid_str[CREDENTIAL_UID_HEX_STR_LEN];
-        credential_uid_to_hex(&cred->credential, uid_str, sizeof(uid_str));
+        char log_id[CREDENTIAL_LOG_ID_LEN];
+        credential_uid_to_log_id(&cred->credential, log_id, sizeof(log_id));
 
-        ESP_LOGI(TAG, "Credential read — UID: %s (len=%d)",
-                 uid_str, cred->credential.uid_len);
+        ESP_LOGI(TAG, "Credential read — id=%s", log_id);
 
         /* Show intermediate feedback while waiting for server decision. */
         if (m_caps.has_feedback) {
@@ -429,30 +430,71 @@ void SystemFSM::check_unlock_timer()
 
 void SystemFSM::poll_credential()
 {
-    const TickType_t poll_interval  = pdMS_TO_TICKS(MFRC522_POLL_INTERVAL_MS);
-    const TickType_t reread_delay   = pdMS_TO_TICKS(CARD_REREAD_DELAY_MS);
+    const TickType_t poll_interval = pdMS_TO_TICKS(MFRC522_POLL_INTERVAL_MS);
+    const TickType_t reread_delay  = pdMS_TO_TICKS(CARD_REREAD_DELAY_MS);
+
+    int  consecutive_hw_errors = 0;
+    bool reader_degraded       = false;
 
     for (;;) {
+        /* Recovery mode: chip absent, probe for reconnection periodically. */
+        if (reader_degraded) {
+            vTaskDelay(pdMS_TO_TICKS(READER_RECOVERY_INTERVAL_MS));
+            if (m_reader->init() == PORTUNUS_OK) {
+                ESP_LOGI(TAG, "Credential reader recovered — resuming polling");
+                m_caps.has_reader    = true;
+                reader_degraded      = false;
+                consecutive_hw_errors = 0;
+
+                portunus_event_t recovery_event;
+                memset(&recovery_event, 0, sizeof(recovery_event));
+                recovery_event.id = EVENT_CREDENTIAL_READER_RECOVERED;
+                event_bus_publish(&recovery_event);
+            } else {
+                ESP_LOGD(TAG, "Credential reader still absent — retrying in %d ms",
+                         READER_RECOVERY_INTERVAL_MS);
+            }
+            continue;
+        }
+
         credential_t cred;
         portunus_err_t err = m_reader->read(&cred);
 
         if (err == PORTUNUS_OK) {
-            /* Build and publish credential event via event bus. */
+            consecutive_hw_errors = 0;
+
             portunus_event_t event;
             memset(&event, 0, sizeof(event));
-            event.id = EVENT_CREDENTIAL_READ;
+            event.id                                   = EVENT_CREDENTIAL_READ;
             event.payload.credential_read.credential   = cred;
             event.payload.credential_read.timestamp_ms = now_ms();
-
             event_bus_publish(&event);
 
-            /* Halt the credential to prevent re-reads while held against reader. */
             m_reader->halt();
-
             vTaskDelay(reread_delay);
             continue;
         }
-        /* PORTUNUS_ERR_NO_CREDENTIAL is expected — no credential present, continue. */
+
+        if (err == PORTUNUS_ERR_NO_CREDENTIAL) {
+            /* Expected — no card in field, chip is healthy. */
+            consecutive_hw_errors = 0;
+        } else {
+            /* Hardware fault (timeout, SPI error, read error, etc.). */
+            if (++consecutive_hw_errors >= READER_HW_ERROR_THRESHOLD) {
+                ESP_LOGW(TAG, "Credential reader hardware fault after %d errors "
+                         "(last err=0x%x) — entering degraded mode",
+                         consecutive_hw_errors, err);
+                m_caps.has_reader = false;
+                reader_degraded   = true;
+
+                portunus_event_t fault_event;
+                memset(&fault_event, 0, sizeof(fault_event));
+                fault_event.id = EVENT_CREDENTIAL_READ_ERROR;
+                event_bus_publish(&fault_event);
+
+                continue;
+            }
+        }
 
         vTaskDelay(poll_interval);
     }

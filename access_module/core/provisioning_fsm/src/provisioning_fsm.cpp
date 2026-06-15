@@ -326,15 +326,14 @@ void ProvisioningFSM::handle_arm_requested()
 
 void ProvisioningFSM::handle_credential_read(const event_credential_read_t *cred)
 {
-    char uid_str[CREDENTIAL_UID_HEX_STR_LEN];
-    credential_uid_to_hex(&cred->credential, uid_str, sizeof(uid_str));
-
     if (m_state != PEU_STATE_ARMED) {
         ESP_LOGD(TAG, "Credential read ignored in state %d", (int)m_state);
         return;
     }
 
-    ESP_LOGI(TAG, "Card read — UID: %s", uid_str);
+    char log_id[CREDENTIAL_LOG_ID_LEN];
+    credential_uid_to_log_id(&cred->credential, log_id, sizeof(log_id));
+    ESP_LOGI(TAG, "Card read — id=%s", log_id);
     publish_capture_request(cred);
     m_state       = PEU_STATE_CAPTURE_SEND;
     m_deadline_ms = 0;
