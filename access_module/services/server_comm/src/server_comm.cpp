@@ -18,14 +18,14 @@
  *   event bus dispatcher is never blocked.
  */
 
-#include "server_comm.h"
-#include "event_bus.h"
-#include "event_types.h"
-#include "error_codes.h"
-#include "network_config.h"
-#include "security_config.h"
-#include "wifi_mgr.h"
-#include "portunus_types.h"
+#include "server_comm.hpp"
+#include "event_bus.hpp"
+#include "event_types.hpp"
+#include "error_codes.hpp"
+#include "network_config.hpp"
+#include "security_config.hpp"
+#include "wifi_mgr.hpp"
+#include "portunus_types.hpp"
 #include "credential_types.h"
 
 /* Nanopb */
@@ -58,7 +58,7 @@
 #if !PORTUNUS_USE_GRPC
   #include "esp_http_client.h"
 #else
-  #include "grpc_client.h"
+  #include "grpc_client.hpp"
 #endif
 #include "esp_wifi.h"
 #include "esp_netif.h"

@@ -11,14 +11,14 @@
  * no arm button is present).
  */
 
-#include "provisioning_fsm.h"
-#include "event_bus.h"
-#include "error_codes.h"
+#include "provisioning_fsm.hpp"
+#include "event_bus.hpp"
+#include "error_codes.hpp"
 #include "credential_types.h"
 #include "sdkconfig.h"
 
 #ifdef CONFIG_PORTUNUS_ENABLE_WIFI
-#include "wifi_mgr.h"
+#include "wifi_mgr.hpp"
 #endif
 
 #include "esp_log.h"

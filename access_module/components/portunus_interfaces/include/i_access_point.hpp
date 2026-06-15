@@ -15,7 +15,7 @@
 
 #pragma once
 
-#include "portunus_types.h"
+#include "portunus_types.hpp"
 
 /**
  * @brief Abstract access point interface.

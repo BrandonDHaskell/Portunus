@@ -6,9 +6,9 @@
  *
  */
 
-#include "led_hal.h"
-#include "pin_config.h"
-#include "error_codes.h"
+#include "led_hal.hpp"
+#include "pin_config.hpp"
+#include "error_codes.hpp"
 
 #include "driver/gpio.h"
 #include "esp_log.h"

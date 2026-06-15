@@ -11,7 +11,7 @@
 
 #pragma once
 
-#include "i_access_point.h"
+#include "i_access_point.hpp"
 
 /**
  * @brief Concrete access point backed by GPIO door strike + reed switch.

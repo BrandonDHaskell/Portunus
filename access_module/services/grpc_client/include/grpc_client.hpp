@@ -24,7 +24,7 @@
 
 #pragma once
 
-#include "portunus_types.h"
+#include "portunus_types.hpp"
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>

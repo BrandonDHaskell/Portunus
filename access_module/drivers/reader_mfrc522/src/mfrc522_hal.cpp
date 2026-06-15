@@ -6,9 +6,9 @@
  * anti-collision cascade levels 1 and 2, and UID extraction.
  */
 
-#include "mfrc522.h"
-#include "pin_config.h"
-#include "error_codes.h"
+#include "mfrc522.hpp"
+#include "pin_config.hpp"
+#include "error_codes.hpp"
 
 #include "driver/spi_master.h"
 #include "driver/gpio.h"

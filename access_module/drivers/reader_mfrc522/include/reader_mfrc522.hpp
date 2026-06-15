@@ -11,7 +11,7 @@
 
 #pragma once
 
-#include "i_credential_reader.h"
+#include "i_credential_reader.hpp"
 
 /**
  * @brief Concrete credential reader backed by the MFRC522 RFID IC.

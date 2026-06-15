@@ -18,7 +18,7 @@
 
 #pragma once
 
-#include "i_feedback.h"
+#include "i_feedback.hpp"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
