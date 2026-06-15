@@ -43,6 +43,7 @@ idf_component_register(
         portunus_proto
         portunus_types
         portunus_config
+        portunus_nvs
         grpc_client
 )
 

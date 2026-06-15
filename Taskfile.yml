@@ -244,37 +244,59 @@ tasks:
         idf.py -D SDKCONFIG_DEFAULTS="${DEFAULTS}" build
 
   firmware:build:prod:
-    desc: Build firmware with prod sdkconfig overlay (requires PORTUNUS_HMAC_SECRET in .env)
+    desc: Build firmware with prod sdkconfig overlay (secrets come from NVS, not env)
     dir: "{{.FIRMWARE_DIR}}"
     env:
       IDF_PATH: "{{.IDF_PATH}}"
     cmds:
       - |
-        : "${PORTUNUS_HMAC_SECRET:?PORTUNUS_HMAC_SECRET must be set in .env}"
-        PROD_HOST=$(grep 'CONFIG_PORTUNUS_SERVER_HOST' sdkconfig.defaults.prod | sed 's/.*="\(.*\)"/\1/')
-        if ! openssl x509 -noout -text -in ../certs/server.pem 2>/dev/null | grep -q "IP Address:${PROD_HOST}"; then
-          echo "ERROR: certs/server.pem SAN does not contain IP:${PROD_HOST} — run: task certs:generate"
-          exit 1
-        fi
-        # Snapshot device-specific settings (WiFi, GPIO, stack sizes) before the
+        # Snapshot device-specific settings (GPIO, stack sizes) before the
         # clean sdkconfig deletion. These are not in any profile defaults file and
         # would otherwise be lost on every prod build.
         if [ -f sdkconfig ]; then
-          grep -E "^CONFIG_PORTUNUS_(WIFI_|SPI_|MFRC522_|DOOR_STRIKE_PIN=|REED_SWITCH_PIN=|MODULE_TYPE_|ENABLE_|SERVER_REQUEST_TIMEOUT)" \
+          grep -E "^CONFIG_PORTUNUS_(SPI_|MFRC522_|DOOR_STRIKE_PIN=|REED_SWITCH_PIN=|MODULE_TYPE_|ENABLE_|SERVER_REQUEST_TIMEOUT)" \
             sdkconfig > sdkconfig.defaults.local 2>/dev/null || true
         else
           : > sdkconfig.defaults.local
         fi
-        printf 'CONFIG_PORTUNUS_HMAC_SECRET="%s"\n' "$PORTUNUS_HMAC_SECRET" > sdkconfig.defaults.secret
         rm -f sdkconfig
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
-        idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.local;sdkconfig.defaults.prod;sdkconfig.defaults.secret" build
+        idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.local;sdkconfig.defaults.prod" build
         BUILD_STATUS=$?
-        rm -f sdkconfig.defaults.secret
         if [ $BUILD_STATUS -eq 0 ]; then
           idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.local;sdkconfig.defaults.prod" reconfigure > /dev/null 2>&1 || true
         fi
         exit $BUILD_STATUS
+
+  firmware:nvs:gen:
+    desc: Generate NVS binary from nvs_config.csv (copy nvs_config.example.csv first)
+    dir: "{{.FIRMWARE_DIR}}"
+    cmds:
+      - |
+        if [ ! -f nvs_config.csv ]; then
+          echo "ERROR: nvs_config.csv not found."
+          echo "  cp nvs_config.example.csv nvs_config.csv"
+          echo "  Then fill in real values (SSID, PSK, HMAC secret, server host)."
+          exit 1
+        fi
+        {{.IDF_PYTHON}} {{.IDF_PATH}}/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py \
+          generate nvs_config.csv build/nvs.bin 0x6000
+        echo "Generated build/nvs.bin ($(wc -c < build/nvs.bin) bytes)"
+
+  firmware:nvs:flash:
+    desc: Flash NVS binary to the nvs partition (0x11000) — run firmware:nvs:gen first
+    dir: "{{.FIRMWARE_DIR}}"
+    env:
+      IDF_PATH: "{{.IDF_PATH}}"
+    cmds:
+      - |
+        if [ ! -f build/nvs.bin ]; then
+          echo "ERROR: build/nvs.bin not found — run 'task firmware:nvs:gen' first"
+          exit 1
+        fi
+        eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
+        esptool.py write_flash 0x11000 build/nvs.bin
+        echo "NVS partition flashed. Now flash firmware with: task firmware:flash"
 
   firmware:flash:
     desc: Flash firmware to connected ESP32

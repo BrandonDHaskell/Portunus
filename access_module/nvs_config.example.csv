@@ -1,0 +1,8 @@
+key,type,encoding,value
+portunus,namespace,,
+module_id,data,string,door-001
+wifi_ssid,data,string,your-wifi-ssid
+wifi_psk,data,string,your-wifi-password
+server_host,data,string,10.0.0.58
+grpc_port,data,u16,50051
+hmac_secret,data,string,replace-with-output-of-openssl-rand-hex-32

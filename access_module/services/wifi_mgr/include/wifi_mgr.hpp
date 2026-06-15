@@ -28,6 +28,7 @@
 #pragma once
 
 #include "portunus_types.hpp"
+#include "portunus_nvs.hpp"
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,14 +41,19 @@ extern "C" {
  * default config, registers internal event handlers for WIFI_EVENT and
  * IP_EVENT groups, and starts a background reconnect task.
  *
+ * Credentials (SSID and PSK) are taken from @p cfg rather than Kconfig so
+ * that they can be stored in NVS instead of baked into the firmware binary.
+ *
  * Requires NVS to be initialised first (for WiFi calibration data).
  *
+ * @param cfg  Device configuration loaded from NVS; only wifi_ssid and
+ *             wifi_psk fields are consumed here.
  * @return PORTUNUS_OK on success.
  *         PORTUNUS_ERR_ALREADY_INIT if called more than once.
  *         PORTUNUS_ERR_TASK_CREATE if the reconnect task could not start.
  *         PORTUNUS_FAIL on ESP-IDF error.
  */
-portunus_err_t wifi_mgr_init(void);
+portunus_err_t wifi_mgr_init(const portunus_device_config_t *cfg);
 
 /**
  * @brief Connect to the configured access point.

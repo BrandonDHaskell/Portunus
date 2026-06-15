@@ -18,12 +18,13 @@
  *      Enabled by CONFIG_PORTUNUS_HMAC_ENABLED (Kconfig).
  *
  * Key management notes:
- *   • The HMAC secret (CONFIG_PORTUNUS_HMAC_SECRET) is stored in flash as
- *     part of the built firmware. Treat firmware binaries as sensitive.
- *   • Rotate the HMAC secret by reflashing devices + updating the server
- *     environment variable.
- *   • For production, store the secret in an NVS encrypted partition rather
- *     than Kconfig (planned Phase 3 enhancement).
+ *   • The HMAC secret is loaded from the "portunus" NVS namespace at boot
+ *     (key: "hmac_secret") by portunus_nvs_load() and passed to server_comm_init().
+ *     It is never baked into the firmware binary.
+ *   • Rotate the HMAC secret by re-provisioning NVS on the device and updating
+ *     the PORTUNUS_HMAC_SECRET environment variable on the server.
+ *   • The nvs_keys partition at 0x18000 is reserved for NVS encryption keys
+ *     when flash encryption is enabled (future hardening step).
  */
 
 #pragma once
@@ -84,17 +85,9 @@ extern "C" {
   #define PORTUNUS_HMAC_ENABLED  0
 #endif
 
-/** Pre-shared HMAC key – must match PORTUNUS_HMAC_SECRET on the server. */
-#if PORTUNUS_HMAC_ENABLED
-  #define PORTUNUS_HMAC_SECRET  CONFIG_PORTUNUS_HMAC_SECRET
-#endif
-
-#if PORTUNUS_HMAC_ENABLED
-  /* sizeof(string literal) includes the NUL, so an empty secret is sizeof == 1. */
-  _Static_assert(sizeof(PORTUNUS_HMAC_SECRET) > 1,
-                 "PORTUNUS_HMAC_ENABLED is set but PORTUNUS_HMAC_SECRET is empty. "
-                 "Set CONFIG_PORTUNUS_HMAC_SECRET (openssl rand -hex 32) or disable HMAC.");
-#endif
+/* The HMAC secret is no longer a compile-time constant.  It is loaded from
+ * NVS at boot (key "hmac_secret" in the "portunus" namespace) and validated
+ * at runtime in server_comm_init() — see portunus_nvs.hpp. */
 
 /** HTTP header name for the HMAC signature. */
 #define PORTUNUS_HMAC_HEADER_NAME  "X-Portunus-Sig"

@@ -98,6 +98,15 @@ static bool           s_clock_synced    = false; /* true after first successful 
 
 /* gRPC client handle — persistent HTTP/2+TLS connection to the server. */
 static grpc_client_handle_t s_grpc_handle = NULL;
+
+/* Deployment config stored at init from NVS, used across the lifetime of the task */
+static char     s_module_id[PORTUNUS_NVS_MODULE_ID_LEN];
+static char     s_server_host[PORTUNUS_NVS_SERVER_HOST_LEN];
+static uint16_t s_grpc_port;
+#if PORTUNUS_HMAC_ENABLED
+static char   s_hmac_secret[PORTUNUS_NVS_HMAC_SECRET_LEN];
+static size_t s_hmac_secret_len;
+#endif
 /* Idle-tick counter for keepalive PINGs (1 tick ≈ 1 s). */
 static int s_idle_ticks = 0;
 #define GRPC_PING_INTERVAL_TICKS 30
@@ -114,8 +123,8 @@ static int s_idle_ticks = 0;
 static bool compute_hmac_hex(const uint8_t *data, size_t data_len,
                               char out_hex[PORTUNUS_HMAC_HEX_LEN])
 {
-    static const char *secret     = PORTUNUS_HMAC_SECRET;
-    static const size_t secret_len = sizeof(PORTUNUS_HMAC_SECRET) - 1; /* strip NUL */
+    const char  *secret     = s_hmac_secret;
+    const size_t secret_len = s_hmac_secret_len;
 
     uint8_t raw[32]; /* SHA-256 output is 32 bytes */
 
@@ -419,7 +428,7 @@ static void handle_heartbeat(const event_heartbeat_t *hb)
     /* Build protobuf request */
     portunus_v1_HeartbeatRequest req = portunus_v1_HeartbeatRequest_init_zero;
 
-    strncpy(req.module_id, PORTUNUS_MODULE_ID, sizeof(req.module_id) - 1);
+    strncpy(req.module_id, s_module_id, sizeof(req.module_id) - 1);
     strncpy(req.firmware_version, PORTUNUS_FW_VERSION, sizeof(req.firmware_version) - 1);
     req.uptime_s        = hb->uptime_sec;
     req.free_heap_bytes = hb->free_heap_bytes;
@@ -492,7 +501,7 @@ static void handle_credential(const event_credential_read_t *cred)
     /* Build protobuf request */
     portunus_v1_AccessRequest req = portunus_v1_AccessRequest_init_zero;
 
-    strncpy(req.module_id, PORTUNUS_MODULE_ID, sizeof(req.module_id) - 1);
+    strncpy(req.module_id, s_module_id, sizeof(req.module_id) - 1);
     credential_uid_to_hex(&cred->credential, req.credential_id, sizeof(req.credential_id));
 
     char req_log_id[CREDENTIAL_LOG_ID_LEN];
@@ -650,7 +659,7 @@ static void handle_provision(const event_provision_request_t *req)
     portunus_v1_ProvisionCredentialRequest pb_req =
         portunus_v1_ProvisionCredentialRequest_init_zero;
 
-    strncpy(pb_req.module_id, PORTUNUS_MODULE_ID,
+    strncpy(pb_req.module_id, s_module_id,
             sizeof(pb_req.module_id) - 1);
 
     /* New member card UID — server applies HMAC-SHA256 before storing. */
@@ -815,18 +824,31 @@ bool server_comm_clock_synced(void)
     return s_clock_synced;
 }
 
-portunus_err_t server_comm_init(void)
+portunus_err_t server_comm_init(const portunus_device_config_t *cfg)
 {
     if (s_initialized) {
         ESP_LOGW(TAG, "server_comm already initialised");
         return PORTUNUS_ERR_ALREADY_INIT;
     }
 
+    strlcpy(s_module_id,   cfg->module_id,   sizeof(s_module_id));
+    strlcpy(s_server_host, cfg->server_host, sizeof(s_server_host));
+    s_grpc_port = cfg->grpc_port;
+
+#if PORTUNUS_HMAC_ENABLED
+    strlcpy(s_hmac_secret, cfg->hmac_secret, sizeof(s_hmac_secret));
+    s_hmac_secret_len = strlen(cfg->hmac_secret);
+    if (s_hmac_secret_len == 0) {
+        ESP_LOGE(TAG, "HMAC is enabled but hmac_secret is empty in NVS");
+        return PORTUNUS_FAIL;
+    }
+#endif
+
     /* Configure gRPC client (HTTP/2 + TLS). */
     {
         grpc_client_config_t grpc_cfg = {};
-        grpc_cfg.host               = PORTUNUS_SERVER_HOST;
-        grpc_cfg.port               = PORTUNUS_GRPC_SERVER_PORT;
+        grpc_cfg.host               = s_server_host;
+        grpc_cfg.port               = s_grpc_port;
         grpc_cfg.connect_timeout_ms = PORTUNUS_SERVER_REQUEST_TIMEOUT_MS;
         grpc_cfg.rpc_timeout_ms     = PORTUNUS_SERVER_REQUEST_TIMEOUT_MS;
         grpc_cfg.skip_cert_verify   = PORTUNUS_TLS_SKIP_VERIFY;
@@ -843,7 +865,7 @@ portunus_err_t server_comm_init(void)
             return grpc_err;
         }
         ESP_LOGI(TAG, "Transport: gRPC (HTTP/2+TLS) → %s:%d",
-                 PORTUNUS_SERVER_HOST, PORTUNUS_GRPC_SERVER_PORT);
+                 s_server_host, (int)s_grpc_port);
     }
 
     /* Clock: operate in UTC so mktime() in parse_server_time() is correct. */
