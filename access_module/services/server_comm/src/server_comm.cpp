@@ -86,9 +86,10 @@ static const char *TAG = "server_comm";
 #define URL_MAX_LEN            128
 
 /* ── Module state ──────────────────────────────────────────────────────────── */
-static QueueHandle_t  s_comm_queue   = NULL;
-static TaskHandle_t   s_comm_task    = NULL;
-static bool           s_initialized  = false;
+static QueueHandle_t  s_comm_queue    = NULL;
+static TaskHandle_t   s_comm_task     = NULL;
+static bool           s_initialized   = false;
+static bool           s_reader_degraded = false; /* set by EVENT_CREDENTIAL_READ_ERROR, cleared by RECOVERED */
 
 #if PORTUNUS_USE_GRPC
 /* gRPC client handle — persistent HTTP/2+TLS connection to the server. */
@@ -373,6 +374,13 @@ static void on_heartbeat_event(const portunus_event_t *event, void *ctx)
     xQueueSend(s_comm_queue, event, 0);
 }
 
+static void on_reader_fault_event(const portunus_event_t *event, void *ctx)
+{
+    (void)ctx;
+    if (s_comm_queue == NULL) { return; }
+    xQueueSend(s_comm_queue, event, 0);
+}
+
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
 static void on_credential_event(const portunus_event_t *event, void *ctx)
 {
@@ -400,7 +408,7 @@ static void on_provision_event(const portunus_event_t *event, void *ctx)
  * response, decode failure) so the user always sees a deny indication
  * rather than the CARD_READ LED stuck on indefinitely.
  *
- * @param credential_id  Hex-encoded credential UID (may be empty if unknown).
+ * @param credential_id  FNV-1a log fingerprint of the credential (never raw UID).
  * @param reason         Short reason string for logs / audit trail.
  */
 static void publish_access_denied(const char *credential_id, const char *reason)
@@ -497,8 +505,13 @@ static void handle_heartbeat(const event_heartbeat_t *hb)
         return;
     }
 
-    ESP_LOGI(TAG, "Heartbeat OK — known=%d server_time=%s",
-             resp.known, resp.server_time);
+    if (s_reader_degraded) {
+        ESP_LOGW(TAG, "Heartbeat OK — known=%d server_time=%s [READER DEGRADED]",
+                 resp.known, resp.server_time);
+    } else {
+        ESP_LOGI(TAG, "Heartbeat OK — known=%d server_time=%s",
+                 resp.known, resp.server_time);
+    }
 }
 
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
@@ -510,12 +523,15 @@ static void handle_credential(const event_credential_read_t *cred)
     strncpy(req.module_id, PORTUNUS_MODULE_ID, sizeof(req.module_id) - 1);
     credential_uid_to_hex(&cred->credential, req.credential_id, sizeof(req.credential_id));
 
+    char req_log_id[CREDENTIAL_LOG_ID_LEN];
+    credential_uid_to_log_id(&cred->credential, req_log_id, sizeof(req_log_id));
+
     /* Encode */
     uint8_t req_buf[portunus_v1_AccessRequest_size];
     pb_ostream_t ostream = pb_ostream_from_buffer(req_buf, sizeof(req_buf));
     if (!pb_encode(&ostream, portunus_v1_AccessRequest_fields, &req)) {
         ESP_LOGE(TAG, "Access encode failed: %s", PB_GET_ERROR(&ostream));
-        publish_access_denied(req.credential_id, "encode_error");
+        publish_access_denied(req_log_id, "encode_error");
         return;
     }
 
@@ -535,12 +551,12 @@ static void handle_credential(const event_credential_read_t *cred)
         &resp_len, &grpc_status);
     if (err != PORTUNUS_OK) {
         ESP_LOGW(TAG, "Access gRPC failed: err=0x%04x", (unsigned)err);
-        publish_access_denied(req.credential_id, "grpc_error");
+        publish_access_denied(req_log_id, "grpc_error");
         return;
     }
     if (grpc_status != GRPC_STATUS_OK) {
         ESP_LOGW(TAG, "Access gRPC status: %d", grpc_status);
-        publish_access_denied(req.credential_id, "grpc_status_error");
+        publish_access_denied(req_log_id, "grpc_status_error");
         return;
     }
 #else
@@ -551,13 +567,13 @@ static void handle_credential(const event_credential_read_t *cred)
                                          &resp_len, &status);
     if (err != PORTUNUS_OK) {
         ESP_LOGW(TAG, "Access HTTP failed: err=0x%04x", (unsigned)err);
-        publish_access_denied(req.credential_id, "http_error");
+        publish_access_denied(req_log_id, "http_error");
         return;
     }
 
     if (status != 200) {
         ESP_LOGW(TAG, "Access server returned HTTP %d", status);
-        publish_access_denied(req.credential_id, "http_status_error");
+        publish_access_denied(req_log_id, "http_status_error");
         return;
     }
 #endif /* PORTUNUS_USE_GRPC */
@@ -567,19 +583,19 @@ static void handle_credential(const event_credential_read_t *cred)
     pb_istream_t istream = pb_istream_from_buffer(resp_buf, (size_t)resp_len);
     if (!pb_decode(&istream, portunus_v1_AccessResponse_fields, &resp)) {
         ESP_LOGW(TAG, "Access decode failed: %s", PB_GET_ERROR(&istream));
-        publish_access_denied(req.credential_id, "decode_error");
+        publish_access_denied(req_log_id, "decode_error");
         return;
     }
 
-    ESP_LOGI(TAG, "Access decision — credential=%s granted=%d reason=%s known=%d",
-             req.credential_id, resp.granted, resp.reason, resp.known);
+    ESP_LOGI(TAG, "Access decision — id=%s granted=%d reason=%s known=%d",
+             req_log_id, resp.granted, resp.reason, resp.known);
 
     /* Publish decision event back to the bus */
     portunus_event_t decision;
     memset(&decision, 0, sizeof(decision));
     decision.id = resp.granted ? EVENT_ACCESS_GRANTED : EVENT_ACCESS_DENIED;
 
-    strncpy(decision.payload.access_decision.credential_id, req.credential_id,
+    strncpy(decision.payload.access_decision.credential_id, req_log_id,
             sizeof(decision.payload.access_decision.credential_id) - 1);
     strncpy(decision.payload.access_decision.reason, resp.reason,
             sizeof(decision.payload.access_decision.reason) - 1);
@@ -760,10 +776,10 @@ static void comm_task(void *arg)
             /* Credential events need a deny so the FSM clears CARD_READ
                feedback.  Heartbeats can be silently dropped. */
             if (event.id == EVENT_CREDENTIAL_READ) {
-                char credential_id[CREDENTIAL_UID_HEX_STR_LEN];
-                credential_uid_to_hex(&event.payload.credential_read.credential,
-                                      credential_id, sizeof(credential_id));
-                publish_access_denied(credential_id, "no_network");
+                char log_id[CREDENTIAL_LOG_ID_LEN];
+                credential_uid_to_log_id(&event.payload.credential_read.credential,
+                                         log_id, sizeof(log_id));
+                publish_access_denied(log_id, "no_network");
             }
             continue;
         }
@@ -782,6 +798,14 @@ static void comm_task(void *arg)
             handle_provision(&event.payload.provision_request);
             break;
 #endif
+        case EVENT_CREDENTIAL_READ_ERROR:
+            s_reader_degraded = true;
+            ESP_LOGW(TAG, "Credential reader degraded — heartbeats will reflect fault");
+            break;
+        case EVENT_CREDENTIAL_READER_RECOVERED:
+            s_reader_degraded = false;
+            ESP_LOGI(TAG, "Credential reader recovered — heartbeats nominal");
+            break;
         default:
             ESP_LOGW(TAG, "Unexpected event 0x%04x in comm queue",
                      (unsigned)event.id);
@@ -873,6 +897,16 @@ portunus_err_t server_comm_init(void)
     sub_err = event_bus_subscribe(EVENT_HEARTBEAT, on_heartbeat_event, NULL);
     if (sub_err != PORTUNUS_OK) {
         ESP_LOGE(TAG, "Failed to subscribe to heartbeat events: 0x%04x", (unsigned)sub_err);
+    }
+
+    sub_err = event_bus_subscribe(EVENT_CREDENTIAL_READ_ERROR, on_reader_fault_event, NULL);
+    if (sub_err != PORTUNUS_OK) {
+        ESP_LOGE(TAG, "Failed to subscribe to reader error events: 0x%04x", (unsigned)sub_err);
+    }
+
+    sub_err = event_bus_subscribe(EVENT_CREDENTIAL_READER_RECOVERED, on_reader_fault_event, NULL);
+    if (sub_err != PORTUNUS_OK) {
+        ESP_LOGE(TAG, "Failed to subscribe to reader recovery events: 0x%04x", (unsigned)sub_err);
     }
 
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT

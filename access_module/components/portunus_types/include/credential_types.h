@@ -30,6 +30,9 @@ typedef struct {
 /** Buffer size sufficient for any UID formatted as "XX:XX:...:XX\0". */
 #define CREDENTIAL_UID_HEX_STR_LEN  (CREDENTIAL_UID_MAX_LEN * 3 + 1)
 
+/** Buffer size for the 8-character FNV-1a log fingerprint plus NUL. */
+#define CREDENTIAL_LOG_ID_LEN  9
+
 /**
  * @brief Format a credential UID as a colon-separated hex string.
  *
@@ -40,6 +43,19 @@ typedef struct {
  * @param buf_len Size of buf in bytes.
  */
 void credential_uid_to_hex(const credential_t *cred, char *buf, size_t buf_len);
+
+/**
+ * @brief Produce a short, non-reversible log fingerprint of a credential UID.
+ *
+ * Computes FNV-1a 32-bit over the raw UID bytes and formats the result as
+ * 8 lowercase hex characters.  Suitable for log correlation without exposing
+ * the raw UID.  Buf must be at least CREDENTIAL_LOG_ID_LEN bytes.
+ *
+ * @param cred    Source credential.
+ * @param buf     Destination buffer (recommend CREDENTIAL_LOG_ID_LEN).
+ * @param buf_len Size of buf in bytes.
+ */
+void credential_uid_to_log_id(const credential_t *cred, char *buf, size_t buf_len);
 
 #ifdef __cplusplus
 }

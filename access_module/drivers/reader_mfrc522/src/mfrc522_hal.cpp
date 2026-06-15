@@ -89,8 +89,9 @@ static const char *TAG = "mfrc522";
 
 /* ── Module state ──────────────────────────────────────────────────────────── */
 
-static spi_device_handle_t s_spi_handle = NULL;
-static bool                s_spi_error  = false;  /* set by reg_read on transfer failure */
+static spi_device_handle_t s_spi_handle     = NULL;
+static bool                s_spi_error      = false; /* set by reg_read on transfer failure */
+static bool                s_spi_initialized = false; /* SPI bus + device added; skip on re-init */
 
 /* ── Low-level SPI register access ─────────────────────────────────────────── */
 
@@ -356,49 +357,53 @@ static portunus_err_t picc_anticoll_select(uint8_t sel_cmd, uint8_t *uid_part)
 
 portunus_err_t mfrc522_init(void)
 {
-    /* ── Configure RST pin and perform hardware reset ────────────────────── */
+    /* ── RST pin: configure on first call, toggle on every call ─────────── */
     if (PIN_MFRC522_RST >= 0) {
-        gpio_config_t rst_cfg = {};
-        rst_cfg.pin_bit_mask = (1ULL << PIN_MFRC522_RST);
-        rst_cfg.mode         = GPIO_MODE_OUTPUT;
-        rst_cfg.pull_up_en   = GPIO_PULLUP_DISABLE;
-        rst_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
-        rst_cfg.intr_type    = GPIO_INTR_DISABLE;
-        gpio_config(&rst_cfg);
-
+        if (!s_spi_initialized) {
+            gpio_config_t rst_cfg = {};
+            rst_cfg.pin_bit_mask = (1ULL << PIN_MFRC522_RST);
+            rst_cfg.mode         = GPIO_MODE_OUTPUT;
+            rst_cfg.pull_up_en   = GPIO_PULLUP_DISABLE;
+            rst_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
+            rst_cfg.intr_type    = GPIO_INTR_DISABLE;
+            gpio_config(&rst_cfg);
+        }
         gpio_set_level((gpio_num_t)PIN_MFRC522_RST, 0);
         vTaskDelay(pdMS_TO_TICKS(10));
         gpio_set_level((gpio_num_t)PIN_MFRC522_RST, 1);
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 
-    /* ── Initialise SPI bus ──────────────────────────────────────────────── */
-    spi_bus_config_t bus_cfg = {};
-    bus_cfg.mosi_io_num     = PIN_SPI_MOSI;
-    bus_cfg.miso_io_num     = PIN_SPI_MISO;
-    bus_cfg.sclk_io_num     = PIN_SPI_SCLK;
-    bus_cfg.quadwp_io_num   = -1;
-    bus_cfg.quadhd_io_num   = -1;
-    bus_cfg.max_transfer_sz = 64;
+    /* ── SPI bus and device: initialise once, reuse on recovery calls ─────── */
+    if (!s_spi_initialized) {
+        spi_bus_config_t bus_cfg = {};
+        bus_cfg.mosi_io_num     = PIN_SPI_MOSI;
+        bus_cfg.miso_io_num     = PIN_SPI_MISO;
+        bus_cfg.sclk_io_num     = PIN_SPI_SCLK;
+        bus_cfg.quadwp_io_num   = -1;
+        bus_cfg.quadhd_io_num   = -1;
+        bus_cfg.max_transfer_sz = 64;
 
-    esp_err_t ret = spi_bus_initialize(MFRC522_SPI_HOST, &bus_cfg, SPI_DMA_CH_AUTO);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "SPI bus init failed: %s", esp_err_to_name(ret));
-        return PORTUNUS_ERR_SPI_INIT;
-    }
+        esp_err_t ret = spi_bus_initialize(MFRC522_SPI_HOST, &bus_cfg, SPI_DMA_CH_AUTO);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "SPI bus init failed: %s", esp_err_to_name(ret));
+            return PORTUNUS_ERR_SPI_INIT;
+        }
 
-    /* ── Add MFRC522 as SPI device ───────────────────────────────────────── */
-    spi_device_interface_config_t dev_cfg = {};
-    dev_cfg.clock_speed_hz = MFRC522_SPI_CLOCK_HZ;
-    dev_cfg.mode           = 0;          /* CPOL=0, CPHA=0 */
-    dev_cfg.spics_io_num   = PIN_MFRC522_CS;
-    dev_cfg.queue_size     = 4;
+        spi_device_interface_config_t dev_cfg = {};
+        dev_cfg.clock_speed_hz = MFRC522_SPI_CLOCK_HZ;
+        dev_cfg.mode           = 0;          /* CPOL=0, CPHA=0 */
+        dev_cfg.spics_io_num   = PIN_MFRC522_CS;
+        dev_cfg.queue_size     = 4;
 
-    ret = spi_bus_add_device(MFRC522_SPI_HOST, &dev_cfg, &s_spi_handle);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "SPI add device failed: %s", esp_err_to_name(ret));
-        spi_bus_free(MFRC522_SPI_HOST);
-        return PORTUNUS_ERR_SPI_INIT;
+        ret = spi_bus_add_device(MFRC522_SPI_HOST, &dev_cfg, &s_spi_handle);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "SPI add device failed: %s", esp_err_to_name(ret));
+            spi_bus_free(MFRC522_SPI_HOST);
+            return PORTUNUS_ERR_SPI_INIT;
+        }
+
+        s_spi_initialized = true;
     }
 
     /* ── Soft reset ──────────────────────────────────────────────────────── */
@@ -435,7 +440,6 @@ portunus_err_t mfrc522_init(void)
     }
     ESP_LOGI(TAG, "MFRC522 detected, version=0x%02x", version);
 
-    /* Turn antenna on */
     mfrc522_antenna_on();
 
     return PORTUNUS_OK;
