@@ -436,9 +436,12 @@ void ProvisioningFSM::publish_capture_request(const event_credential_read_t *cre
     memset(&evt, 0, sizeof(evt));
     evt.id = EVENT_PROVISION_REQUEST;
 
-    memcpy(evt.payload.provision_request.credential_uid,
-           cred->credential.uid, cred->credential.uid_len);
-    evt.payload.provision_request.credential_uid_len = cred->credential.uid_len;
+    size_t uid_n = cred->credential.uid_len;
+    if (uid_n > sizeof(evt.payload.provision_request.credential_uid)) {
+        uid_n = sizeof(evt.payload.provision_request.credential_uid);
+    }
+    memcpy(evt.payload.provision_request.credential_uid, cred->credential.uid, uid_n);
+    evt.payload.provision_request.credential_uid_len = (uint8_t)uid_n;
 
     event_bus_publish(&evt);
 }

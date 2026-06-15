@@ -654,8 +654,12 @@ static void handle_provision(const event_provision_request_t *req)
             sizeof(pb_req.module_id) - 1);
 
     /* New member card UID — server applies HMAC-SHA256 before storing. */
-    pb_req.credential_uid.size = req->credential_uid_len;
-    memcpy(pb_req.credential_uid.bytes, req->credential_uid, req->credential_uid_len);
+    size_t uid_n = req->credential_uid_len;
+    if (uid_n > sizeof(pb_req.credential_uid.bytes)) {
+        uid_n = sizeof(pb_req.credential_uid.bytes);
+    }
+    pb_req.credential_uid.size = (pb_size_t)uid_n;
+    memcpy(pb_req.credential_uid.bytes, req->credential_uid, uid_n);
 
     /* Encode */
     uint8_t req_buf[portunus_v1_ProvisionCredentialRequest_size];
