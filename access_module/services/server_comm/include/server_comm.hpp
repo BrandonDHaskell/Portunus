@@ -2,20 +2,20 @@
  * @file server_comm.h
  * @brief Server communication component for the Portunus access module.
  *
- * Bridges the local event bus to the Portunus server over HTTP/1.1 with
- * Nanopb-encoded protobuf payloads.
+ * Bridges the local event bus to the Portunus server over gRPC (HTTP/2+TLS)
+ * with Nanopb-encoded protobuf payloads.
  *
  * Architecture:
  *   - A dedicated FreeRTOS task owns an internal queue.
  *   - Event bus subscriber callbacks (non-blocking) copy events into
  *     this queue.
  *   - The task dequeues events, checks wifi_mgr_is_connected(), encodes
- *     the protobuf request, performs the HTTP POST, decodes the response,
+ *     the protobuf request, performs the gRPC call, decodes the response,
  *     and publishes access decision events back to the event bus.
  *
  * Handles two event types:
- *   EVENT_HEARTBEAT       → POST /v1/heartbeat       → sync clock, log result
- *   EVENT_CREDENTIAL_READ → POST /v1/access_request   → publish
+ *   EVENT_HEARTBEAT       → SendHeartbeat RPC      → sync clock, log result
+ *   EVENT_CREDENTIAL_READ → RequestAccess RPC      → publish
  *                           EVENT_ACCESS_GRANTED or EVENT_ACCESS_DENIED
  *
  * Clock synchronisation: each successful heartbeat response carries a

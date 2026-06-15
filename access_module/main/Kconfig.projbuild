@@ -22,6 +22,7 @@ menu "Portunus Configuration"
 
             config PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
                 bool "Provisioning console (credential enrollment)"
+                depends on PORTUNUS_USE_TLS
         endchoice
 
         menu "Provisioning Console Settings (PEU)"
@@ -143,24 +144,13 @@ menu "Portunus Configuration"
         depends on PORTUNUS_ENABLE_WIFI
 
         config PORTUNUS_USE_TLS
-            bool "Enable TLS (HTTPS) for server communication"
+            bool "Enable TLS for server communication"
             default y
             help
                 Encrypt all communication with the Portunus server using TLS.
-                When enabled, URLs use https:// and the ESP-IDF mbedTLS stack
-                validates the server certificate against the Mozilla CA bundle
-                embedded in the firmware.  Disable only for isolated lab
-                networks where a CA-signed cert is not available.
-
-        config PORTUNUS_TLS_SERVER_PORT
-            int "HTTPS server port"
-            default 8443
-            range 1 65535
-            depends on PORTUNUS_USE_TLS
-            help
-                TCP port the Portunus server listens on for TLS connections.
-                The plain HTTP port (PORTUNUS_SERVER_PORT) is used when TLS
-                is disabled.
+                The ESP-IDF mbedTLS stack validates the server certificate
+                against the Mozilla CA bundle embedded in the firmware.
+                Required for all module variants.
 
         config PORTUNUS_TLS_SKIP_VERIFY
             bool "Skip TLS certificate verification (INSECURE – dev only)"
@@ -216,34 +206,14 @@ menu "Portunus Configuration"
     menu "Transport Configuration"
         depends on PORTUNUS_ENABLE_WIFI
 
-        config PORTUNUS_USE_GRPC
-            bool "Use gRPC (HTTP/2) transport for server communication"
-            default n
-            depends on PORTUNUS_USE_TLS
-            help
-                When enabled, the access module communicates with the Portunus
-                server using gRPC over HTTP/2+TLS instead of HTTP/1.1+protobuf.
-                gRPC requires TLS with ALPN negotiation ("h2"), so TLS must
-                also be enabled.
-
-                The gRPC wire protocol sends the same Nanopb-encoded protobuf
-                messages inside HTTP/2 DATA frames with a 5-byte length prefix.
-                The server must expose a gRPC listener (PortunusService) in
-                addition to or instead of the HTTP/1.1 endpoints.
-
-                When disabled, the firmware uses the HTTP/1.1 + esp_http_client
-                transport (the original path).
-
         config PORTUNUS_GRPC_SERVER_PORT
             int "gRPC server port"
             default 50051
             range 1 65535
-            depends on PORTUNUS_USE_GRPC
+            depends on PORTUNUS_USE_TLS
             help
-                TCP port the Portunus server listens on for gRPC connections.
-                This is typically a different port from the HTTP/1.1 or HTTPS
-                port used by the admin API and legacy module communication.
-                Standard gRPC convention uses 50051.
+                TCP port the Portunus server listens on for gRPC (HTTP/2+TLS)
+                connections. Standard gRPC convention uses 50051.
 
     endmenu
 
@@ -294,20 +264,13 @@ menu "Portunus Configuration"
             help
                 Hostname or IP address of the Portunus server.
 
-        config PORTUNUS_SERVER_PORT
-            int "Portunus server port"
-            default 8080
-            range 1 65535
-            help
-                TCP port the Portunus server listens on.
-
         config PORTUNUS_SERVER_REQUEST_TIMEOUT_MS
-            int "HTTP request timeout (milliseconds)"
+            int "Server request timeout (milliseconds)"
             default 5000
             range 1000 30000
             help
                 Maximum time to wait for a response from the server on
-                heartbeat and access-request HTTP calls.
+                heartbeat, access-request, and provision calls.
     endmenu
 
     menu "Task Configuration"
