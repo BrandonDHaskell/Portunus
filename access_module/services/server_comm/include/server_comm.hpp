@@ -29,6 +29,7 @@
 #pragma once
 
 #include "portunus_types.hpp"
+#include "portunus_nvs.hpp"
 
 #ifdef __cplusplus
 extern "C" {
@@ -41,12 +42,18 @@ extern "C" {
  * EVENT_HEARTBEAT and EVENT_CREDENTIAL_READ, and starts the network
  * task.
  *
+ * Deployment values (module_id, server_host, grpc_port, hmac_secret) are
+ * taken from @p cfg rather than Kconfig so that they can be stored in NVS
+ * instead of baked into the firmware binary.
+ *
+ * @param cfg  Device configuration loaded from NVS.
  * @return PORTUNUS_OK on success.
  *         PORTUNUS_ERR_ALREADY_INIT if called more than once.
  *         PORTUNUS_ERR_QUEUE_CREATE if queue allocation failed.
  *         PORTUNUS_ERR_TASK_CREATE  if task creation failed.
+ *         PORTUNUS_FAIL             if HMAC is enabled but hmac_secret is empty.
  */
-portunus_err_t server_comm_init(void);
+portunus_err_t server_comm_init(const portunus_device_config_t *cfg);
 
 /**
  * @brief Return true if the module clock has been synchronised at least once.

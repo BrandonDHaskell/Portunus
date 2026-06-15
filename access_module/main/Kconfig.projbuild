@@ -190,55 +190,14 @@ menu "Portunus Configuration"
                 processing any message, ensuring only enrolled modules can
                 submit requests.
 
-        config PORTUNUS_HMAC_SECRET
-            string "HMAC shared secret (pre-shared key)"
-            default ""
-            depends on PORTUNUS_HMAC_ENABLED
-            help
-                The shared secret used to compute HMAC-SHA256 signatures.
-                Must match the PORTUNUS_HMAC_SECRET environment variable on
-                the server.  Generate with: openssl rand -hex 32
-
-                WARNING: stored in flash.  Protect your build artifacts.
-
-    endmenu
-
-    menu "Transport Configuration"
-        depends on PORTUNUS_ENABLE_WIFI
-
-        config PORTUNUS_GRPC_SERVER_PORT
-            int "gRPC server port"
-            default 50051
-            range 1 65535
-            depends on PORTUNUS_USE_TLS
-            help
-                TCP port the Portunus server listens on for gRPC (HTTP/2+TLS)
-                connections. Standard gRPC convention uses 50051.
+                The HMAC secret is read from NVS at boot (key "hmac_secret"
+                in namespace "portunus").  It is never stored in the firmware
+                binary.  Provision it with: task firmware:nvs:gen
 
     endmenu
 
     menu "Network Configuration"
         depends on PORTUNUS_ENABLE_WIFI
-        
-        config PORTUNUS_MODULE_ID
-            string "Module identifier"
-            default "door-001"
-            help
-                Unique name for this access module, sent in every heartbeat
-                and access request so the server can identify the device.
-                Maximum 32 characters (PORTUNUS_MAX_NAME_LEN).
-
-        config PORTUNUS_WIFI_SSID
-            string "WiFi SSID"
-            default "portunus-dev"
-            help
-                SSID of the wireless network the module connects to.
-
-        config PORTUNUS_WIFI_PASSWORD
-            string "WiFi password"
-            default ""
-            help
-                WPA2 passphrase. Leave empty for open networks.
 
         config PORTUNUS_WIFI_CONNECT_TIMEOUT_MS
             int "WiFi connection timeout (milliseconds)"
@@ -258,12 +217,6 @@ menu "Portunus Configuration"
                 disconnect. The interval doubles on each failure up to a
                 60-second ceiling, and resets on a successful connection.
 
-        config PORTUNUS_SERVER_HOST
-            string "Portunus server host"
-            default "192.168.1.100"
-            help
-                Hostname or IP address of the Portunus server.
-
         config PORTUNUS_SERVER_REQUEST_TIMEOUT_MS
             int "Server request timeout (milliseconds)"
             default 5000
@@ -271,6 +224,56 @@ menu "Portunus Configuration"
             help
                 Maximum time to wait for a response from the server on
                 heartbeat, access-request, and provision calls.
+    endmenu
+
+    menu "Development / NVS fallback"
+        config PORTUNUS_ENV_DEV
+            bool "Development mode (NVS fallback to Kconfig defaults)"
+            default n
+            help
+                When enabled, if portunus_nvs_load() fails at boot the
+                firmware falls back to the compile-time dev defaults below
+                instead of halting.  This lets developers flash and run
+                without going through the NVS provisioning tool.
+
+                NEVER enable in production builds.
+
+        config PORTUNUS_DEV_MODULE_ID
+            string "Dev module ID (NVS fallback)"
+            default "door-001-dev"
+            depends on PORTUNUS_ENV_DEV
+            help
+                module_id used when NVS is absent in a dev build.
+
+        config PORTUNUS_DEV_WIFI_SSID
+            string "Dev WiFi SSID (NVS fallback)"
+            default "portunus-dev"
+            depends on PORTUNUS_ENV_DEV
+            help
+                WiFi SSID used when NVS is absent in a dev build.
+
+        config PORTUNUS_DEV_WIFI_PSK
+            string "Dev WiFi PSK (NVS fallback)"
+            default ""
+            depends on PORTUNUS_ENV_DEV
+            help
+                WiFi passphrase used when NVS is absent in a dev build.
+                Leave empty for open networks.
+
+        config PORTUNUS_DEV_SERVER_HOST
+            string "Dev server host (NVS fallback)"
+            default "192.168.1.100"
+            depends on PORTUNUS_ENV_DEV
+            help
+                Server hostname or IP used when NVS is absent in a dev build.
+
+        config PORTUNUS_DEV_GRPC_PORT
+            int "Dev gRPC port (NVS fallback)"
+            default 50051
+            range 1 65535
+            depends on PORTUNUS_ENV_DEV
+            help
+                gRPC port used when NVS is absent in a dev build.
     endmenu
 
     menu "Task Configuration"

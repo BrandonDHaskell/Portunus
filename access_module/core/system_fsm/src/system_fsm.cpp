@@ -385,8 +385,14 @@ void SystemFSM::poll_reed_switch()
              */
             if (m_strike_energized) {
                 ESP_LOGI(TAG, "Door closed during unlock hold — re-locking early");
-                m_access->lock();
-                cancel_unlock_timer();
+                portunus_err_t lock_err = m_access->lock();
+                if (lock_err != PORTUNUS_OK) {
+                    ESP_LOGE(TAG, "Early re-lock failed (0x%" PRIx32 ") — timer will retry",
+                             (uint32_t)lock_err);
+                    /* Leave timer running so check_unlock_timer retries on next tick. */
+                } else {
+                    cancel_unlock_timer();
+                }
             }
         }
 
@@ -414,7 +420,12 @@ void SystemFSM::check_unlock_timer()
         ESP_LOGI(TAG, "Unlock hold timer expired — re-locking");
 
         if (m_caps.has_access_point) {
-            m_access->lock();
+            portunus_err_t lock_err = m_access->lock();
+            if (lock_err != PORTUNUS_OK) {
+                ESP_LOGE(TAG, "Re-lock after timer expiry failed (0x%" PRIx32 ") — will retry",
+                         (uint32_t)lock_err);
+                return; /* Leave timer expired so next tick retries. */
+            }
         }
         cancel_unlock_timer();
 

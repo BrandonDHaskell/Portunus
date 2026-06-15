@@ -39,6 +39,7 @@
 #include "wifi_mgr.hpp"
 #include "network_config.hpp"
 #include "server_comm.hpp"
+#include "portunus_nvs.hpp"
 #endif
 
 /* Interface types — needed unconditionally for pointer declarations below */
@@ -67,6 +68,7 @@
 #include "freertos/task.h"
 
 #include <inttypes.h>
+#include <string.h>
 
 static const char *TAG = "portunus";
 
@@ -108,9 +110,38 @@ extern "C" void app_main(void)
         return;
     }
 
-    /* ── 2. WiFi connection ──────────────────────────────────────────────── */
+    /* ── 2. Load device configuration from NVS ──────────────────────────── */
 #ifdef CONFIG_PORTUNUS_ENABLE_WIFI
-    if (wifi_mgr_init() != PORTUNUS_OK) {
+    static portunus_device_config_t s_device_cfg{};
+    {
+        esp_err_t nvs_err = portunus_nvs_load(&s_device_cfg);
+        if (nvs_err != ESP_OK) {
+#ifdef CONFIG_PORTUNUS_ENV_DEV
+            ESP_LOGW(TAG, "NVS config missing (%s) — using dev defaults",
+                     esp_err_to_name(nvs_err));
+            strlcpy(s_device_cfg.module_id,   CONFIG_PORTUNUS_DEV_MODULE_ID,
+                    sizeof(s_device_cfg.module_id));
+            strlcpy(s_device_cfg.wifi_ssid,   CONFIG_PORTUNUS_DEV_WIFI_SSID,
+                    sizeof(s_device_cfg.wifi_ssid));
+            strlcpy(s_device_cfg.wifi_psk,    CONFIG_PORTUNUS_DEV_WIFI_PSK,
+                    sizeof(s_device_cfg.wifi_psk));
+            strlcpy(s_device_cfg.server_host, CONFIG_PORTUNUS_DEV_SERVER_HOST,
+                    sizeof(s_device_cfg.server_host));
+            s_device_cfg.grpc_port  = CONFIG_PORTUNUS_DEV_GRPC_PORT;
+            s_device_cfg.hmac_secret[0] = '\0';  /* HMAC disabled in dev */
+#else
+            ESP_LOGE(TAG,
+                     "System halted: NVS config missing (%s). "
+                     "Run 'task firmware:nvs:gen && task firmware:nvs:flash' "
+                     "to provision this device.",
+                     esp_err_to_name(nvs_err));
+            return;
+#endif
+        }
+    }
+
+    /* ── 3. WiFi connection ──────────────────────────────────────────────── */
+    if (wifi_mgr_init(&s_device_cfg) != PORTUNUS_OK) {
         ESP_LOGE(TAG, "System halted: WiFi init failure");
         return;
     }
@@ -123,16 +154,16 @@ extern "C" void app_main(void)
         return;
     }
 #else
-    ESP_LOGW(TAG, "WiFi disabled by configuration — running offline");
+    ESP_LOGW(TAG, "WiFi disabled — skipping NVS config load and running offline");
 #endif
 
-    /* ── 3. Event bus ────────────────────────────────────────────────────── */
+    /* ── 4. Event bus ────────────────────────────────────────────────────── */
     if (event_bus_init() != PORTUNUS_OK) {
         ESP_LOGE(TAG, "System halted: event bus init failure");
         return;
     }
 
-    /* ── 4. Construct module instances ───────────────────────────────────── */
+    /* ── 5. Construct module instances ───────────────────────────────────── */
 
     /*
      * Each module has static storage duration so it outlives
@@ -168,7 +199,7 @@ extern "C" void app_main(void)
     IFeedback *feedback_ptr = nullptr;
 #endif
 
-    /* ── 5. Construct and initialise FSM ─────────────────────────────────── */
+    /* ── 6. Construct and initialise FSM ─────────────────────────────────── */
 
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
     static SystemFSM fsm(reader_ptr, access_ptr, feedback_ptr);
@@ -196,7 +227,7 @@ extern "C" void app_main(void)
         return;
     }
 
-    /* ── 6. Start independent services ───────────────────────────────────── */
+    /* ── 7. Start independent services ───────────────────────────────────── */
 
 #ifdef CONFIG_PORTUNUS_ENABLE_HEARTBEAT
     if (heartbeat_service_start() != PORTUNUS_OK) {
@@ -207,12 +238,12 @@ extern "C" void app_main(void)
 #endif
 
 #ifdef CONFIG_PORTUNUS_ENABLE_WIFI
-    if (server_comm_init() != PORTUNUS_OK) {
+    if (server_comm_init(&s_device_cfg) != PORTUNUS_OK) {
         ESP_LOGE(TAG, "Server comm init failed — running in offline mode");
     }
 #endif
 
-    /* ── 7. Start FSM ────────────────────────────────────────────────────── */
+    /* ── 8. Start FSM ────────────────────────────────────────────────────── */
     if (fsm.start() != PORTUNUS_OK) {
         ESP_LOGE(TAG, "System halted: FSM start failure");
         return;

@@ -1,10 +1,13 @@
 /**
  * @file network_config.h
- * @brief Network configuration constants for the Portunus access module.
+ * @brief Network timing constants for the Portunus access module.
  *
- * All values are sourced from Kconfig so that dev/prod differences and
- * per-deployment credentials are managed through sdkconfig overlays
- * rather than hardcoded strings.
+ * Deployment-specific values (module ID, WiFi credentials, server host/port)
+ * are no longer compile-time constants.  They are loaded from NVS at boot via
+ * portunus_nvs_load() and passed to wifi_mgr_init() / server_comm_init().
+ *
+ * This file retains only the timing and timeout values that are legitimately
+ * build-time constants (not secrets, not site-specific deployment data).
  */
 
 #pragma once
@@ -14,15 +17,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/* ── Module identity ────────────────────────────────────────────────────────── */
-
-/** Unique name for this access module (max 32 chars). */
-#define PORTUNUS_MODULE_ID                  CONFIG_PORTUNUS_MODULE_ID
-
-/* ── WiFi station credentials ──────────────────────────────────────────────── */
-#define PORTUNUS_WIFI_SSID                  CONFIG_PORTUNUS_WIFI_SSID
-#define PORTUNUS_WIFI_PASSWORD              CONFIG_PORTUNUS_WIFI_PASSWORD
 
 /* ── WiFi timing ───────────────────────────────────────────────────────────── */
 
@@ -35,16 +29,8 @@ extern "C" {
 
 /* ── Portunus server ───────────────────────────────────────────────────────── */
 
-/** Hostname or IP address of the Portunus server. */
-#define PORTUNUS_SERVER_HOST                CONFIG_PORTUNUS_SERVER_HOST
-
 /** Server request timeout (ms) for gRPC connect and RPC calls. */
 #define PORTUNUS_SERVER_REQUEST_TIMEOUT_MS  CONFIG_PORTUNUS_SERVER_REQUEST_TIMEOUT_MS
-
-/* ── gRPC transport ────────────────────────────────────────────────────────── */
-
-/** TCP port the Portunus server listens on for gRPC (HTTP/2+TLS). */
-#define PORTUNUS_GRPC_SERVER_PORT  CONFIG_PORTUNUS_GRPC_SERVER_PORT
 
 #ifdef __cplusplus
 }

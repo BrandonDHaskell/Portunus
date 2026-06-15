@@ -44,6 +44,10 @@ static esp_netif_t        *s_sta_netif        = NULL;
 static bool                s_initialized      = false;
 static std::atomic<bool>   s_connected{false};
 
+/* WiFi credentials stored at init from NVS, used at connect time */
+static char s_wifi_ssid[PORTUNUS_NVS_WIFI_SSID_LEN];
+static char s_wifi_psk[PORTUNUS_NVS_WIFI_PSK_LEN];
+
 /* ── Reconnect task ────────────────────────────────────────────────────────── */
 static TaskHandle_t  s_reconnect_task   = NULL;
 static uint32_t      s_reconnect_interval_ms = PORTUNUS_WIFI_RECONNECT_INTERVAL_MS;
@@ -183,12 +187,15 @@ static void ip_event_handler(void *arg, esp_event_base_t base,
 
 /* ── Public API ────────────────────────────────────────────────────────────── */
 
-portunus_err_t wifi_mgr_init(void)
+portunus_err_t wifi_mgr_init(const portunus_device_config_t *cfg)
 {
     if (s_initialized) {
         ESP_LOGW(TAG, "WiFi manager already initialised");
         return PORTUNUS_ERR_ALREADY_INIT;
     }
+
+    strlcpy(s_wifi_ssid, cfg->wifi_ssid, sizeof(s_wifi_ssid));
+    strlcpy(s_wifi_psk,  cfg->wifi_psk,  sizeof(s_wifi_psk));
 
     s_wifi_event_group = xEventGroupCreate();
     if (s_wifi_event_group == NULL) {
@@ -256,20 +263,19 @@ portunus_err_t wifi_mgr_start(void)
         return PORTUNUS_ERR_NOT_INIT;
     }
 
-    /* Configure station credentials from Kconfig */
+    /* Configure station credentials from NVS-loaded values */
     wifi_config_t wifi_cfg;
     memset(&wifi_cfg, 0, sizeof(wifi_cfg));
 
-    /* Copy SSID and password from Kconfig — these are compile-time strings */
     strncpy((char *)wifi_cfg.sta.ssid,
-            PORTUNUS_WIFI_SSID,
+            s_wifi_ssid,
             sizeof(wifi_cfg.sta.ssid) - 1);
     strncpy((char *)wifi_cfg.sta.password,
-            PORTUNUS_WIFI_PASSWORD,
+            s_wifi_psk,
             sizeof(wifi_cfg.sta.password) - 1);
 
     /* Require WPA2 minimum unless the password is empty (open network) */
-    if (strlen(PORTUNUS_WIFI_PASSWORD) > 0) {
+    if (strlen(s_wifi_psk) > 0) {
         wifi_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
     }
 
@@ -287,7 +293,7 @@ portunus_err_t wifi_mgr_start(void)
        calls esp_wifi_connect() in the event handler. */
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    ESP_LOGI(TAG, "Connecting to AP \"%s\" ...", PORTUNUS_WIFI_SSID);
+    ESP_LOGI(TAG, "Connecting to AP \"%s\" ...", s_wifi_ssid);
 
     /* Block until connected or timeout */
     EventBits_t bits = xEventGroupWaitBits(

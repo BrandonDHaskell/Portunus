@@ -7,6 +7,12 @@ sdkconfig.old
 # Secrets overlay
 sdkconfig.defaults.secret
 
+# NVS provisioning data — contains WiFi PSK, HMAC secret, and server address.
+# Copy nvs_config.example.csv → nvs_config.csv and fill in real values.
+# Never commit the real file.
+nvs_config.csv
+build/nvs.bin
+
 # Per-device local settings (WiFi credentials, GPIO pins, stack sizes).
 # Generated automatically by firmware:build:prod before a clean sdkconfig rebuild.
 # Never commit — contains passwords.

@@ -39,7 +39,7 @@ if(CONFIG_PORTUNUS_ENABLE_HEARTBEAT)
 endif()
 
 if(CONFIG_PORTUNUS_ENABLE_WIFI)
-    list(APPEND _priv_reqs wifi_mgr server_comm)
+    list(APPEND _priv_reqs wifi_mgr server_comm portunus_nvs)
 endif()
 
 if(CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE AND CONFIG_PORTUNUS_ENABLE_ARM_BUTTON)
