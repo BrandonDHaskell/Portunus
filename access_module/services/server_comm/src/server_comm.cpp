@@ -77,13 +77,17 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_system.h"
+#include "esp_random.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <inttypes.h>
+#include <time.h>
+#include <sys/time.h>
 
 static const char *TAG = "server_comm";
 
@@ -102,6 +106,7 @@ static QueueHandle_t  s_comm_queue    = NULL;
 static TaskHandle_t   s_comm_task     = NULL;
 static bool           s_initialized   = false;
 static bool           s_reader_degraded = false; /* set by EVENT_CREDENTIAL_READ_ERROR, cleared by RECOVERED */
+static bool           s_clock_synced    = false; /* true after first successful settimeofday() from heartbeat */
 
 #if PORTUNUS_USE_GRPC
 /* gRPC client handle — persistent HTTP/2+TLS connection to the server. */
@@ -210,6 +215,96 @@ static bool get_rssi(int32_t *out)
     if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) { return false; }
     *out = ap.rssi;
     return true;
+}
+
+/* ── Clock sync helpers ────────────────────────────────────────────────────── */
+
+/**
+ * @brief Parse an RFC 3339 UTC timestamp into a struct timeval.
+ *
+ * Accepts the format produced by the Go server: "2006-01-02T15:04:05.999999999Z".
+ * Fractional seconds are optional; the 'Z' suffix is assumed (UTC).
+ * Requires the process timezone to be set to UTC0 (done in server_comm_init).
+ *
+ * @return true on success, false if @p s is empty or malformed.
+ */
+static bool parse_server_time(const char *s, struct timeval *out)
+{
+    if (s == NULL || s[0] == '\0') { return false; }
+
+    int year, mon, mday, hour, min, sec;
+    if (sscanf(s, "%4d-%2d-%2dT%2d:%2d:%2d",
+               &year, &mon, &mday, &hour, &min, &sec) < 6) {
+        return false;
+    }
+
+    struct tm tm = {};
+    tm.tm_year  = year - 1900;
+    tm.tm_mon   = mon - 1;
+    tm.tm_mday  = mday;
+    tm.tm_hour  = hour;
+    tm.tm_min   = min;
+    tm.tm_sec   = sec;
+    tm.tm_isdst = 0;
+
+    /* TZ=UTC0 ensures mktime() treats this as UTC, not local time. */
+    time_t t = mktime(&tm);
+    if (t == (time_t)-1) { return false; }
+
+    /* Parse fractional seconds (e.g. ".123456789") → microseconds. */
+    long usec = 0;
+    const char *dot = strchr(s, '.');
+    if (dot != NULL) {
+        /* Copy up to 9 digits, right-pad with '0' to get nanoseconds. */
+        char frac[10] = {'0','0','0','0','0','0','0','0','0','\0'};
+        int i = 0;
+        const char *p = dot + 1;
+        while (i < 9 && *p >= '0' && *p <= '9') { frac[i++] = *p++; }
+        usec = strtol(frac, NULL, 10) / 1000;  /* ns → µs */
+    }
+
+    out->tv_sec  = t;
+    out->tv_usec = (suseconds_t)usec;
+    return true;
+}
+
+/**
+ * @brief Set the system clock from a heartbeat response server_time field.
+ *
+ * Applies an RTT/2 correction: the server captures server_time before the
+ * response travels back, so we add half the observed round-trip to center
+ * the synchronisation error.  On a LAN the residual error is sub-millisecond.
+ *
+ * Sets s_clock_synced = true on success so that handle_credential() can
+ * populate AccessRequest.requested_at for replay protection (phase 2).
+ *
+ * @param server_time  NUL-terminated RFC 3339 string from HeartbeatResponse.
+ * @param rtt_us       Round-trip time of the heartbeat RPC in microseconds.
+ */
+static void sync_clock_from_response(const char *server_time, int64_t rtt_us)
+{
+    struct timeval tv;
+    if (!parse_server_time(server_time, &tv)) {
+        ESP_LOGW(TAG, "Clock sync skipped — unparseable server_time");
+        return;
+    }
+
+    /* Apply RTT/2 offset, carrying microseconds into seconds if needed. */
+    int64_t half_rtt_us = rtt_us / 2;
+    tv.tv_usec += (suseconds_t)(half_rtt_us % 1000000LL);
+    tv.tv_sec  += (time_t)(half_rtt_us / 1000000LL);
+    if (tv.tv_usec >= 1000000L) {
+        tv.tv_sec  += 1;
+        tv.tv_usec -= 1000000L;
+    }
+
+    if (settimeofday(&tv, NULL) != 0) {
+        ESP_LOGW(TAG, "Clock sync failed — settimeofday error");
+        return;
+    }
+
+    s_clock_synced = true;
+    ESP_LOGI(TAG, "Clock synced — server_time=%s rtt=%" PRId64 "us", server_time, rtt_us);
 }
 
 /* ── Transport helpers ─────────────────────────────────────────────────────── */
@@ -539,6 +634,7 @@ static void handle_heartbeat(const event_heartbeat_t *hb)
     /* POST */
     uint8_t resp_buf[portunus_v1_HeartbeatResponse_size + 16];  /* small margin */
     int resp_len = 0;
+    int64_t t_before = esp_timer_get_time();
 
 #if PORTUNUS_USE_GRPC
     char proj[128];
@@ -583,12 +679,15 @@ static void handle_heartbeat(const event_heartbeat_t *hb)
         return;
     }
 
+    int64_t rtt_us = esp_timer_get_time() - t_before;
+    sync_clock_from_response(resp.server_time, rtt_us);
+
     if (s_reader_degraded) {
-        ESP_LOGW(TAG, "Heartbeat OK — known=%d server_time=%s [READER DEGRADED]",
-                 resp.known, resp.server_time);
+        ESP_LOGW(TAG, "Heartbeat OK — known=%d clock_synced=%d [READER DEGRADED]",
+                 resp.known, s_clock_synced);
     } else {
-        ESP_LOGI(TAG, "Heartbeat OK — known=%d server_time=%s",
-                 resp.known, resp.server_time);
+        ESP_LOGI(TAG, "Heartbeat OK — known=%d clock_synced=%d",
+                 resp.known, s_clock_synced);
     }
 }
 
@@ -603,6 +702,25 @@ static void handle_credential(const event_credential_read_t *cred)
 
     char req_log_id[CREDENTIAL_LOG_ID_LEN];
     credential_uid_to_log_id(&cred->credential, req_log_id, sizeof(req_log_id));
+
+    /* Replay protection: fill nonce with 16 cryptographically random bytes. */
+    req.nonce.size = 16;
+    esp_fill_random(req.nonce.bytes, req.nonce.size);
+
+    /* Replay protection: populate requested_at when the clock is synced. */
+    if (s_clock_synced) {
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        struct tm tm_utc;
+        gmtime_r(&tv.tv_sec, &tm_utc);
+        /* Format: "2006-01-02T15:04:05.000000Z" (microsecond precision) */
+        int n = strftime(req.requested_at, sizeof(req.requested_at) - 1,
+                         "%Y-%m-%dT%H:%M:%S", &tm_utc);
+        if (n > 0) {
+            snprintf(req.requested_at + n, sizeof(req.requested_at) - n,
+                     ".%06ldZ", (long)tv.tv_usec);
+        }
+    }
 
     /* Encode */
     uint8_t req_buf[portunus_v1_AccessRequest_size];
@@ -624,8 +742,17 @@ static void handle_credential(const event_credential_read_t *cred)
 #endif
 
 #if PORTUNUS_USE_GRPC
-    char proj[128];
-    snprintf(proj, sizeof(proj), "access|%s|%s", req.module_id, req.credential_id);
+    /* Hex-encode nonce for the HMAC projection.
+     * Format: "access|{module_id}|{credential_id}|{nonce_hex}|{requested_at}"
+     * Must match hmacProjection() in grpcapi/interceptors.go. */
+    char nonce_hex[33] = {};
+    for (size_t i = 0; i < req.nonce.size && i * 2 + 2 < sizeof(nonce_hex); ++i) {
+        snprintf(&nonce_hex[i * 2], 3, "%02x",
+                 static_cast<unsigned>(req.nonce.bytes[i]));
+    }
+    char proj[192];
+    snprintf(proj, sizeof(proj), "access|%s|%s|%s|%s",
+             req.module_id, req.credential_id, nonce_hex, req.requested_at);
     int grpc_status = 0;
     portunus_err_t err = grpc_post_proto(
         "/portunus.v1.PortunusService/RequestAccess",
@@ -925,6 +1052,11 @@ static void comm_task(void *arg)
 
 /* ── Public API ────────────────────────────────────────────────────────────── */
 
+bool server_comm_clock_synced(void)
+{
+    return s_clock_synced;
+}
+
 portunus_err_t server_comm_init(void)
 {
     if (s_initialized) {
@@ -992,6 +1124,10 @@ portunus_err_t server_comm_init(void)
     ESP_LOGI(TAG, "Provision URL: %s", s_provision_url);
     #endif
 #endif /* PORTUNUS_USE_GRPC */
+
+    /* Clock: operate in UTC so mktime() in parse_server_time() is correct. */
+    setenv("TZ", "UTC0", 1);
+    tzset();
 
     /* Create internal queue */
     s_comm_queue = xQueueCreate(COMM_QUEUE_LENGTH, sizeof(portunus_event_t));

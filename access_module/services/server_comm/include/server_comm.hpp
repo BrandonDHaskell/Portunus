@@ -14,9 +14,14 @@
  *     and publishes access decision events back to the event bus.
  *
  * Handles two event types:
- *   EVENT_HEARTBEAT       → POST /v1/heartbeat       → log result
+ *   EVENT_HEARTBEAT       → POST /v1/heartbeat       → sync clock, log result
  *   EVENT_CREDENTIAL_READ → POST /v1/access_request   → publish
  *                           EVENT_ACCESS_GRANTED or EVENT_ACCESS_DENIED
+ *
+ * Clock synchronisation: each successful heartbeat response carries a
+ * server_time field (RFC 3339 UTC).  server_comm applies an RTT/2 correction
+ * and calls settimeofday() so the module has a usable wall-clock time.
+ * server_comm_clock_synced() returns true once the first sync has succeeded.
  *
  * Call server_comm_init() after event_bus_init() and wifi_mgr_init().
  */
@@ -42,6 +47,15 @@ extern "C" {
  *         PORTUNUS_ERR_TASK_CREATE  if task creation failed.
  */
 portunus_err_t server_comm_init(void);
+
+/**
+ * @brief Return true if the module clock has been synchronised at least once.
+ *
+ * False at boot and until the first successful heartbeat response is decoded
+ * and settimeofday() succeeds.  Used by the access path to decide whether
+ * to populate AccessRequest.requested_at for replay protection.
+ */
+bool server_comm_clock_synced(void);
 
 /**
  * @brief Stop the server communication component and release resources.

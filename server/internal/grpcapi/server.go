@@ -111,6 +111,7 @@ func (s *Server) RequestAccess(ctx context.Context, req *pb.AccessRequest) (*pb.
 		ModuleID:     req.GetModuleId(),
 		CredentialID: req.GetCredentialId(),
 		RequestedAt:  req.GetRequestedAt(),
+		Nonce:        req.GetNonce(),
 	}
 	if req.DoorClosed != nil {
 		dc := req.GetDoorClosed()
