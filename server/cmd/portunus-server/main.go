@@ -228,6 +228,7 @@ func main() {
 			HeartbeatService: heartbeatSvc,
 			AccessService:    accessSvc,
 			ProvisionService: provisionSvc,
+			HMACSecret:       cfg.HMACSecret,
 		})
 		pb.RegisterPortunusServiceServer(grpcServer, grpcHandler)
 		if cfg.Env != config.EnvProd {

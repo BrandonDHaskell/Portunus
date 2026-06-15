@@ -38,6 +38,18 @@
   #include "mbedtls/sha256.h"
 #endif
 
+/* ACCESS_POINT builds must use TLS: the response carries a door-grant decision
+ * that is only authenticated at the application layer (HMAC) when TLS is also
+ * present.  Without TLS, any on-path device can forge a granted=true response
+ * even with HMAC fully enabled for outbound requests. */
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
+  #if !PORTUNUS_USE_TLS
+    #error "ACCESS_POINT firmware cannot be built without TLS (CONFIG_PORTUNUS_USE_TLS). " \
+           "A door image without TLS has no authenticated server-to-device channel. " \
+           "Enable TLS in menuconfig → Security Configuration."
+  #endif
+#endif
+
 /* TLS / HMAC */
 #if PORTUNUS_USE_TLS
   #if PORTUNUS_TLS_USE_CUSTOM_CA
@@ -144,6 +156,20 @@ static bool compute_hmac_hex(const uint8_t *data, size_t data_len,
     out_hex[64] = '\0';
     return true;
 }
+/**
+ * @brief Constant-time comparison of two 64-char hex HMAC strings.
+ *
+ * Runs all 64 iterations regardless of the first mismatch to avoid
+ * leaking timing information about partial matches.
+ */
+static bool sig_hex_equal(const char *a, const char *b)
+{
+    uint8_t diff = 0;
+    for (int i = 0; i < 64; ++i) {
+        diff |= static_cast<uint8_t>(a[i]) ^ static_cast<uint8_t>(b[i]);
+    }
+    return diff == 0;
+}
 #endif /* PORTUNUS_HMAC_ENABLED */
 
 /* ── Forward declarations ──────────────────────────────────────────────────── */
@@ -213,6 +239,9 @@ static bool get_rssi(int32_t *out)
  * @param resp_cap       Capacity of resp_buf
  * @param resp_len       [out] Actual protobuf bytes written to resp_buf
  * @param grpc_status    [out] gRPC status code (0 = OK)
+ * @param out_sig_hex    [out] If non-NULL, receives the x-portunus-sig trailer
+ *                       from the server response (PORTUNUS_HMAC_HEX_LEN bytes).
+ *                       Pass NULL for RPCs that do not need response verification.
  *
  * @return PORTUNUS_OK on successful round-trip.
  */
@@ -220,7 +249,8 @@ static portunus_err_t grpc_post_proto(const char *method,
                                        const uint8_t *req_buf, size_t req_len,
                                        const char *sig_projection,
                                        uint8_t *resp_buf, size_t resp_cap,
-                                       int *resp_len, int *grpc_status)
+                                       int *resp_len, int *grpc_status,
+                                       char *out_sig_hex)
 {
 #if PORTUNUS_HMAC_ENABLED
     /* Sign the canonical projection string, not the raw protobuf bytes.
@@ -241,10 +271,34 @@ static portunus_err_t grpc_post_proto(const char *method,
     return grpc_client_unary_call(s_grpc_handle, method,
                                   req_buf, req_len,
                                   resp_buf, resp_cap,
-                                  resp_len, grpc_status);
+                                  resp_len, grpc_status,
+                                  out_sig_hex);
 }
 
 #else /* !PORTUNUS_USE_GRPC — HTTP/1.1 path */
+
+#if PORTUNUS_HMAC_ENABLED
+/** Context passed to the esp_http_client event handler to capture the
+ *  X-Portunus-Sig response header from the server. */
+struct http_resp_ctx_t {
+    char sig_hex[PORTUNUS_HMAC_HEX_LEN];
+};
+
+static esp_err_t s_http_event_handler(esp_http_client_event_t *evt)
+{
+    if (evt->event_id != HTTP_EVENT_ON_HEADER) { return ESP_OK; }
+    auto *ctx = static_cast<http_resp_ctx_t *>(evt->user_data);
+    if (ctx == nullptr) { return ESP_OK; }
+    if (strcasecmp(evt->header_key, PORTUNUS_HMAC_HEADER_NAME) == 0 &&
+        evt->header_value != nullptr) {
+        size_t len = strlen(evt->header_value);
+        if (len > PORTUNUS_HMAC_HEX_LEN - 1) { len = PORTUNUS_HMAC_HEX_LEN - 1; }
+        memcpy(ctx->sig_hex, evt->header_value, len);
+        ctx->sig_hex[len] = '\0';
+    }
+    return ESP_OK;
+}
+#endif /* PORTUNUS_HMAC_ENABLED */
 
 /**
  * @brief POST a protobuf-encoded buffer to url, read the response into
@@ -255,6 +309,8 @@ static portunus_err_t grpc_post_proto(const char *method,
  *   • Validates the server certificate via the ESP-IDF Mozilla CA bundle
  *     unless PORTUNUS_TLS_SKIP_VERIFY is set (dev only).
  *   • Adds X-Portunus-Sig HMAC-SHA256 header when PORTUNUS_HMAC_ENABLED.
+ *   • When out_sig_hex is non-NULL and HMAC is enabled, captures the
+ *     server's X-Portunus-Sig response header for caller verification.
  *
  * @param url        Full URL (e.g. "https://192.168.1.100:8443/v1/heartbeat")
  * @param req_buf    Encoded protobuf request body
@@ -263,18 +319,32 @@ static portunus_err_t grpc_post_proto(const char *method,
  * @param resp_cap   Capacity of resp_buf
  * @param resp_len   [out] Actual bytes written to resp_buf
  * @param http_status [out] HTTP status code
+ * @param out_sig_hex [out] If non-NULL and HMAC is enabled, receives the
+ *                    server's X-Portunus-Sig response header value
+ *                    (PORTUNUS_HMAC_HEX_LEN bytes, NUL-terminated).
  *
  * @return PORTUNUS_OK on successful round-trip (even if http_status != 200).
  */
 static portunus_err_t http_post_proto(const char *url,
                                       const uint8_t *req_buf, size_t req_len,
                                       uint8_t *resp_buf, size_t resp_cap,
-                                      int *resp_len, int *http_status)
+                                      int *resp_len, int *http_status,
+                                      char *out_sig_hex)
 {
     esp_http_client_config_t cfg = {};
     cfg.url         = url;
     cfg.timeout_ms  = PORTUNUS_SERVER_REQUEST_TIMEOUT_MS;
     cfg.disable_auto_redirect = true;
+
+#if PORTUNUS_HMAC_ENABLED
+    http_resp_ctx_t resp_ctx = {};
+    if (out_sig_hex != nullptr) {
+        cfg.event_handler = s_http_event_handler;
+        cfg.user_data     = &resp_ctx;
+    }
+#else
+    (void)out_sig_hex;
+#endif
 
 #if PORTUNUS_USE_TLS
   #if PORTUNUS_TLS_SKIP_VERIFY
@@ -353,6 +423,14 @@ static portunus_err_t http_post_proto(const char *url,
         if ((size_t)total_read >= resp_cap) { break; }
     }
     *resp_len = total_read;
+
+#if PORTUNUS_HMAC_ENABLED
+    if (out_sig_hex != nullptr) {
+        size_t sig_len = strnlen(resp_ctx.sig_hex, sizeof(resp_ctx.sig_hex));
+        memcpy(out_sig_hex, resp_ctx.sig_hex, sig_len);
+        out_sig_hex[sig_len] = '\0';
+    }
+#endif
 
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
@@ -471,7 +549,7 @@ static void handle_heartbeat(const event_heartbeat_t *hb)
         req_buf, ostream.bytes_written,
         proj,
         resp_buf, sizeof(resp_buf),
-        &resp_len, &grpc_status);
+        &resp_len, &grpc_status, nullptr);
     if (err != PORTUNUS_OK) {
         ESP_LOGW(TAG, "Heartbeat gRPC failed: err=0x%04x", (unsigned)err);
         return;
@@ -485,7 +563,7 @@ static void handle_heartbeat(const event_heartbeat_t *hb)
     portunus_err_t err = http_post_proto(s_heartbeat_url,
                                          req_buf, ostream.bytes_written,
                                          resp_buf, sizeof(resp_buf),
-                                         &resp_len, &status);
+                                         &resp_len, &status, nullptr);
     if (err != PORTUNUS_OK) {
         ESP_LOGW(TAG, "Heartbeat HTTP failed: err=0x%04x", (unsigned)err);
         return;
@@ -538,6 +616,12 @@ static void handle_credential(const event_credential_read_t *cred)
     /* POST */
     uint8_t resp_buf[portunus_v1_AccessResponse_size + 16];
     int resp_len = 0;
+#if PORTUNUS_HMAC_ENABLED
+    char resp_sig_hex[PORTUNUS_HMAC_HEX_LEN] = {};
+    char *p_resp_sig = resp_sig_hex;
+#else
+    char *p_resp_sig = nullptr;
+#endif
 
 #if PORTUNUS_USE_GRPC
     char proj[128];
@@ -548,7 +632,7 @@ static void handle_credential(const event_credential_read_t *cred)
         req_buf, ostream.bytes_written,
         proj,
         resp_buf, sizeof(resp_buf),
-        &resp_len, &grpc_status);
+        &resp_len, &grpc_status, p_resp_sig);
     if (err != PORTUNUS_OK) {
         ESP_LOGW(TAG, "Access gRPC failed: err=0x%04x", (unsigned)err);
         publish_access_denied(req_log_id, "grpc_error");
@@ -564,7 +648,7 @@ static void handle_credential(const event_credential_read_t *cred)
     portunus_err_t err = http_post_proto(s_access_url,
                                          req_buf, ostream.bytes_written,
                                          resp_buf, sizeof(resp_buf),
-                                         &resp_len, &status);
+                                         &resp_len, &status, p_resp_sig);
     if (err != PORTUNUS_OK) {
         ESP_LOGW(TAG, "Access HTTP failed: err=0x%04x", (unsigned)err);
         publish_access_denied(req_log_id, "http_error");
@@ -586,6 +670,31 @@ static void handle_credential(const event_credential_read_t *cred)
         publish_access_denied(req_log_id, "decode_error");
         return;
     }
+
+#if PORTUNUS_HMAC_ENABLED
+    /* Verify the server's response signature before acting on the decision.
+     * Projection: "access|{module_id}|{credential_id}|{0 or 1}" — must match
+     * AccessResponseProjection() in server/internal/grpcapi/interceptors.go. */
+    if (resp_sig_hex[0] == '\0') {
+        ESP_LOGE(TAG, "Access response missing X-Portunus-Sig — denying");
+        publish_access_denied(req_log_id, "missing_response_sig");
+        return;
+    }
+    char resp_proj[128];
+    snprintf(resp_proj, sizeof(resp_proj), "access|%s|%s|%d",
+             req.module_id, req.credential_id, resp.granted ? 1 : 0);
+    char expected_sig[PORTUNUS_HMAC_HEX_LEN];
+    if (!compute_hmac_hex((const uint8_t *)resp_proj, strlen(resp_proj), expected_sig)) {
+        ESP_LOGE(TAG, "HMAC compute failed during response verify");
+        publish_access_denied(req_log_id, "sig_compute_error");
+        return;
+    }
+    if (!sig_hex_equal(resp_sig_hex, expected_sig)) {
+        ESP_LOGE(TAG, "Access response HMAC mismatch — denying");
+        publish_access_denied(req_log_id, "invalid_response_sig");
+        return;
+    }
+#endif /* PORTUNUS_HMAC_ENABLED */
 
     ESP_LOGI(TAG, "Access decision — id=%s granted=%d reason=%s known=%d",
              req_log_id, resp.granted, resp.reason, resp.known);
@@ -676,7 +785,7 @@ static void handle_provision(const event_provision_request_t *req)
         req_buf, ostream.bytes_written,
         proj,
         resp_buf, sizeof(resp_buf),
-        &resp_len, &grpc_status);
+        &resp_len, &grpc_status, nullptr);
     if (err != PORTUNUS_OK) {
         ESP_LOGW(TAG, "Provision gRPC failed: 0x%04x", (unsigned)err);
         publish_provision_result(PROVISION_RESULT_COMM_ERROR, NULL, "grpc_error");
@@ -692,7 +801,7 @@ static void handle_provision(const event_provision_request_t *req)
     portunus_err_t err = http_post_proto(s_provision_url,
                                          req_buf, ostream.bytes_written,
                                          resp_buf, sizeof(resp_buf),
-                                         &resp_len, &http_status);
+                                         &resp_len, &http_status, nullptr);
     if (err != PORTUNUS_OK) {
         ESP_LOGW(TAG, "Provision HTTP failed: 0x%04x", (unsigned)err);
         publish_provision_result(PROVISION_RESULT_COMM_ERROR, NULL, "http_error");

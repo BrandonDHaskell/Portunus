@@ -80,6 +80,9 @@ struct stream_state_t {
     bool     stream_closed;      /**< True after stream is fully closed. */
     bool     got_error;          /**< True if an error occurred during the stream. */
     uint32_t stream_error_code;  /**< HTTP/2 RST_STREAM error code (0 = clean close). */
+
+    /* Response HMAC (x-portunus-sig trailer from server) */
+    char     resp_sig_hex[65];   /**< NUL-terminated hex-encoded signature, or empty. */
 };
 
 /** Main client structure (opaque to callers). */
@@ -252,6 +255,15 @@ static int cb_on_header(nghttp2_session *session,
         size_t copy_len = valuelen < sizeof(status_str) - 1 ? valuelen : sizeof(status_str) - 1;
         memcpy(status_str, value, copy_len);
         ss->grpc_status = atoi(status_str);
+    }
+
+    /* Capture the response HMAC signature trailer from the server. */
+    if (namelen == 14 && memcmp(name, "x-portunus-sig", 14) == 0) {
+        size_t copy_len = valuelen < sizeof(ss->resp_sig_hex) - 1
+                          ? valuelen
+                          : sizeof(ss->resp_sig_hex) - 1;
+        memcpy(ss->resp_sig_hex, value, copy_len);
+        ss->resp_sig_hex[copy_len] = '\0';
     }
 
     /* Log :status for debugging. */
@@ -727,7 +739,8 @@ portunus_err_t grpc_client_unary_call(grpc_client_handle_t c,
                                        const char *service_method,
                                        const uint8_t *req_buf, size_t req_len,
                                        uint8_t *resp_buf, size_t resp_cap,
-                                       int *resp_len, int *grpc_status)
+                                       int *resp_len, int *grpc_status,
+                                       char *out_sig_hex)
 {
     if (c == nullptr || service_method == nullptr || req_buf == nullptr ||
         resp_buf == nullptr || resp_len == nullptr || grpc_status == nullptr) {
@@ -882,6 +895,13 @@ portunus_err_t grpc_client_unary_call(grpc_client_handle_t c,
 
     ESP_LOGD(TAG, "gRPC call %s complete: status=%d, response=%d bytes",
              service_method, *grpc_status, *resp_len);
+
+    /* Propagate the response signature trailer to the caller. */
+    if (out_sig_hex != nullptr) {
+        size_t sig_len = strnlen(ss.resp_sig_hex, sizeof(ss.resp_sig_hex));
+        memcpy(out_sig_hex, ss.resp_sig_hex, sig_len);
+        out_sig_hex[sig_len] = '\0';
+    }
 
     return PORTUNUS_OK;
 }

@@ -2,9 +2,13 @@ package httpapi
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -54,6 +58,7 @@ type Server struct {
 	moduleAuthService    *service.ModuleAuthorizationService
 	auditStore           store.AuditStore
 	credentialHashSecret []byte
+	hmacSecret           string
 	tlsEnabled           bool
 }
 
@@ -74,6 +79,7 @@ func NewServer(d Dependencies) *Server {
 		moduleAuthService:    d.ModuleAuthService,
 		auditStore:           d.AuditStore,
 		credentialHashSecret: d.CredentialHashSecret,
+		hmacSecret:           d.HMACSecret,
 		tlsEnabled:           d.TLSEnabled,
 	}
 
@@ -335,6 +341,17 @@ func (s *Server) handleAccessRequest(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "internal_error", "unexpected server error")
 			return
 		}
+	}
+
+	if s.hmacSecret != "" {
+		v := 0
+		if resp.Granted {
+			v = 1
+		}
+		proj := fmt.Sprintf("access|%s|%s|%d", req.ModuleID, req.CredentialID, v)
+		mac := hmac.New(sha256.New, []byte(s.hmacSecret))
+		mac.Write([]byte(proj))
+		w.Header().Set("X-Portunus-Sig", hex.EncodeToString(mac.Sum(nil)))
 	}
 
 	if !resp.Known {

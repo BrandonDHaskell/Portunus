@@ -47,6 +47,31 @@ func hmacProjection(req interface{}) ([]byte, error) {
 	}
 }
 
+// accessResponseProjection returns the canonical string the server signs for an
+// AccessResponse and the device verifies before publishing EVENT_ACCESS_GRANTED.
+// Format: "access|{module_id}|{credential_id}|{1 or 0}"
+// Must match the snprintf in handle_credential() in server_comm.cpp.
+func accessResponseProjection(moduleID, credentialID string, granted bool) []byte {
+	v := 0
+	if granted {
+		v = 1
+	}
+	return []byte(fmt.Sprintf("access|%s|%s|%d", moduleID, credentialID, v))
+}
+
+// AccessResponseSig computes the HMAC-SHA256 signature the server attaches to
+// an AccessResponse.  Returns an empty string when secret is empty (HMAC
+// disabled), so callers can gate on a non-empty result.
+func AccessResponseSig(secret, moduleID, credentialID string, granted bool) string {
+	if secret == "" {
+		return ""
+	}
+	projection := accessResponseProjection(moduleID, credentialID, granted)
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(projection)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 // HMACInterceptor returns a gRPC unary server interceptor that verifies
 // the HMAC-SHA256 signature attached as custom metadata by the ESP32.
 //

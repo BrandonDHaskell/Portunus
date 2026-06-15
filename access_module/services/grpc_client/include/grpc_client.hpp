@@ -136,6 +136,10 @@ bool grpc_client_is_connected(grpc_client_handle_t handle);
  * @param resp_cap       Capacity of resp_buf in bytes.
  * @param resp_len       [out] Actual protobuf bytes written to resp_buf.
  * @param grpc_status    [out] gRPC status code from trailers (0 = OK).
+ * @param out_sig_hex    [out] If non-NULL, receives the NUL-terminated hex-encoded
+ *                       x-portunus-sig trailer value (PORTUNUS_HMAC_HEX_LEN bytes).
+ *                       Zero-filled on entry; left empty if the server did not
+ *                       send the header.  Pass NULL to ignore.
  *
  * @return PORTUNUS_OK        Round-trip succeeded (check grpc_status for app errors).
  *         PORTUNUS_ERR_HTTP_CONNECT  Could not establish connection.
@@ -147,7 +151,8 @@ portunus_err_t grpc_client_unary_call(grpc_client_handle_t handle,
                                        const char *service_method,
                                        const uint8_t *req_buf, size_t req_len,
                                        uint8_t *resp_buf, size_t resp_cap,
-                                       int *resp_len, int *grpc_status);
+                                       int *resp_len, int *grpc_status,
+                                       char *out_sig_hex);
 
 /**
  * @brief Send an HTTP/2 PING and wait for the ACK (B18).
