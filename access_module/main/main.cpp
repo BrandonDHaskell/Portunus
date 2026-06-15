@@ -68,6 +68,7 @@
 #include "freertos/task.h"
 
 #include <inttypes.h>
+#include <string.h>
 
 static const char *TAG = "portunus";
 
