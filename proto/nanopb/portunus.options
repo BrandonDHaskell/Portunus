@@ -29,9 +29,11 @@ portunus.v1.HeartbeatResponse.module_id              max_size:33
 portunus.v1.HeartbeatResponse.server_time            max_size:40
 
 # ── AccessRequest ───────────────────────────────────────────────────────
+#   nonce – 16 raw bytes from esp_random(); fixed-size bytes field
 portunus.v1.AccessRequest.module_id                  max_size:33
 portunus.v1.AccessRequest.credential_id              max_size:30
 portunus.v1.AccessRequest.requested_at               max_size:40
+portunus.v1.AccessRequest.nonce                      max_size:16
 
 # ── AccessResponse ──────────────────────────────────────────────────────
 portunus.v1.AccessResponse.reason                    max_size:33

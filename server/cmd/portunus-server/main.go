@@ -191,8 +191,9 @@ func main() {
 			grpcapi.LoggingInterceptor(logger),
 		}
 		if cfg.HMACSecret != "" {
-			interceptors = append(interceptors, grpcapi.HMACInterceptor(cfg.HMACSecret))
-			logger.Printf("gRPC HMAC auth: ENABLED")
+			replayStore := grpcapi.NewReplayStore(60 * time.Second)
+			interceptors = append(interceptors, grpcapi.HMACInterceptor(cfg.HMACSecret, replayStore))
+			logger.Printf("gRPC HMAC auth: ENABLED (replay window: 60s)")
 		} else {
 			logger.Printf("gRPC HMAC auth: DISABLED (set PORTUNUS_HMAC_SECRET to enable)")
 		}

@@ -46,6 +46,7 @@ func accessRequestFromProto(p *pb.AccessRequest) types.AccessRequest {
 		ModuleID:     p.GetModuleId(),
 		CredentialID: p.GetCredentialId(),
 		RequestedAt:  p.GetRequestedAt(),
+		Nonce:        p.GetNonce(),
 	}
 
 	if p.DoorClosed != nil {
