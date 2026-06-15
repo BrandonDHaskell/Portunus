@@ -1,5 +1,5 @@
-#include "arm_button_gpio.h"
-#include "error_codes.h"
+#include "arm_button_gpio.hpp"
+#include "error_codes.hpp"
 #include "driver/gpio.h"
 #include "esp_log.h"
 

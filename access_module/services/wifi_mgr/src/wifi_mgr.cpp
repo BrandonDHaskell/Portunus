@@ -15,9 +15,9 @@
  * The backoff resets on a successful connection (IP_EVENT_STA_GOT_IP).
  */
 
-#include "wifi_mgr.h"
-#include "network_config.h"
-#include "error_codes.h"
+#include "wifi_mgr.hpp"
+#include "network_config.hpp"
+#include "error_codes.hpp"
 
 #include "esp_wifi.h"
 #include "esp_netif.h"

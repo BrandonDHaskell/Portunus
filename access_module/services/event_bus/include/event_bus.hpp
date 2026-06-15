@@ -18,8 +18,8 @@
 
 #pragma once
 
-#include "event_types.h"
-#include "portunus_types.h"
+#include "event_types.hpp"
+#include "portunus_types.hpp"
 #include "freertos/FreeRTOS.h"
 
 #ifdef __cplusplus

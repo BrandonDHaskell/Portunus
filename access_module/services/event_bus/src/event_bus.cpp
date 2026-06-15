@@ -6,9 +6,9 @@
  * table. See project plan §3.5 for the rationale and scaling notes.
  */
 
-#include "event_bus.h"
-#include "error_codes.h"
-#include "timing_config.h"
+#include "event_bus.hpp"
+#include "error_codes.hpp"
+#include "timing_config.hpp"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"

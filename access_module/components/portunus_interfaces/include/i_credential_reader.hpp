@@ -15,7 +15,7 @@
 #pragma once
 
 #include "credential_types.h"
-#include "portunus_types.h"
+#include "portunus_types.hpp"
 
 /**
  * @brief Abstract credential reader interface.

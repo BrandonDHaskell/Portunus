@@ -20,13 +20,13 @@
  * Architecture layer: Core / FSM (see project plan §3.1, §5.2).
  */
 
-#include "system_fsm.h"
-#include "event_bus.h"
-#include "timing_config.h"
-#include "error_codes.h"
+#include "system_fsm.hpp"
+#include "event_bus.hpp"
+#include "timing_config.hpp"
+#include "error_codes.hpp"
 #include "credential_types.h"
 #ifdef CONFIG_PORTUNUS_ENABLE_WIFI
-#include "wifi_mgr.h"
+#include "wifi_mgr.hpp"
 #endif
 
 #include <inttypes.h>

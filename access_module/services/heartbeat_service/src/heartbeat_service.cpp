@@ -6,11 +6,11 @@
  * telemetry, and publishes an EVENT_HEARTBEAT to the event bus.
  */
 
-#include "heartbeat_service.h"
-#include "event_bus.h"
-#include "event_types.h"
-#include "error_codes.h"
-#include "timing_config.h"
+#include "heartbeat_service.hpp"
+#include "event_bus.hpp"
+#include "event_types.hpp"
+#include "error_codes.hpp"
+#include "timing_config.hpp"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"

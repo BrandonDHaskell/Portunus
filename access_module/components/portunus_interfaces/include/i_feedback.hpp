@@ -18,7 +18,7 @@
 
 #pragma once
 
-#include "portunus_types.h"
+#include "portunus_types.hpp"
 
 #include <stdint.h>
 

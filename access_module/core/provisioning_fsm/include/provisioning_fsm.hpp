@@ -29,11 +29,11 @@
 
 #pragma once
 
-#include "event_types.h"
-#include "i_arm.h"
-#include "i_credential_reader.h"
-#include "i_feedback.h"
-#include "portunus_types.h"
+#include "event_types.hpp"
+#include "i_arm.hpp"
+#include "i_credential_reader.hpp"
+#include "i_feedback.hpp"
+#include "portunus_types.hpp"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"

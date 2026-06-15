@@ -10,9 +10,9 @@
  * on the next tick, immediately preempting any in-progress pattern.
  */
 
-#include "feedback_led.h"
-#include "led_hal.h"       /* internal HAL */
-#include "error_codes.h"
+#include "feedback_led.hpp"
+#include "led_hal.hpp"       /* internal HAL */
+#include "error_codes.hpp"
 
 #include <inttypes.h>
 #include "esp_log.h"

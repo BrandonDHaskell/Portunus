@@ -11,18 +11,18 @@
  * logic (closed = true).
  */
 
-#include "access_point_gpio.h"
-#include "error_codes.h"
+#include "access_point_gpio.hpp"
+#include "error_codes.hpp"
 
 #include <inttypes.h>
 #include "esp_log.h"
 
 #ifdef CONFIG_PORTUNUS_ENABLE_DOOR_STRIKE
-#include "door_strike.h"    /* internal HAL */
+#include "door_strike.hpp"    /* internal HAL */
 #endif
 
 #ifdef CONFIG_PORTUNUS_ENABLE_REED_SWITCH
-#include "reed_switch.h"    /* internal HAL */
+#include "reed_switch.hpp"    /* internal HAL */
 #endif
 
 static const char *TAG = "access_point_gpio";

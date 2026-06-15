@@ -14,7 +14,7 @@ ReaderMfrc522 exposes this functionality via ICredentialReader.
 #pragma once
 
 #include "credential_types.h"
-#include "portunus_types.h"
+#include "portunus_types.hpp"
 
 #ifdef __cplusplus
 extern "C" {

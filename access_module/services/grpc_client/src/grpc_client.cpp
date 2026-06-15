@@ -19,8 +19,8 @@
  *   5. Connection kept alive between RPCs; reconnect on error
  */
 
-#include "grpc_client.h"
-#include "error_codes.h"
+#include "grpc_client.hpp"
+#include "error_codes.hpp"
 
 #include "esp_tls.h"
 #include "esp_crt_bundle.h"

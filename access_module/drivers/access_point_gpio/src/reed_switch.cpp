@@ -19,10 +19,10 @@
  *
  */
 
-#include "reed_switch.h"
-#include "pin_config.h"
-#include "timing_config.h"
-#include "error_codes.h"
+#include "reed_switch.hpp"
+#include "pin_config.hpp"
+#include "timing_config.hpp"
+#include "error_codes.hpp"
 
 #include "driver/gpio.h"
 #include "esp_log.h"

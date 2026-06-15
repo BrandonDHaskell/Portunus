@@ -7,8 +7,8 @@
  * in mfrc522_hal.cpp.
  */
 
-#include "reader_mfrc522.h"
-#include "mfrc522.h"       /* internal HAL */
+#include "reader_mfrc522.hpp"
+#include "mfrc522.hpp"       /* internal HAL */
 
 #include "esp_log.h"
 

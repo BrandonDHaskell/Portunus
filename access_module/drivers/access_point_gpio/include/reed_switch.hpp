@@ -17,7 +17,7 @@
 
 #pragma once
 
-#include "portunus_types.h"
+#include "portunus_types.hpp"
 
 #ifdef __cplusplus
 extern "C" {

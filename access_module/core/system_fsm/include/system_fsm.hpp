@@ -19,11 +19,11 @@
 
 #pragma once
 
-#include "system_states.h"
-#include "event_types.h"
-#include "i_credential_reader.h"
-#include "i_access_point.h"
-#include "i_feedback.h"
+#include "system_states.hpp"
+#include "event_types.hpp"
+#include "i_credential_reader.hpp"
+#include "i_access_point.hpp"
+#include "i_feedback.hpp"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"

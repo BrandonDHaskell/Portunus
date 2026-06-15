@@ -17,42 +17,42 @@
 
 #include "sdkconfig.h"
 
-#include "portunus_types.h"
-#include "error_codes.h"
-#include "event_types.h"
-#include "system_states.h"
-#include "timing_config.h"
-#include "event_bus.h"
+#include "portunus_types.hpp"
+#include "error_codes.hpp"
+#include "event_types.hpp"
+#include "system_states.hpp"
+#include "timing_config.hpp"
+#include "event_bus.hpp"
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
-#include "system_fsm.h"
+#include "system_fsm.hpp"
 #endif
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
-#include "provisioning_fsm.h"
+#include "provisioning_fsm.hpp"
 #endif
 
 /* Optional services (feature-gated) */
 #ifdef CONFIG_PORTUNUS_ENABLE_HEARTBEAT
-#include "heartbeat_service.h"
+#include "heartbeat_service.hpp"
 #endif
 
 #ifdef CONFIG_PORTUNUS_ENABLE_WIFI
-#include "wifi_mgr.h"
-#include "network_config.h"
-#include "server_comm.h"
+#include "wifi_mgr.hpp"
+#include "network_config.hpp"
+#include "server_comm.hpp"
 #endif
 
 /* Concrete module implementations */
 #ifdef CONFIG_PORTUNUS_ENABLE_MFRC522
-#include "reader_mfrc522.h"
+#include "reader_mfrc522.hpp"
 #endif
 #ifdef CONFIG_PORTUNUS_ENABLE_DOOR_STRIKE
-#include "access_point_gpio.h"
+#include "access_point_gpio.hpp"
 #endif
 #ifdef CONFIG_PORTUNUS_ENABLE_LED
-#include "feedback_led.h"
+#include "feedback_led.hpp"
 #endif
 #if defined(CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE) && defined(CONFIG_PORTUNUS_ENABLE_ARM_BUTTON)
-#include "arm_button_gpio.h"
+#include "arm_button_gpio.hpp"
 #endif
 
 #include "nvs_flash.h"
