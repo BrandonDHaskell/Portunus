@@ -2,16 +2,19 @@
  * @file security_config.h
  * @brief Security configuration constants for the Portunus access module.
  *
- * Two complementary mechanisms protect server communication:
+ * Two mechanisms protect server communication:
  *
- *   1. TLS (HTTPS) — channel-level encryption via mbedTLS / ESP-IDF cert bundle.
- *      Prevents eavesdropping and MITM attacks on the network.
+ *   1. TLS (HTTPS) — mandatory for ACCESS_POINT builds.  A door image cannot
+ *      be compiled without TLS; the #error gate in server_comm.cpp enforces
+ *      this, and the Kconfig dependency prevents menuconfig from allowing the
+ *      combination.  TLS authenticates the server and encrypts the channel.
  *      Enabled by CONFIG_PORTUNUS_USE_TLS (Kconfig).
  *
- *   2. HMAC-SHA256 request signing — application-level message authentication.
- *      Every outbound POST includes an X-Portunus-Sig header containing
- *      HMAC-SHA256(pre_shared_key, request_body_bytes).
- *      The server rejects any request whose signature does not match.
+ *   2. HMAC-SHA256 message authentication — belt-and-suspenders on top of TLS,
+ *      not a TLS replacement.  Applied to both outbound requests (X-Portunus-Sig
+ *      header) and inbound access responses (server signs the response; device
+ *      verifies before publishing EVENT_ACCESS_GRANTED).  A door grant without
+ *      a valid response signature is treated as a deny.
  *      Enabled by CONFIG_PORTUNUS_HMAC_ENABLED (Kconfig).
  *
  * Key management notes:

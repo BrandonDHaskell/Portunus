@@ -17,6 +17,7 @@ menu "Portunus Configuration"
 
             config PORTUNUS_MODULE_TYPE_ACCESS_POINT
                 bool "Access point (door control)"
+                depends on PORTUNUS_USE_TLS
                 imply PORTUNUS_ENABLE_DOOR_STRIKE
 
             config PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE

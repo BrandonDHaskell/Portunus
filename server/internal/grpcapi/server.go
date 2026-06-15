@@ -22,7 +22,9 @@ import (
 	"github.com/BrandonDHaskell/Portunus/server/internal/pbconvert"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/types"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -32,6 +34,11 @@ type Dependencies struct {
 	HeartbeatService *service.HeartbeatService
 	AccessService    *service.AccessService
 	ProvisionService *service.ProvisionService
+	// HMACSecret is the pre-shared key used to sign AccessResponse messages.
+	// When non-empty the server attaches an x-portunus-sig trailing metadata
+	// entry so the device can verify the response before acting on it.
+	// Must match CONFIG_PORTUNUS_HMAC_SECRET in the firmware.
+	HMACSecret string
 }
 
 // Server implements pb.PortunusServiceServer.
@@ -42,6 +49,7 @@ type Server struct {
 	heartbeatService *service.HeartbeatService
 	accessService    *service.AccessService
 	provisionService *service.ProvisionService
+	hmacSecret       string
 }
 
 // NewServer creates a gRPC server handler that delegates to the service layer.
@@ -51,6 +59,7 @@ func NewServer(d Dependencies) *Server {
 		heartbeatService: d.HeartbeatService,
 		accessService:    d.AccessService,
 		provisionService: d.ProvisionService,
+		hmacSecret:       d.HMACSecret,
 	}
 }
 
@@ -122,14 +131,20 @@ func (s *Server) RequestAccess(ctx context.Context, req *pb.AccessRequest) (*pb.
 		}
 	}
 
-	return &pb.AccessResponse{
+	pbResp := &pb.AccessResponse{
 		Ok:         resp.OK,
 		Known:      resp.Known,
 		Granted:    resp.Granted,
 		Reason:     resp.Reason,
 		ModuleId:   resp.ModuleID,
 		ServerTime: resp.ServerTime,
-	}, nil
+	}
+
+	if sig := AccessResponseSig(s.hmacSecret, domainReq.ModuleID, domainReq.CredentialID, resp.Granted); sig != "" {
+		grpc.SetTrailer(ctx, metadata.Pairs(hmacHeaderKey, sig))
+	}
+
+	return pbResp, nil
 }
 
 // ─── Provision ──────────────────────────────────────────────────────────────
