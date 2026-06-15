@@ -89,6 +89,13 @@ extern "C" {
   #define PORTUNUS_HMAC_SECRET  CONFIG_PORTUNUS_HMAC_SECRET
 #endif
 
+#if PORTUNUS_HMAC_ENABLED
+  /* sizeof(string literal) includes the NUL, so an empty secret is sizeof == 1. */
+  _Static_assert(sizeof(PORTUNUS_HMAC_SECRET) > 1,
+                 "PORTUNUS_HMAC_ENABLED is set but PORTUNUS_HMAC_SECRET is empty. "
+                 "Set CONFIG_PORTUNUS_HMAC_SECRET (openssl rand -hex 32) or disable HMAC.");
+#endif
+
 /** HTTP header name for the HMAC signature. */
 #define PORTUNUS_HMAC_HEADER_NAME  "X-Portunus-Sig"
 
