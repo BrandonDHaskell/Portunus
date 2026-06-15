@@ -41,6 +41,11 @@
 #include "server_comm.hpp"
 #endif
 
+/* Interface types — needed unconditionally for pointer declarations below */
+#include "i_credential_reader.hpp"
+#include "i_access_point.hpp"
+#include "i_feedback.hpp"
+
 /* Concrete module implementations */
 #ifdef CONFIG_PORTUNUS_ENABLE_MFRC522
 #include "reader_mfrc522.hpp"
