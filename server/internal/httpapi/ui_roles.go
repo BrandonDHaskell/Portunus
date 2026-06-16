@@ -137,9 +137,19 @@ func (s *Server) handleUIRolesSetPermissions(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	if err := s.roleService.SetPermissions(r.Context(), roleID, valid); err != nil {
+	sess := sessionFromContext(r.Context())
+	if sess == nil {
+		flashRedirect(w, r, "/admin/ui/roles/"+roleID, "Session expired.", "error")
+		return
+	}
+
+	if err := s.roleService.SetPermissions(r.Context(), sess.Permissions, roleID, valid); err != nil {
 		if errors.Is(err, service.ErrAdminRoleImmutable) {
 			flashRedirect(w, r, "/admin/ui/roles/"+roleID, "The admin role's permissions cannot be modified.", "error")
+			return
+		}
+		if errors.Is(err, service.ErrPermissionSubsetViolation) {
+			flashRedirect(w, r, "/admin/ui/roles/"+roleID, "You cannot grant a permission you do not hold.", "error")
 			return
 		}
 		s.logger.Printf("ui set permissions: %v", err)

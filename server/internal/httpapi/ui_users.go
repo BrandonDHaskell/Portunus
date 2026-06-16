@@ -203,13 +203,21 @@ func (s *Server) handleUIUsersAssignRole(w http.ResponseWriter, r *http.Request)
 
 	roleID := r.FormValue("role_id")
 	sess := sessionFromContext(r.Context())
-	if err := s.adminUserService.AssignRole(r.Context(), sess.AdminUUID, uuid, roleID); err != nil {
+	if sess == nil {
+		flashRedirect(w, r, "/admin/ui/users/"+uuid, "Session expired.", "error")
+		return
+	}
+	if err := s.adminUserService.AssignRole(r.Context(), sess.AdminUUID, sess.Permissions, uuid, roleID); err != nil {
 		if errors.Is(err, service.ErrAdminUserNotFound) {
 			http.NotFound(w, r)
 			return
 		}
 		if errors.Is(err, service.ErrLastAdmin) {
 			flashRedirect(w, r, "/admin/ui/users/"+uuid, "Cannot move the last admin user off the admin role.", "error")
+			return
+		}
+		if errors.Is(err, service.ErrPermissionSubsetViolation) {
+			flashRedirect(w, r, "/admin/ui/users/"+uuid, "You cannot assign a role with permissions you do not hold.", "error")
 			return
 		}
 		s.logger.Printf("ui assign role: %v", err)
