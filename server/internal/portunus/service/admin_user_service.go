@@ -13,9 +13,9 @@ import (
 )
 
 var (
-	ErrAdminUserNotFound        = errors.New("admin user not found")
-	ErrCannotSelfDisable        = errors.New("cannot disable your own account")
-	ErrLastAdmin                = errors.New("at least one enabled admin user must retain the admin role")
+	ErrAdminUserNotFound         = errors.New("admin user not found")
+	ErrCannotSelfDisable         = errors.New("cannot disable your own account")
+	ErrLastAdmin                 = errors.New("at least one enabled admin user must retain the admin role")
 	ErrPermissionSubsetViolation = errors.New("cannot grant a permission you do not hold")
 )
 

@@ -14,11 +14,11 @@ import (
 	"time"
 
 	pb "github.com/BrandonDHaskell/Portunus/server/api/portunus/v1"
-	"github.com/BrandonDHaskell/Portunus/server/internal/replay"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/permissions"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/types"
+	"github.com/BrandonDHaskell/Portunus/server/internal/replay"
 )
 
 type Dependencies struct {

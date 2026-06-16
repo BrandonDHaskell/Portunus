@@ -24,8 +24,8 @@ import (
 	"github.com/BrandonDHaskell/Portunus/server/internal/db"
 	"github.com/BrandonDHaskell/Portunus/server/internal/grpcapi"
 	"github.com/BrandonDHaskell/Portunus/server/internal/httpapi"
-	"github.com/BrandonDHaskell/Portunus/server/internal/replay"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
+	"github.com/BrandonDHaskell/Portunus/server/internal/replay"
 
 	sqlitestore "github.com/BrandonDHaskell/Portunus/server/internal/portunus/store/sqlite"
 )

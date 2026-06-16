@@ -65,11 +65,11 @@ func (s *AdminSession) HasPermission(p string) bool {
 // AuthService handles admin authentication: bootstrap, login, logout, session
 // resolution, and password changes.
 type AuthService struct {
-	users              store.AdminUserStore
-	sessions           store.SessionStore
-	roles              store.RoleStore
-	logger             *log.Logger
-	bootstrapPWFile    string // path to write the initial admin password; empty → log it
+	users           store.AdminUserStore
+	sessions        store.SessionStore
+	roles           store.RoleStore
+	logger          *log.Logger
+	bootstrapPWFile string // path to write the initial admin password; empty → log it
 }
 
 func NewAuthService(
