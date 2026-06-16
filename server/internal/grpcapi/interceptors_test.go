@@ -11,6 +11,7 @@ import (
 
 	pb "github.com/BrandonDHaskell/Portunus/server/api/portunus/v1"
 	"github.com/BrandonDHaskell/Portunus/server/internal/grpcapi"
+	"github.com/BrandonDHaskell/Portunus/server/internal/replay"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -104,7 +105,7 @@ func TestHMACInterceptor_ValidHeartbeat_Passes(t *testing.T) {
 }
 
 func TestHMACInterceptor_ValidAccessRequest_Passes(t *testing.T) {
-	store := grpcapi.NewReplayStore(60 * time.Second)
+	store := replay.NewStore(60 * time.Second)
 	interceptor := grpcapi.HMACInterceptor(testHMACSecret, store)
 	req := freshAccessRequest("door-001", "AABBCCDD")
 
@@ -173,7 +174,7 @@ func TestHMACInterceptor_BadHexSignature_Unauthenticated(t *testing.T) {
 // ── replay protection ─────────────────────────────────────────────────────────
 
 func TestHMACInterceptor_ReplayedNonce_Unauthenticated(t *testing.T) {
-	store := grpcapi.NewReplayStore(60 * time.Second)
+	store := replay.NewStore(60 * time.Second)
 	interceptor := grpcapi.HMACInterceptor(testHMACSecret, store)
 	req := freshAccessRequest("door-001", "AABBCCDD")
 
@@ -191,7 +192,7 @@ func TestHMACInterceptor_ReplayedNonce_Unauthenticated(t *testing.T) {
 }
 
 func TestHMACInterceptor_FreshNonce_Accepted(t *testing.T) {
-	store := grpcapi.NewReplayStore(60 * time.Second)
+	store := replay.NewStore(60 * time.Second)
 	interceptor := grpcapi.HMACInterceptor(testHMACSecret, store)
 
 	// Two requests with different nonces from the same module should both pass.
@@ -216,7 +217,7 @@ func TestHMACInterceptor_FreshNonce_Accepted(t *testing.T) {
 }
 
 func TestHMACInterceptor_StaleTimestamp_Unauthenticated(t *testing.T) {
-	store := grpcapi.NewReplayStore(60 * time.Second)
+	store := replay.NewStore(60 * time.Second)
 	interceptor := grpcapi.HMACInterceptor(testHMACSecret, store)
 
 	req := freshAccessRequest("door-001", "AABBCCDD")
@@ -230,10 +231,10 @@ func TestHMACInterceptor_StaleTimestamp_Unauthenticated(t *testing.T) {
 	assertCode(t, err, codes.Unauthenticated)
 }
 
-func TestHMACInterceptor_EmptyTimestamp_Accepted(t *testing.T) {
-	// Empty requested_at means the device clock is not yet synced.
-	// The server skips the timestamp check but still enforces nonce uniqueness.
-	store := grpcapi.NewReplayStore(60 * time.Second)
+func TestHMACInterceptor_EmptyTimestamp_Rejected(t *testing.T) {
+	// When HMAC is enabled, a missing requested_at is always rejected (F-5).
+	// Firmware must provide a synchronised clock timestamp.
+	store := replay.NewStore(60 * time.Second)
 	interceptor := grpcapi.HMACInterceptor(testHMACSecret, store)
 
 	req := freshAccessRequest("door-001", "AABBCCDD")
@@ -242,9 +243,8 @@ func TestHMACInterceptor_EmptyTimestamp_Accepted(t *testing.T) {
 	ctx := metadata.NewIncomingContext(context.Background(),
 		metadata.Pairs(hmacSigHeader, sign(req, testHMACSecret)))
 
-	if _, err := invoke(interceptor, ctx, req); err != nil {
-		t.Fatalf("empty requested_at should be accepted, got: %v", err)
-	}
+	_, err := invoke(interceptor, ctx, req)
+	assertCode(t, err, codes.Unauthenticated)
 }
 
 func TestHMACInterceptor_NoStore_NoReplayCheck(t *testing.T) {

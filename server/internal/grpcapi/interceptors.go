@@ -5,12 +5,13 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
-	"sync"
 	"time"
 
 	pb "github.com/BrandonDHaskell/Portunus/server/api/portunus/v1"
+	"github.com/BrandonDHaskell/Portunus/server/internal/replay"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -33,9 +34,8 @@ const hmacHeaderKey = "x-portunus-sig"
 //
 // The access projection includes the nonce (hex-encoded) and requested_at so
 // that every request has a unique signed payload — a captured access request
-// cannot be replayed because the nonce is single-use.  requested_at may be
-// empty when the device clock is not yet synced; the server skips the timestamp
-// window check in that case but still enforces nonce uniqueness.
+// cannot be replayed because the nonce is single-use.  requested_at must be
+// present when HMAC is enabled; the server rejects requests with empty timestamps.
 func hmacProjection(req interface{}) ([]byte, error) {
 	switch m := req.(type) {
 	case *pb.HeartbeatRequest:
@@ -81,78 +81,6 @@ func AccessResponseSig(secret, moduleID, credentialID string, granted bool) stri
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// ── Replay protection ─────────────────────────────────────────────────────────
-
-// ReplayStore tracks recently-seen access-request nonces to detect replayed
-// messages.  It pairs with the timestamp window: a request is rejected if its
-// nonce was seen within the window, or if its timestamp is older than the window.
-//
-// The store is safe for concurrent use.  Expired entries are purged lazily on
-// each Check call so memory stays bounded to (window / fastest scan rate) entries.
-type ReplayStore struct {
-	mu      sync.Mutex
-	window  time.Duration
-	entries map[string]time.Time // key: moduleID+":"+nonceHex, value: expiry
-}
-
-// NewReplayStore creates a ReplayStore with the given sliding window duration.
-// A window of 60 seconds is appropriate for most door deployments: it exceeds
-// any reasonable network round-trip while being short enough that the nonce map
-// stays tiny even under sustained load.
-func NewReplayStore(window time.Duration) *ReplayStore {
-	return &ReplayStore{
-		window:  window,
-		entries: make(map[string]time.Time),
-	}
-}
-
-// Check validates that a nonce has not been seen before within the window, and
-// optionally that the timestamp is fresh.  On success it records the nonce so
-// subsequent calls with the same nonce are rejected.
-//
-// moduleID namespaces nonces so different devices cannot collide.
-// nonceHex is the hex-encoded nonce from the request (may be empty for old firmware).
-// requestedAt is the RFC 3339 device timestamp (empty when clock not synced).
-//
-// Returns a non-nil error (with a gRPC status code embedded) on rejection.
-func (r *ReplayStore) Check(moduleID, nonceHex, requestedAt string) error {
-	now := time.Now().UTC()
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	// Purge expired entries to keep the map bounded.
-	for k, expiry := range r.entries {
-		if now.After(expiry) {
-			delete(r.entries, k)
-		}
-	}
-
-	// Timestamp window check — only when the device provides a timestamp.
-	if requestedAt != "" {
-		ts, err := time.Parse(time.RFC3339Nano, requestedAt)
-		if err != nil {
-			return status.Errorf(codes.InvalidArgument, "replay: unparseable requested_at")
-		}
-		age := now.Sub(ts.UTC())
-		if age > r.window || age < -r.window {
-			return status.Errorf(codes.Unauthenticated, "replay: request timestamp out of window")
-		}
-	}
-
-	// Nonce uniqueness check — skip only when nonce is completely absent
-	// (e.g. old firmware that predates this field).
-	if nonceHex != "" {
-		key := moduleID + ":" + nonceHex
-		if _, seen := r.entries[key]; seen {
-			return status.Errorf(codes.Unauthenticated, "replay: nonce already seen")
-		}
-		r.entries[key] = now.Add(r.window)
-	}
-
-	return nil
-}
-
 // HMACInterceptor returns a gRPC unary server interceptor that verifies
 // the HMAC-SHA256 signature attached as custom metadata by the ESP32, then
 // — for AccessRequests — checks the request against store to reject replays.
@@ -164,8 +92,8 @@ func (r *ReplayStore) Check(moduleID, nonceHex, requestedAt string) error {
 // the projection — both use the same pre-shared secret.
 //
 // When secret is empty, the interceptor is a no-op pass-through.
-// store may be nil to disable replay protection (not recommended for production).
-func HMACInterceptor(secret string, store *ReplayStore) grpc.UnaryServerInterceptor {
+// replayStore may be nil to disable replay protection (not recommended for production).
+func HMACInterceptor(secret string, replayStore *replay.Store) grpc.UnaryServerInterceptor {
 	if secret == "" {
 		// No secret configured — pass everything through.
 		return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
@@ -210,15 +138,32 @@ func HMACInterceptor(secret string, store *ReplayStore) grpc.UnaryServerIntercep
 		}
 
 		// Replay protection — only for access requests, only when a store is wired.
-		if store != nil {
+		if replayStore != nil {
 			if ar, ok := req.(*pb.AccessRequest); ok {
-				if err := store.Check(ar.ModuleId, hex.EncodeToString(ar.Nonce), ar.RequestedAt); err != nil {
-					return nil, err
+				nonceHex := hex.EncodeToString(ar.Nonce)
+				if err := replayStore.Check(ar.ModuleId, nonceHex, ar.RequestedAt); err != nil {
+					return nil, replayErrToStatus(err)
 				}
 			}
 		}
 
 		return handler(ctx, req)
+	}
+}
+
+// replayErrToStatus converts a replay sentinel error into a gRPC status error.
+func replayErrToStatus(err error) error {
+	switch {
+	case errors.Is(err, replay.ErrNonceSeen):
+		return status.Errorf(codes.Unauthenticated, "replay: nonce already seen")
+	case errors.Is(err, replay.ErrTimestampWindow):
+		return status.Errorf(codes.Unauthenticated, "replay: request timestamp out of window")
+	case errors.Is(err, replay.ErrTimestampRequired):
+		return status.Errorf(codes.Unauthenticated, "replay: requested_at is required")
+	case errors.Is(err, replay.ErrTimestampInvalid):
+		return status.Errorf(codes.InvalidArgument, "replay: invalid requested_at timestamp")
+	default:
+		return status.Errorf(codes.Unauthenticated, "replay: %v", err)
 	}
 }
 

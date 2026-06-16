@@ -18,8 +18,10 @@ func Open(ctx context.Context, cfg Config) (*sql.DB, error) {
 		cfg.Path = "./data/portunus.db"
 	}
 
-	// Ensure DB parent directory exists.
-	if err := os.MkdirAll(filepath.Dir(cfg.Path), 0o755); err != nil {
+	// Ensure DB parent directory exists with restrictive permissions so the
+	// credential store, session tokens, and bcrypt hashes are not world-readable
+	// (F-8).  0o700: only the service user can enter or list the directory.
+	if err := os.MkdirAll(filepath.Dir(cfg.Path), 0o700); err != nil {
 		return nil, fmt.Errorf("mkdir db dir: %w", err)
 	}
 
@@ -58,5 +60,16 @@ func Open(ctx context.Context, cfg Config) (*sql.DB, error) {
 		return nil, err
 	}
 
+	// Tighten file permissions after open so the DB file and its WAL/SHM
+	// companions are readable only by the service user (F-8).
+	// Best-effort: WAL and SHM may not exist yet for a fresh DB.
+	chmodIfExists(cfg.Path, 0o600)
+	chmodIfExists(cfg.Path+"-wal", 0o600)
+	chmodIfExists(cfg.Path+"-shm", 0o600)
+
 	return db, nil
+}
+
+func chmodIfExists(path string, mode os.FileMode) {
+	_ = os.Chmod(path, mode)
 }

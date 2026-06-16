@@ -13,9 +13,10 @@ import (
 )
 
 var (
-	ErrAdminUserNotFound = errors.New("admin user not found")
-	ErrCannotSelfDisable = errors.New("cannot disable your own account")
-	ErrLastAdmin         = errors.New("at least one enabled admin user must retain the admin role")
+	ErrAdminUserNotFound         = errors.New("admin user not found")
+	ErrCannotSelfDisable         = errors.New("cannot disable your own account")
+	ErrLastAdmin                 = errors.New("at least one enabled admin user must retain the admin role")
+	ErrPermissionSubsetViolation = errors.New("cannot grant a permission you do not hold")
 )
 
 // AdminUserInfo is the view type for admin user management pages.
@@ -54,6 +55,9 @@ func (s *AdminUserService) CreateUser(ctx context.Context, callerUUID, username,
 	}
 	if len(password) < 12 {
 		return nil, fmt.Errorf("%w: password must be at least 12 characters", ErrPasswordChangeFailed)
+	}
+	if len(password) > bcryptMaxLen {
+		return nil, fmt.Errorf("%w: password must not exceed %d characters", ErrPasswordChangeFailed, bcryptMaxLen)
 	}
 	roleID = strings.TrimSpace(roleID)
 	if roleID == "" {
@@ -158,7 +162,9 @@ func (s *AdminUserService) SetEnabled(ctx context.Context, uuid, callerUUID stri
 }
 
 // AssignRole assigns a role to an admin user.
-func (s *AdminUserService) AssignRole(ctx context.Context, callerUUID, uuid, roleID string) error {
+// callerPerms is the resolved permission set of the caller; the target role's
+// permissions must be a subset of callerPerms (F-7: no privilege escalation).
+func (s *AdminUserService) AssignRole(ctx context.Context, callerUUID string, callerPerms map[string]struct{}, uuid, roleID string) error {
 	roleID = strings.TrimSpace(roleID)
 	if roleID == "" {
 		return fmt.Errorf("role_id is required")
@@ -168,6 +174,18 @@ func (s *AdminUserService) AssignRole(ctx context.Context, callerUUID, uuid, rol
 			return fmt.Errorf("role %q not found", roleID)
 		}
 		return fmt.Errorf("assign role: verify role: %w", err)
+	}
+
+	// Enforce that the caller can only assign roles whose permission set is a
+	// subset of their own — prevents privilege escalation via role assignment.
+	targetPerms, err := s.roles.GetRolePermissions(ctx, roleID)
+	if err != nil {
+		return fmt.Errorf("assign role: load target permissions: %w", err)
+	}
+	for _, p := range targetPerms {
+		if _, ok := callerPerms[p]; !ok {
+			return ErrPermissionSubsetViolation
+		}
 	}
 
 	if roleID != adminRoleID {

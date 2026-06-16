@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -17,7 +19,25 @@ import (
 const (
 	sessionDuration = 8 * time.Hour
 	bcryptCost      = 12
+	bcryptMaxLen    = 72
 )
+
+// dummyHash is a bcrypt hash of a fixed string computed once at first use.
+// It is compared against the supplied password on the "user not found" path so
+// that both paths spend the same bcrypt work before returning ErrInvalidCredentials,
+// preventing username-enumeration via response timing (F-2).
+var (
+	dummyHashOnce sync.Once
+	dummyHash     []byte
+)
+
+func getDummyHash() []byte {
+	dummyHashOnce.Do(func() {
+		h, _ := bcrypt.GenerateFromPassword([]byte("portunus-timing-dummy-constant"), bcryptCost)
+		dummyHash = h
+	})
+	return dummyHash
+}
 
 var (
 	ErrInvalidCredentials   = errors.New("invalid username or password")
@@ -45,10 +65,11 @@ func (s *AdminSession) HasPermission(p string) bool {
 // AuthService handles admin authentication: bootstrap, login, logout, session
 // resolution, and password changes.
 type AuthService struct {
-	users    store.AdminUserStore
-	sessions store.SessionStore
-	roles    store.RoleStore
-	logger   *log.Logger
+	users           store.AdminUserStore
+	sessions        store.SessionStore
+	roles           store.RoleStore
+	logger          *log.Logger
+	bootstrapPWFile string // path to write the initial admin password; empty → log it
 }
 
 func NewAuthService(
@@ -58,6 +79,14 @@ func NewAuthService(
 	logger *log.Logger,
 ) *AuthService {
 	return &AuthService{users: users, sessions: sessions, roles: roles, logger: logger}
+}
+
+// SetBootstrapPasswordFile configures the path where the initial admin password
+// is written on first boot instead of to the log stream (F-9).  The file is
+// created with mode 0600 so only the service user can read it.
+// Call before Bootstrap.  An empty path reverts to logging (test/dev use only).
+func (s *AuthService) SetBootstrapPasswordFile(path string) {
+	s.bootstrapPWFile = path
 }
 
 // Bootstrap checks whether any admin user exists. If none does, it creates the
@@ -91,12 +120,33 @@ func (s *AuthService) Bootstrap(ctx context.Context) error {
 		return fmt.Errorf("bootstrap: create admin user: %w", err)
 	}
 
-	s.logger.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	s.logger.Printf("FIRST RUN — initial admin account created")
-	s.logger.Printf("  username: admin")
-	s.logger.Printf("  password: %s", password)
-	s.logger.Printf("  You will be required to change this password on first login.")
-	s.logger.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	if s.bootstrapPWFile != "" {
+		content := fmt.Sprintf("username: admin\npassword: %s\n", password)
+		if err := os.WriteFile(s.bootstrapPWFile, []byte(content), 0o600); err != nil {
+			// Fall back to logging if we can't write the file.
+			s.logger.Printf("WARNING: could not write bootstrap password file %q: %v — printing to log instead", s.bootstrapPWFile, err)
+			s.logger.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+			s.logger.Printf("FIRST RUN — initial admin account created")
+			s.logger.Printf("  username: admin")
+			s.logger.Printf("  password: %s", password)
+			s.logger.Printf("  You will be required to change this password on first login.")
+			s.logger.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+		} else {
+			s.logger.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+			s.logger.Printf("FIRST RUN — initial admin account created")
+			s.logger.Printf("  username: admin")
+			s.logger.Printf("  password written to: %s  (delete after first login)", s.bootstrapPWFile)
+			s.logger.Printf("  You will be required to change this password on first login.")
+			s.logger.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+		}
+	} else {
+		s.logger.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+		s.logger.Printf("FIRST RUN — initial admin account created")
+		s.logger.Printf("  username: admin")
+		s.logger.Printf("  password: %s", password)
+		s.logger.Printf("  You will be required to change this password on first login.")
+		s.logger.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	}
 
 	return nil
 }
@@ -106,6 +156,10 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (str
 	user, err := s.users.GetAdminUserByUsername(ctx, username)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
+			// Run a dummy bcrypt compare so that a missing username takes the
+			// same wall-clock time as a present-but-wrong-password attempt,
+			// preventing username enumeration via response timing (F-2).
+			_ = bcrypt.CompareHashAndPassword(getDummyHash(), []byte(password))
 			return "", ErrInvalidCredentials
 		}
 		return "", fmt.Errorf("login: %w", err)
@@ -215,6 +269,9 @@ func (s *AuthService) ChangePassword(ctx context.Context, adminUUID, currentPass
 
 	if len(newPassword) < 12 {
 		return fmt.Errorf("%w: password must be at least 12 characters", ErrPasswordChangeFailed)
+	}
+	if len(newPassword) > bcryptMaxLen {
+		return fmt.Errorf("%w: password must not exceed %d characters", ErrPasswordChangeFailed, bcryptMaxLen)
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcryptCost)

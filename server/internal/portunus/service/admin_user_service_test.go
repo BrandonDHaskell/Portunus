@@ -131,7 +131,7 @@ func TestAdminUserService_AssignRole_LastAdminRoleMoveBlocked(t *testing.T) {
 	ctx := context.Background()
 	seedAdminUser(t, us, "uuid-only", "admin", true)
 
-	err := svc.AssignRole(ctx, "uuid-caller", "uuid-only", "operator")
+	err := svc.AssignRole(ctx, "uuid-caller", allPerms(), "uuid-only", "operator")
 	if !errors.Is(err, service.ErrLastAdmin) {
 		t.Fatalf("expected ErrLastAdmin, got: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestAdminUserService_AssignRole_NonLastAdminRoleMoveAllowed(t *testing.T) {
 	seedAdminUser(t, us, "uuid-b", "admin", true)
 
 	// Moving uuid-a to operator is fine because uuid-b still holds admin.
-	if err := svc.AssignRole(ctx, "uuid-b", "uuid-a", "operator"); err != nil {
+	if err := svc.AssignRole(ctx, "uuid-b", allPerms(), "uuid-a", "operator"); err != nil {
 		t.Fatalf("unexpected error moving non-last admin to operator: %v", err)
 	}
 }
@@ -156,7 +156,7 @@ func TestAdminUserService_AssignRole_ToAdminAlwaysAllowed(t *testing.T) {
 	seedAdminUser(t, us, "uuid-op", "operator", true)
 
 	// Elevating an operator to admin should never be blocked by the last-admin guard.
-	if err := svc.AssignRole(ctx, "uuid-admin", "uuid-op", "admin"); err != nil {
+	if err := svc.AssignRole(ctx, "uuid-admin", allPerms(), "uuid-op", "admin"); err != nil {
 		t.Fatalf("unexpected error promoting operator to admin: %v", err)
 	}
 }
@@ -167,7 +167,7 @@ func TestAdminUserService_AssignRole_AuditRoleAssigned(t *testing.T) {
 	seedAdminUser(t, us, "uuid-a", "admin", true)
 	seedAdminUser(t, us, "uuid-b", "admin", true)
 
-	if err := svc.AssignRole(ctx, "uuid-b", "uuid-a", "operator"); err != nil {
+	if err := svc.AssignRole(ctx, "uuid-b", allPerms(), "uuid-a", "operator"); err != nil {
 		t.Fatalf("AssignRole: %v", err)
 	}
 	requireAuditEntry(t, as, "admin_user.role_assigned", "uuid-a")

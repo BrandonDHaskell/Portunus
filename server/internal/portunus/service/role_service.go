@@ -126,9 +126,16 @@ func (s *RoleService) DeleteRole(ctx context.Context, roleID string) error {
 }
 
 // SetPermissions replaces the full permission set for a role.
-func (s *RoleService) SetPermissions(ctx context.Context, roleID string, permissions []string) error {
+// callerPerms is the resolved permission set of the caller; every permission
+// being written must be present in callerPerms (F-7: no privilege escalation).
+func (s *RoleService) SetPermissions(ctx context.Context, callerPerms map[string]struct{}, roleID string, permissions []string) error {
 	if roleID == adminRoleID {
 		return ErrAdminRoleImmutable
+	}
+	for _, p := range permissions {
+		if _, ok := callerPerms[p]; !ok {
+			return ErrPermissionSubsetViolation
+		}
 	}
 	if err := s.roles.SetRolePermissions(ctx, roleID, permissions); err != nil {
 		return fmt.Errorf("set permissions: %w", err)

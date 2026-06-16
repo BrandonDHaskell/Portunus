@@ -73,6 +73,11 @@ type Config struct {
 	// CredentialHashSecret keys the HMAC-SHA256 credential-ID hashing.
 	// Generate with: openssl rand -hex 32. Required in prod.
 	CredentialHashSecret string
+
+	// AllowUnkeyedCredentialHash permits starting without a CredentialHashSecret
+	// (resulting in reversible SHA-256 hashes).  Dev/test escape hatch only —
+	// never set in production.  Set PORTUNUS_ALLOW_UNKEYED_CREDENTIAL_HASH=true.
+	AllowUnkeyedCredentialHash bool
 }
 
 // Validate enforces per-profile invariants.
@@ -137,6 +142,8 @@ func FromEnv() (Config, error) {
 		TLSKeyFile:           strings.TrimSpace(os.Getenv("PORTUNUS_TLS_KEY_FILE")),
 		HMACSecret:           os.Getenv("PORTUNUS_HMAC_SECRET"),
 		CredentialHashSecret: os.Getenv("PORTUNUS_CREDENTIAL_HASH_SECRET"),
+		AllowUnkeyedCredentialHash: strings.EqualFold(os.Getenv("PORTUNUS_ALLOW_UNKEYED_CREDENTIAL_HASH"), "true") ||
+			os.Getenv("PORTUNUS_ALLOW_UNKEYED_CREDENTIAL_HASH") == "1",
 	}, nil
 }
 

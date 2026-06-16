@@ -18,6 +18,7 @@ import (
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/types"
+	"github.com/BrandonDHaskell/Portunus/server/internal/replay"
 )
 
 type Dependencies struct {
@@ -36,6 +37,10 @@ type Dependencies struct {
 	// HMACSecret is the pre-shared key for X-Portunus-Sig verification.
 	// Leave empty to disable HMAC enforcement (not recommended for production).
 	HMACSecret string
+	// ReplayStore is the shared nonce+timestamp replay-protection store.
+	// Must be the same instance used by the gRPC server so nonces are
+	// deduplicated across both transports.  Required when HMACSecret is set.
+	ReplayStore *replay.Store
 	// CredentialHashSecret is the HMAC key used to hash credential UIDs before storage.
 	// Must match the key used by AccessService.  Leave nil only in dev/test.
 	CredentialHashSecret []byte
@@ -59,6 +64,8 @@ type Server struct {
 	auditStore           store.AuditStore
 	credentialHashSecret []byte
 	hmacSecret           string
+	replayStore          *replay.Store
+	loginLimiter         *loginLimiter
 	tlsEnabled           bool
 }
 
@@ -80,7 +87,10 @@ func NewServer(d Dependencies) *Server {
 		auditStore:           d.AuditStore,
 		credentialHashSecret: d.CredentialHashSecret,
 		hmacSecret:           d.HMACSecret,
-		tlsEnabled:           d.TLSEnabled,
+		replayStore:          d.ReplayStore,
+		// 5 failures per username+IP within 60 seconds triggers a 429.
+		loginLimiter: newLoginLimiter(60*time.Second, 5),
+		tlsEnabled:   d.TLSEnabled,
 	}
 
 	// ── Device endpoints (ESP32 modules) ────────────────────────────────
@@ -324,6 +334,21 @@ func (s *Server) handleAccessRequest(w http.ResponseWriter, r *http.Request) {
 		if err := dec.Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_json", "invalid JSON body")
 			return
+		}
+	}
+
+	// When HMAC is enabled: require a nonce and validate replay (F-3, D3).
+	if s.hmacSecret != "" {
+		if len(req.Nonce) == 0 {
+			writeError(w, http.StatusUnauthorized, "missing_nonce", "nonce is required for access requests")
+			return
+		}
+		if s.replayStore != nil {
+			nonceHex := hex.EncodeToString(req.Nonce)
+			if err := s.replayStore.Check(req.ModuleID, nonceHex, req.RequestedAt); err != nil {
+				writeError(w, http.StatusUnauthorized, "replay", err.Error())
+				return
+			}
 		}
 	}
 
