@@ -22,7 +22,6 @@
 #endif
 
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -44,21 +43,16 @@ static const int FSM_POLL_INTERVAL_MS = 100;
 static const int MFRC522_POLL_INTERVAL_MS = 250;
 static const int CARD_REREAD_DELAY_MS     = 1000;
 
-/* ── Helpers ──────────────────────────────────────────────────────────────── */
-
-static inline int64_t now_ms()
-{
-    return esp_timer_get_time() / 1000;
-}
-
 /* ── Constructor ──────────────────────────────────────────────────────────── */
 
 ProvisioningFSM::ProvisioningFSM(ICredentialReader *reader,
                                  IFeedback         *feedback,
-                                 IArm              *arm)
+                                 IArm              *arm,
+                                 IClock            *clock)
     : m_reader(reader)
     , m_feedback(feedback)
     , m_arm(arm)
+    , m_clock(clock)
 {}
 
 /* ── init() ───────────────────────────────────────────────────────────────── */
@@ -214,7 +208,7 @@ void ProvisioningFSM::poll()
                 memset(&evt, 0, sizeof(evt));
                 evt.id                               = EVENT_CREDENTIAL_READ;
                 evt.payload.credential_read.credential   = cred;
-                evt.payload.credential_read.timestamp_ms = now_ms();
+                evt.payload.credential_read.timestamp_ms = m_clock->now_ms();
                 event_bus_publish(&evt);
 
                 m_reader->halt();
@@ -269,7 +263,7 @@ void ProvisioningFSM::process_event(const portunus_event_t &event)
 
 void ProvisioningFSM::check_timeout()
 {
-    if (m_deadline_ms == 0 || now_ms() < m_deadline_ms) {
+    if (m_deadline_ms == 0 || m_clock->now_ms() < m_deadline_ms) {
         return;
     }
     m_deadline_ms = 0;
@@ -392,7 +386,7 @@ void ProvisioningFSM::enter_sleep()
 void ProvisioningFSM::enter_idle()
 {
     m_state       = PEU_STATE_IDLE;
-    m_deadline_ms = now_ms() + CONFIG_PORTUNUS_IDLE_TIMEOUT_MS;
+    m_deadline_ms = m_clock->now_ms() + CONFIG_PORTUNUS_IDLE_TIMEOUT_MS;
     if (m_has_feedback) {
         m_feedback->indicate(feedback_type_t::PEU_IDLE);
     }
@@ -402,7 +396,7 @@ void ProvisioningFSM::enter_idle()
 void ProvisioningFSM::enter_armed()
 {
     m_state       = PEU_STATE_ARMED;
-    m_deadline_ms = now_ms() + CONFIG_PORTUNUS_ARM_TIMEOUT_MS;
+    m_deadline_ms = m_clock->now_ms() + CONFIG_PORTUNUS_ARM_TIMEOUT_MS;
     if (m_has_feedback) {
         m_feedback->indicate(feedback_type_t::PEU_ARMED_CAPTURE);
     }
@@ -412,7 +406,7 @@ void ProvisioningFSM::enter_armed()
 void ProvisioningFSM::enter_result(feedback_type_t fb)
 {
     m_state       = PEU_STATE_RESULT;
-    m_deadline_ms = now_ms() + CONFIG_PORTUNUS_RESULT_DISPLAY_MS;
+    m_deadline_ms = m_clock->now_ms() + CONFIG_PORTUNUS_RESULT_DISPLAY_MS;
     if (m_has_feedback) {
         m_feedback->indicate(fb);
     }

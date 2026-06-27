@@ -67,6 +67,7 @@ tasks:
     desc: Run all tests
     cmds:
       - task: test:server
+      - task: test:all
 
   clean:
     desc: Clean all build artifacts
@@ -347,6 +348,50 @@ tasks:
       - |
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
         idf.py fullclean
+
+  # ─── Firmware tests ───────────────────────────────────────────────────────
+
+  test:a:
+    desc: "Host unit tests — pure logic, no ESP-IDF (credential_types, system_fsm_decide)"
+    cmds:
+      - cmake -S access_module/test/host -B access_module/test/host/build
+      - cmake --build access_module/test/host/build
+      - ctest --test-dir access_module/test/host/build --output-on-failure
+
+  test:b:
+    desc: "Host behavioral tests — ESP-IDF linux target, FreeRTOS POSIX, fake event bus"
+    env:
+      IDF_PATH: "{{.IDF_PATH}}"
+    cmds:
+      - |
+        eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
+        BUILD=access_module/test/host_idf/build/fake
+        if [ ! -f "${BUILD}/CMakeCache.txt" ]; then
+          idf.py --preview -C access_module/test/host_idf -B "${BUILD}" set-target linux
+        fi
+        idf.py --preview -C access_module/test/host_idf -B "${BUILD}" build
+        "${BUILD}/portunus_host_tests.elf"
+
+  test:b:concurrency:
+    desc: "Host concurrency tests — ESP-IDF linux target, real event bus"
+    env:
+      IDF_PATH: "{{.IDF_PATH}}"
+    cmds:
+      - |
+        eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
+        BUILD=access_module/test/host_idf/build/real
+        if [ ! -f "${BUILD}/CMakeCache.txt" ]; then
+          idf.py --preview -C access_module/test/host_idf -B "${BUILD}" \
+            -DPORTUNUS_TEST_REAL_BUS=ON set-target linux
+        fi
+        idf.py --preview -C access_module/test/host_idf -B "${BUILD}" build
+        "${BUILD}/portunus_host_tests.elf"
+
+  test:all:
+    desc: "All firmware host tests (Tier A + Tier B)"
+    cmds:
+      - task: test:a
+      - task: test:b
 
   # ─── Deploy ────────────────────────────────────────────────────────────────
   # Requires SSH key-based auth to the Pi. Configure target in .env:

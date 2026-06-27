@@ -20,6 +20,5 @@ idf_component_register(
     PRIV_REQUIRES
         event_bus
         freertos
-        esp_timer
         wifi_mgr
 )
