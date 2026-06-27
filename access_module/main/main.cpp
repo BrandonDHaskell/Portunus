@@ -46,6 +46,7 @@
 #include "i_credential_reader.hpp"
 #include "i_access_point.hpp"
 #include "i_feedback.hpp"
+#include "esp_timer_clock.hpp"
 
 /* Concrete module implementations */
 #ifdef CONFIG_PORTUNUS_ENABLE_MFRC522
@@ -202,7 +203,7 @@ extern "C" void app_main(void)
     /* ── 6. Construct and initialise FSM ─────────────────────────────────── */
 
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
-    static SystemFSM fsm(reader_ptr, access_ptr, feedback_ptr);
+    static SystemFSM fsm(reader_ptr, access_ptr, feedback_ptr, &default_clock());
     ESP_LOGI(TAG, "Variant: ACCESS_POINT");
 #else
     /* Provisioning console: no door-strike hardware needed. */
@@ -218,7 +219,7 @@ extern "C" void app_main(void)
     IArm *arm_ptr = nullptr;
 #endif
 
-    static ProvisioningFSM fsm(reader_ptr, feedback_ptr, arm_ptr);
+    static ProvisioningFSM fsm(reader_ptr, feedback_ptr, arm_ptr, &default_clock());
     ESP_LOGI(TAG, "Variant: PROVISIONING_CONSOLE");
 #endif
 

@@ -21,6 +21,7 @@
  */
 
 #include "system_fsm.hpp"
+#include "system_fsm_decide.hpp"
 #include "event_bus.hpp"
 #include "timing_config.hpp"
 #include "error_codes.hpp"
@@ -31,7 +32,6 @@
 
 #include <inttypes.h>
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -51,21 +51,16 @@ static const int FSM_EVENT_QUEUE_LEN        = 8;
 static const int READER_HW_ERROR_THRESHOLD  = 5;    /* consecutive non-NO_CREDENTIAL errors before degraded */
 static const int READER_RECOVERY_INTERVAL_MS = 5000; /* ms between reconnection attempts when degraded */
 
-/* ── Helper: current time in milliseconds ─────────────────────────────────── */
-
-static inline int64_t now_ms(void)
-{
-    return esp_timer_get_time() / 1000;
-}
-
 /* ── Constructor ──────────────────────────────────────────────────────────── */
 
 SystemFSM::SystemFSM(ICredentialReader *reader,
                      IAccessPoint      *access,
-                     IFeedback         *feedback)
+                     IFeedback         *feedback,
+                     IClock            *clock)
     : m_reader(reader)
     , m_access(access)
     , m_feedback(feedback)
+    , m_clock(clock)
 {
 }
 
@@ -283,76 +278,59 @@ void SystemFSM::run()
 
 void SystemFSM::process_event(const portunus_event_t &event)
 {
-    switch (event.id) {
+    const fsm_actions_t actions = decide_system_event(m_caps, event);
 
+    /* Audit logging — preserved verbatim from the original handlers. */
+    switch (event.id) {
     case EVENT_CREDENTIAL_READ: {
         const event_credential_read_t *cred = &event.payload.credential_read;
         char log_id[CREDENTIAL_LOG_ID_LEN];
         credential_uid_to_log_id(&cred->credential, log_id, sizeof(log_id));
-
         ESP_LOGI(TAG, "Credential read — id=%s", log_id);
-
-        /* Show intermediate feedback while waiting for server decision. */
-        if (m_caps.has_feedback) {
-            m_feedback->indicate(feedback_type_t::CARD_READ);
-        }
-
-        /*
-         * The server_comm component is also subscribed to
-         * EVENT_CREDENTIAL_READ and sends the access request to the
-         * server.  The FSM waits for EVENT_ACCESS_GRANTED or
-         * EVENT_ACCESS_DENIED — no action needed here beyond feedback.
-         *
-         * If there's no network, the credential was still logged by the
-         * event bus and server_comm will handle the offline case.
-         */
         if (!m_caps.has_network) {
             ESP_LOGW(TAG, "Network unavailable — credential logged locally only");
-            if (m_caps.has_feedback) {
-                m_feedback->indicate(feedback_type_t::SYSTEM_ERROR);
-            }
         }
         break;
     }
-
     case EVENT_ACCESS_GRANTED: {
         const event_access_decision_t *ad = &event.payload.access_decision;
-        ESP_LOGI(TAG, "ACCESS GRANTED — credential=%s reason=%s", ad->credential_id, ad->reason);
-
-        if (m_caps.has_access_point) {
-            portunus_err_t err = m_access->unlock();
-            if (err == PORTUNUS_OK) {
-                start_unlock_timer();
-                ESP_LOGI(TAG, "Strike energized — hold timer started (%d ms)",
-                         UNLOCK_HOLD_MS);
-            } else {
-                ESP_LOGE(TAG, "Failed to unlock: 0x%" PRIx32, (uint32_t)err);
-            }
-        } else {
+        ESP_LOGI(TAG, "ACCESS GRANTED — credential=%s reason=%s",
+                 ad->credential_id, ad->reason);
+        if (!m_caps.has_access_point) {
             ESP_LOGW(TAG, "Access granted but no access point — cannot unlock");
-        }
-
-        if (m_caps.has_feedback) {
-            m_feedback->indicate(feedback_type_t::ACCESS_GRANTED);
         }
         break;
     }
-
     case EVENT_ACCESS_DENIED: {
         const event_access_decision_t *ad = &event.payload.access_decision;
         ESP_LOGW(TAG, "ACCESS DENIED — credential=%s reason=%s known=%d",
                  ad->credential_id, ad->reason, ad->known);
-
-        if (m_caps.has_feedback) {
-            m_feedback->indicate(feedback_type_t::ACCESS_DENIED);
-        }
-        /* No hardware action on deny. */
         break;
     }
-
     default:
         ESP_LOGD(TAG, "Unhandled event: 0x%04x", event.id);
         break;
+    }
+
+    /* Door command — identical unlock/gate-timer semantics. */
+    if (actions.door == door_cmd_t::UNLOCK_AND_HOLD) {
+        portunus_err_t err = m_access->unlock();
+        if (err == PORTUNUS_OK) {
+            start_unlock_timer();
+            ESP_LOGI(TAG, "Strike energized — hold timer started (%d ms)",
+                     UNLOCK_HOLD_MS);
+        } else {
+            ESP_LOGE(TAG, "Failed to unlock: 0x%" PRIx32, (uint32_t)err);
+        }
+    } else if (actions.door == door_cmd_t::LOCK) {
+        (void)m_access->lock();
+    }
+
+    /* Feedback — replay the decided indications in order. */
+    if (m_caps.has_feedback) {
+        for (uint8_t i = 0; i < actions.feedback_count; i++) {
+            m_feedback->indicate(actions.feedback[i]);
+        }
     }
 }
 
@@ -371,11 +349,11 @@ void SystemFSM::poll_reed_switch()
 
         if (door_open) {
             event.id = EVENT_DOOR_OPENED;
-            event.payload.door_opened.timestamp_ms = now_ms();
+            event.payload.door_opened.timestamp_ms = m_clock->now_ms();
             ESP_LOGI(TAG, "Door OPENED");
         } else {
             event.id = EVENT_DOOR_CLOSED;
-            event.payload.door_closed.timestamp_ms = now_ms();
+            event.payload.door_closed.timestamp_ms = m_clock->now_ms();
             ESP_LOGI(TAG, "Door CLOSED");
 
             /*
@@ -405,7 +383,7 @@ void SystemFSM::poll_reed_switch()
 void SystemFSM::start_unlock_timer()
 {
     m_strike_energized   = true;
-    m_unlock_deadline_ms = now_ms() + UNLOCK_HOLD_MS;
+    m_unlock_deadline_ms = m_clock->now_ms() + UNLOCK_HOLD_MS;
 }
 
 void SystemFSM::cancel_unlock_timer()
@@ -416,7 +394,7 @@ void SystemFSM::cancel_unlock_timer()
 
 void SystemFSM::check_unlock_timer()
 {
-    if (now_ms() >= m_unlock_deadline_ms) {
+    if (m_clock->now_ms() >= m_unlock_deadline_ms) {
         ESP_LOGI(TAG, "Unlock hold timer expired — re-locking");
 
         if (m_caps.has_access_point) {
@@ -478,7 +456,7 @@ void SystemFSM::poll_credential()
             memset(&event, 0, sizeof(event));
             event.id                                   = EVENT_CREDENTIAL_READ;
             event.payload.credential_read.credential   = cred;
-            event.payload.credential_read.timestamp_ms = now_ms();
+            event.payload.credential_read.timestamp_ms = m_clock->now_ms();
             event_bus_publish(&event);
 
             m_reader->halt();

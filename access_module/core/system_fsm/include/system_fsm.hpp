@@ -24,6 +24,7 @@
 #include "i_credential_reader.hpp"
 #include "i_access_point.hpp"
 #include "i_feedback.hpp"
+#include "i_clock.hpp"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -46,7 +47,8 @@ public:
      */
     SystemFSM(ICredentialReader *reader,
               IAccessPoint      *access,
-              IFeedback         *feedback);
+              IFeedback         *feedback,
+              IClock            *clock);
 
     /**
      * @brief Initialise modules and set capability flags.
@@ -79,10 +81,15 @@ public:
     system_capabilities_t capabilities() const { return m_caps; }
 
 private:
+    /* Tier B test fixture needs access to process_event and check_unlock_timer
+     * to inject events and advance the timer without starting FreeRTOS tasks. */
+    friend class SystemFSMTestFixture;
+
     /* ── Injected dependencies ────────────────────────────────────────────── */
     ICredentialReader *m_reader;
     IAccessPoint      *m_access;
     IFeedback         *m_feedback;
+    IClock            *m_clock;
 
     /* ── FSM state ────────────────────────────────────────────────────────── */
     system_state_t        m_state = SYSTEM_STATE_BOOT;

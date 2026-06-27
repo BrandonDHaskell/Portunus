@@ -31,6 +31,7 @@
 
 #include "event_types.hpp"
 #include "i_arm.hpp"
+#include "i_clock.hpp"
 #include "i_credential_reader.hpp"
 #include "i_feedback.hpp"
 #include "portunus_types.hpp"
@@ -64,7 +65,8 @@ public:
      * @param feedback  Feedback LED (nullptr disables indication).
      * @param arm       Arm button driver (nullptr → always-armed mode).
      */
-    ProvisioningFSM(ICredentialReader *reader, IFeedback *feedback, IArm *arm);
+    ProvisioningFSM(ICredentialReader *reader, IFeedback *feedback, IArm *arm,
+                    IClock *clock);
 
     /** @brief Initialise hardware and create FreeRTOS primitives. */
     portunus_err_t init();
@@ -80,6 +82,7 @@ private:
     ICredentialReader *m_reader;
     IFeedback         *m_feedback;
     IArm              *m_arm;
+    IClock            *m_clock;
 
     /* ── Capability flags ─────────────────────────────────────────────────── */
     bool m_has_reader   = false;

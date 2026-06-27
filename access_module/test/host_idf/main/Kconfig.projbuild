@@ -1,0 +1,59 @@
+# Minimal Portunus symbol definitions for the Tier B host test build.
+# Values mirror the production defaults in main/Kconfig.projbuild.
+# Only the symbols actually referenced in FSM source under test are listed.
+
+menu "Portunus Test Build Configuration"
+
+    config PORTUNUS_MODULE_TYPE_ACCESS_POINT
+        bool
+        default y
+
+    config PORTUNUS_UNLOCK_HOLD_MS
+        int
+        default 5000
+
+    config PORTUNUS_FSM_POLL_INTERVAL_MS
+        int
+        default 50
+
+    config PORTUNUS_MFRC522_POLL_INTERVAL_MS
+        int
+        default 250
+
+    config PORTUNUS_CARD_REREAD_DELAY_MS
+        int
+        default 1000
+
+    config PORTUNUS_HEARTBEAT_INTERVAL_MS
+        int
+        default 30000
+
+    config PORTUNUS_EVENT_QUEUE_TIMEOUT_MS
+        int
+        default 10
+
+    config PORTUNUS_EVENT_QUEUE_LENGTH
+        int
+        default 16
+
+    config PORTUNUS_MAX_EVENT_SUBSCRIBERS
+        int
+        default 16
+
+    config PORTUNUS_PROVISION_TIMEOUT_MS
+        int
+        default 30000
+
+    config PORTUNUS_ARM_TIMEOUT_MS
+        int
+        default 60000
+
+    config PORTUNUS_IDLE_TIMEOUT_MS
+        int
+        default 300000
+
+    config PORTUNUS_RESULT_DISPLAY_MS
+        int
+        default 3000
+
+endmenu
