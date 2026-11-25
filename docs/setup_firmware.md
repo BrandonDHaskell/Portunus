@@ -196,6 +196,75 @@ idf.py build
 
 ---
 
+## IDE setup (CLion and VS Code)
+
+Both IDEs share the same IDE-neutral files, so neither needs hand-maintained
+include paths:
+
+| File | Purpose |
+|------|---------|
+| `access_module/CMakePresets.json` | `fw-dev` / `fw-prod` presets for IDE indexing. Builds go to `cmake-build-<preset>/` with their own `sdkconfig`, so they never touch `build/` or your menuconfig `sdkconfig`. |
+| `access_module/test/host/CMakePresets.json` | Tier A host test presets: `host`, `host-gcc`, `host-clang`. |
+| `CMakeUserPresets.json` (gitignored) | Per-machine presets, e.g. a specific compiler install. |
+| `access_module/.clangd` | Lets clangd parse Xtensa GCC compile commands. |
+
+The Taskfile remains the canonical build. The presets exist so the IDE can index
+the code and run host tests.
+
+**Compiler note.** The firmware must be built with Espressif's Xtensa GCC from
+`~/.espressif`. A newer host GCC or Clang cannot target the ESP32-S3. Host
+compilers apply only to the host tests (Tier A, and Tier B via `HOST_CC`/`HOST_CXX`).
+
+### CLion
+
+1. **Settings > Build, Execution, Deployment > Toolchains**: add a *System*
+   toolchain named `ESP-IDF`, set **Environment file** to
+   `~/esp/esp-idf/export.sh`, and leave the compilers on auto-detect (CLion then
+   picks up the Xtensa GCC from the sourced environment).
+2. **Open** `access_module/` as a CMake project. Under **CMake**, enable the
+   `fw-dev` preset and set its toolchain to `ESP-IDF`.
+3. For host tests, attach `access_module/test/host/CMakeLists.txt` as a second
+   project (or open it in its own window) and enable the `host*` presets with
+   your normal host toolchain.
+
+To use a non-default host compiler, add presets that inherit `host` to a
+`CMakeUserPresets.json` in `access_module/test/host/`, for example:
+
+```json
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "host-gcc16",
+      "inherits": "host",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "/opt/gcc/bin/gcc",
+        "CMAKE_CXX_COMPILER": "/opt/gcc/bin/g++",
+        "CMAKE_EXE_LINKER_FLAGS": "-Wl,-rpath,/opt/gcc/lib64"
+      }
+    }
+  ],
+  "buildPresets": [{ "name": "host-gcc16", "configurePreset": "host-gcc16" }],
+  "testPresets": [{ "name": "host-gcc16", "inherits": "host", "configurePreset": "host-gcc16" }]
+}
+```
+
+Then `task test:a PRESET=host-gcc16`.
+
+CLion has no official Go support. Open `server/` in IntelliJ IDEA Ultimate (Go
+plugin) or GoLand.
+
+### VS Code
+
+Install the recommended extensions (`.vscode/extensions.json`). C/C++ code
+intelligence comes from **clangd**, which reads `access_module/build/compile_commands.json`
+(produced by any `task firmware:build*`) and the host test build directories.
+CMake Tools drives the Tier A host test presets. Machine-specific settings such
+as the ESP-IDF extension's Python path belong in your VS Code *user* settings, not
+in `.vscode/settings.json`.
+
+---
+
 ## Configuration workflow
 
 The implemented configuration path is **ESP-IDF menuconfig**.
