@@ -210,14 +210,45 @@ To verify the certificate chain:
 task certs:verify
 ```
 
-For production on the Raspberry Pi, copy `server.pem` and `server.key` to a secure location (e.g. `/etc/portunus/certs/`) and set the environment variables accordingly. Restrict permissions:
+For production on the Raspberry Pi, the server certificate and key go in `/etc/portunus/certs/`, and `PORTUNUS_TLS_CERT_FILE` / `PORTUNUS_TLS_KEY_FILE` point at them. Keep these points in mind:
+
+- **The SAN must cover every address clients use.** That means the server's LAN IP for the modules and browsers. Add `localhost` / `127.0.0.1` too if you reach the admin UI through an SSH tunnel. A cert issued for the wrong IP still lets the server start, but browsers reject it and modules fail the TLS handshake. Check a cert with `openssl x509 -in certs/server.pem -noout -ext subjectAltName`.
+- **The key must be readable by the `portunus` service user.** A `root`-owned `600` key causes a restart loop, with `TLS cert load error: open /etc/portunus/certs/server.key: permission denied` in the journal. Install it as `root:portunus 640`. The server can then read its key but cannot modify or replace it.
+- **Install the cert after the `portunus` user exists**, so the group ownership can be set. The install commands are in [Running as a systemd service](#running-as-a-systemd-service), right after the user is created.
+- **The cert is generated on your dev machine**, and `certs/` is gitignored. Copy `server.pem` and `server.key` to the Pi first (e.g. `scp certs/server.pem certs/server.key <user>@<pi>:/tmp/`). `ca.key` never needs to leave the dev machine.
+- **Changing the server IP or renewing the cert does not require a new CA.** See the next section.
+
+### Reissuing the server certificate without rotating the CA
+
+`task certs:generate` always creates a **new CA**. Every flashed module pins the old CA, so running it means reflashing all of them. When only the server certificate needs to change (new IP, new DNS name, approaching expiry), sign a new one with the existing `certs/ca.key` instead. Modules keep working because the CA is unchanged.
 
 ```bash
-sudo mkdir -p /etc/portunus/certs
-sudo cp certs/server.pem certs/server.key /etc/portunus/certs/
-sudo chmod 600 /etc/portunus/certs/server.key
-sudo chmod 644 /etc/portunus/certs/server.pem
+# From the repo root. Adjust the SAN list; include localhost/127.0.0.1 if you
+# reach the admin UI through an SSH tunnel.
+SAN="IP:10.0.0.57,DNS:localhost,IP:127.0.0.1"
+OUT=$(mktemp -d)
+cat > "$OUT/ext.cnf" <<EOF
+[v3_server]
+basicConstraints       = CA:FALSE
+keyUsage               = digitalSignature, keyEncipherment
+extendedKeyUsage       = serverAuth
+subjectAltName         = ${SAN}
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid,issuer
+EOF
+(umask 077; openssl genrsa -out "$OUT/server.key" 2048)
+openssl req -new -key "$OUT/server.key" -out "$OUT/server.csr" -subj "/C=US/O=Portunus/CN=10.0.0.57"
+openssl x509 -req -in "$OUT/server.csr" -CA certs/ca.pem -CAkey certs/ca.key \
+  -CAserial "$OUT/ca.srl" -CAcreateserial -out "$OUT/server.pem" -days 825 \
+  -extfile "$OUT/ext.cnf" -extensions v3_server
+
+# Verify chain and IP before deploying
+openssl verify -CAfile certs/ca.pem -verify_ip 10.0.0.57 "$OUT/server.pem"
 ```
+
+Copy `server.key` and `server.pem` to the Pi, install them with the same commands and ownership as in [Running as a systemd service](#running-as-a-systemd-service), and restart with `sudo systemctl restart portunus-server`. Back up the old pair first if you may need to roll back.
+
+To browse the admin UI without a certificate warning, import `certs/ca.pem` into the browser as a trusted authority (Firefox: Settings > Privacy & Security > Certificates > View Certificates > Authorities > Import; Chrome on Linux: `certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n "Portunus CA" -i certs/ca.pem`).
 
 ---
 
@@ -307,6 +338,17 @@ sudo chmod 755 /opt/portunus/bin/portunus-server
 sudo chown -R portunus:portunus /var/lib/portunus
 ```
 
+Install the TLS certificate and key (copied to `/tmp` on the Pi as described in [TLS certificate setup](#tls-certificate-setup)). The key is group-readable by `portunus` so the service can load it:
+
+```bash
+sudo install -o root -g portunus -m 640 /tmp/server.key /etc/portunus/certs/server.key
+sudo install -o root -g root     -m 644 /tmp/server.pem /etc/portunus/certs/server.pem
+rm /tmp/server.key /tmp/server.pem
+
+# Confirm the service user can read the key
+sudo -u portunus head -c0 /etc/portunus/certs/server.key && echo readable
+```
+
 Create the environment file (`/etc/portunus/portunus.env`):
 
 ```bash
@@ -387,7 +429,17 @@ The admin API uses session-cookie authentication. Before you can log in, you nee
 
 #### First-run admin credentials
 
-On the very first startup, if no admin account exists, the server creates one and prints a randomly generated password to stdout:
+On the very first startup, if no admin account exists, the server creates one with a randomly generated password.
+
+With an on-disk database (any real deployment), the password is **not** logged. It is written to `initial-admin-password.txt` in the same directory as `PORTUNUS_DB_PATH`, mode `600`, owned by the service user. For the systemd setup above:
+
+```bash
+sudo cat /var/lib/portunus/initial-admin-password.txt
+# Delete it once you have changed the password
+sudo rm /var/lib/portunus/initial-admin-password.txt
+```
+
+With an in-memory database, or if the file cannot be written, the server prints the password to the log instead:
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -398,7 +450,7 @@ FIRST RUN — initial admin account created
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-Copy that password before it scrolls away. If you are running as a systemd service, retrieve it from the journal:
+In that fallback case, copy the password before it scrolls away. Under systemd, retrieve it from the journal:
 
 ```bash
 sudo journalctl -u portunus-server | grep -A4 "FIRST RUN"
@@ -451,9 +503,11 @@ This step is required before any other admin operation will work. The server enf
 Via the admin web UI (simplest):
 
 ```
-http://localhost:8080/admin/ui/change-password    # dev
-https://localhost:8443/admin/ui/change-password   # production
+http://localhost:8080/admin/ui/change-password       # dev
+https://<server-ip>:8443/admin/ui/change-password    # production, from another LAN host
 ```
+
+In production the session cookie carries the `Secure` flag, so the admin UI only works over `https://`.
 
 Or via the API:
 
@@ -590,5 +644,9 @@ All server-related commands from the project `Taskfile.yml`:
 **"unknown_module" in access responses** — The module ID in the request is not registered in the database. In local mode, `PORTUNUS_KNOWN_MODULES` or the default `door-001` seeding handles this automatically. In production, register modules via the admin API: `POST /admin/v1/modules`.
 
 **Server starts but ESP32 can't connect** — Verify the server's listen address is `0.0.0.0` (or `:port` which listens on all interfaces), not `127.0.0.1`. Check that the firewall allows the port. On Debian: `sudo ufw allow 8443/tcp` (or whichever port you're using).
+
+**`TLS cert load error: open /etc/portunus/certs/server.key: permission denied`** (service restart loop): the key is not readable by the `portunus` user. Fix with `sudo chown root:portunus /etc/portunus/certs/server.key && sudo chmod 640 /etc/portunus/certs/server.key`, then restart. See [TLS certificate setup](#tls-certificate-setup).
+
+**Browser rejects the certificate for the server's IP** (`SSL_ERROR_BAD_CERT_DOMAIN`, `ERR_CERT_COMMON_NAME_INVALID`): the server cert's SAN does not include the address you are browsing to. Check with `openssl x509 -in /etc/portunus/certs/server.pem -noout -ext subjectAltName`, and reissue it with the existing CA (see [Reissuing the server certificate without rotating the CA](#reissuing-the-server-certificate-without-rotating-the-ca)).
 
 **gRPC not working** — gRPC is disabled by default. Set `PORTUNUS_GRPC_ADDR=:50051` to enable it. gRPC uses the same TLS cert as the HTTP server, so `PORTUNUS_TLS_CERT_FILE` and `PORTUNUS_TLS_KEY_FILE` must be set. The ESP32 firmware must be built with `CONFIG_PORTUNUS_USE_GRPC=y`.
