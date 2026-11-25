@@ -159,7 +159,7 @@ Install ESP-IDF using Espressif’s normal process. Example:
 ```bash
 mkdir -p ~/esp
 cd ~/esp
-git clone --recursive https://github.com/espressif/esp-idf.git
+git clone -b v5.5.1 --recursive https://github.com/espressif/esp-idf.git
 cd esp-idf
 ./install.sh esp32s3
 . ./export.sh

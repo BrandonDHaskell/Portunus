@@ -64,7 +64,7 @@ jobs:
     name: Firmware
     runs-on: ubuntu-latest
     container:
-      image: espressif/idf:release-v5.4
+      image: espressif/idf:v5.5.1
     steps:
       - uses: actions/checkout@v4
 
