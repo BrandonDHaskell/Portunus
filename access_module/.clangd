@@ -1,0 +1,36 @@
+# clangd config for the ESP32-S3 firmware (used by VS Code's clangd extension;
+# CLion has its own engine and ignores this file).
+#
+# The IDF compile database is produced by the Xtensa GCC, which accepts flags
+# clang rejects. Strip them so clangd can parse every TU. clangd also needs
+# --query-driver=**/xtensa-esp*-elf-* so it learns the cross toolchain's system
+# headers; that flag is set in .vscode/settings.json.
+CompileFlags:
+  CompilationDatabase: build
+  # A newlib/libstdc++ header tests __GLIBC_USE(), which GCC tolerates and
+  # clang rejects. clangd-only; the real build is unaffected.
+  Add:
+    - "-D__GLIBC_USE(x)=0"
+  Remove:
+    - -mlongcalls
+    - -mdisable-hardware-atomics
+    - -fstrict-volatile-bitfields
+    - -fno-tree-switch-conversion
+    - -fno-shrink-wrap
+    - -fno-jump-tables
+    - -fzero-init-padding-bits=*
+    - -specs=*
+Diagnostics:
+  Suppress:
+    - pp_including_mainfile_in_preamble
+---
+# Host tests have their own CMake projects and compile databases.
+If:
+  PathMatch: test/host/.*
+CompileFlags:
+  CompilationDatabase: test/host/build/host
+---
+If:
+  PathMatch: test/host_idf/.*
+CompileFlags:
+  CompilationDatabase: test/host_idf/build/fake

@@ -26,3 +26,11 @@ certs/
 *.d
 *.gch
 *.pch
+# ── IDEs ──
+# CLion/IDEA rebuild their project model from CMakePresets.json; nothing in
+# .idea/ is needed to share the build. VS Code's shared config is in .vscode/.
+.idea/
+# Per-machine CMake presets (local compiler paths such as /opt/gcc).
+CMakeUserPresets.json
+# CLion/preset build trees for the firmware (idf.py keeps using build/).
+cmake-build-*/
