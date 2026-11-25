@@ -54,7 +54,7 @@ Each stage is independent and can be run in isolation, but the typical flow runs
 
 Before using the pipeline, both machines need their base setup completed:
 
-- **Dev machine:** Go 1.24+, ESP-IDF 5.4+, Task 3.x — see [Server Setup](setup_server.md) and [Firmware Setup](setup_firmware.md)
+- **Dev machine:** Go 1.24+, ESP-IDF 5.5.1, Task 3.x — see [Server Setup](setup_server.md) and [Firmware Setup](setup_firmware.md)
 - **Raspberry Pi:** The Portunus systemd service installed and the `portunus` user created — see [Server Setup — Running as a systemd service](setup_server.md#running-as-a-systemd-service)
 - **SSH access** from the dev machine to the Pi without a password prompt (key-based auth)
 

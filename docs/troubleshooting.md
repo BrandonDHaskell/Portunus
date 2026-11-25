@@ -114,7 +114,7 @@ If you have an older version, update ESP-IDF:
 ```bash
 cd ~/esp/esp-idf
 git fetch
-git checkout v5.4    # or latest stable 5.x tag
+git checkout v5.5.1    # version pinned in CI (.github/workflows/ci.yml)
 git submodule update --init --recursive
 ./install.sh esp32s3
 . ./export.sh
