@@ -1,0 +1,38 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "fw-base",
+      "hidden": true,
+      "description": "IDE configure presets for ESP32-S3 firmware. Requires the ESP-IDF environment (export.sh) in the IDE toolchain. Taskfile firmware:* tasks remain the canonical build.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/cmake-build-${presetName}",
+      "cacheVariables": {
+        "IDF_TARGET": "esp32s3",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "SDKCONFIG": "${sourceDir}/cmake-build-${presetName}/sdkconfig"
+      }
+    },
+    {
+      "name": "fw-dev",
+      "inherits": "fw-base",
+      "displayName": "Firmware (dev overlay)",
+      "cacheVariables": {
+        "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults;${sourceDir}/sdkconfig.defaults.dev"
+      }
+    },
+    {
+      "name": "fw-prod",
+      "inherits": "fw-base",
+      "displayName": "Firmware (prod overlay)",
+      "cacheVariables": {
+        "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults;${sourceDir}/sdkconfig.defaults.prod"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "fw-dev", "configurePreset": "fw-dev" },
+    { "name": "fw-prod", "configurePreset": "fw-prod" }
+  ]
+}

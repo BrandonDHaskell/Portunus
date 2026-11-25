@@ -91,6 +91,9 @@ task build:server
 
 The compiled binary is written to `server/bin/portunus-server`.
 
+**IDE:** open `server/` (the Go module root) in IntelliJ IDEA Ultimate with the Go
+plugin, GoLand, or VS Code with the Go extension. CLion does not support Go.
+
 ---
 
 ## Configuration

@@ -353,11 +353,20 @@ tasks:
 
   test:a:
     desc: "Host unit tests — pure logic, no ESP-IDF (credential_types, system_fsm_decide)"
+    # PRESET selects a CMakePresets.json / CMakeUserPresets.json preset in
+    # access_module/test/host, e.g. `task test:a PRESET=host-clang`.
+    dir: access_module/test/host
+    vars:
+      PRESET: '{{.PRESET | default "host"}}'
     cmds:
-      - cmake -S access_module/test/host -B access_module/test/host/build
-      - cmake --build access_module/test/host/build
-      - ctest --test-dir access_module/test/host/build --output-on-failure
+      - cmake --preset {{.PRESET}}
+      - cmake --build --preset {{.PRESET}}
+      - ctest --preset {{.PRESET}}
 
+  # Tier B uses the host C/C++ compiler (the IDF linux toolchain file is
+  # empty). To try another compiler without clobbering the default build:
+  #   task test:b BUILD_TAG=gcc16 HOST_CC=/opt/gcc/bin/gcc \
+  #     HOST_CXX=/opt/gcc/bin/g++ HOST_LDFLAGS=-Wl,-rpath,/opt/gcc/lib64
   test:b:
     desc: "Host behavioral tests — ESP-IDF linux target, FreeRTOS POSIX, fake event bus"
     env:
@@ -365,7 +374,8 @@ tasks:
     cmds:
       - |
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
-        BUILD=access_module/test/host_idf/build/fake
+        {{if .HOST_CC}}export CC="{{.HOST_CC}}" CXX="{{.HOST_CXX}}" LDFLAGS="{{.HOST_LDFLAGS}}"{{end}}
+        BUILD=access_module/test/host_idf/build/fake{{if .BUILD_TAG}}-{{.BUILD_TAG}}{{end}}
         if [ ! -f "${BUILD}/CMakeCache.txt" ]; then
           idf.py --preview -C access_module/test/host_idf -B "${BUILD}" set-target linux
         fi
@@ -379,7 +389,8 @@ tasks:
     cmds:
       - |
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
-        BUILD=access_module/test/host_idf/build/real
+        {{if .HOST_CC}}export CC="{{.HOST_CC}}" CXX="{{.HOST_CXX}}" LDFLAGS="{{.HOST_LDFLAGS}}"{{end}}
+        BUILD=access_module/test/host_idf/build/real{{if .BUILD_TAG}}-{{.BUILD_TAG}}{{end}}
         if [ ! -f "${BUILD}/CMakeCache.txt" ]; then
           idf.py --preview -C access_module/test/host_idf -B "${BUILD}" \
             -DPORTUNUS_TEST_REAL_BUS=ON set-target linux

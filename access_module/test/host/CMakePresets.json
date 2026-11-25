@@ -1,0 +1,57 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "host",
+      "displayName": "Host tests (default compiler)",
+      "description": "Tier A host tests with whatever cc/c++ CMake finds on PATH.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "host-gcc",
+      "inherits": "host",
+      "displayName": "Host tests (gcc on PATH)",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++"
+      }
+    },
+    {
+      "name": "host-clang",
+      "inherits": "host",
+      "displayName": "Host tests (clang on PATH)",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "host", "configurePreset": "host" },
+    { "name": "host-gcc", "configurePreset": "host-gcc" },
+    { "name": "host-clang", "configurePreset": "host-clang" }
+  ],
+  "testPresets": [
+    {
+      "name": "host",
+      "configurePreset": "host",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "host-gcc",
+      "inherits": "host",
+      "configurePreset": "host-gcc"
+    },
+    {
+      "name": "host-clang",
+      "inherits": "host",
+      "configurePreset": "host-clang"
+    }
+  ]
+}
