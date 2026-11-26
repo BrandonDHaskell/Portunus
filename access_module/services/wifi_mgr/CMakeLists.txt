@@ -8,6 +8,7 @@
 idf_component_register(
     SRCS
         "src/wifi_mgr.cpp"
+        "src/wifi_backoff.cpp"
     INCLUDE_DIRS
         "include"
     REQUIRES

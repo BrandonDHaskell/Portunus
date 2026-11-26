@@ -50,3 +50,11 @@ target_include_directories(test_reader_health PRIVATE
     ${AM}/core/system_fsm/include)
 target_link_libraries(test_reader_health PRIVATE unity)
 add_test(NAME reader_health COMMAND test_reader_health)
+
+add_executable(test_wifi_backoff
+    test_wifi_backoff.cpp
+    ${AM}/services/wifi_mgr/src/wifi_backoff.cpp)
+target_include_directories(test_wifi_backoff PRIVATE
+    ${AM}/services/wifi_mgr/include)
+target_link_libraries(test_wifi_backoff PRIVATE unity)
+add_test(NAME wifi_backoff COMMAND test_wifi_backoff)
