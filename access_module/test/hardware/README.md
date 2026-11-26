@@ -49,9 +49,35 @@ published the unlock timeout.
    Expect `Door closed during unlock hold` and one
    `Strike DE-ENERGIZED (locked)`, with no timer re-lock afterwards.
 
+## HW-03: card reads through the MFRC522 (F8, D-T7)
+
+Any ACCESS_POINT build. The log shows an 8-hex-digit fingerprint of the
+UID, never the UID, so compare against the fingerprint of the UID printed
+on the card or read with a phone NFC app:
+
+```bash
+python3 -c 'import sys
+h=0x811c9dc5
+for b in bytes.fromhex(sys.argv[1]): h=((h^b)*0x01000193)&0xffffffff
+print(f"{h:08x}")' DEADBEEF
+```
+
+1. Tap a 4-byte card (MIFARE Classic). Expect one `Credential read` line
+   whose `id=` matches the fingerprint of its 4 UID bytes.
+2. Tap a 7-byte card (MIFARE Ultralight or NTAG). Same check over all
+   7 bytes.
+3. Optional, 10-byte card: expect no `Credential read` line. Each poll is
+   a read error, so after about half a second the log shows
+   `entering degraded mode`; every 5 s the chip re-initialises and logs
+   `Credential reader recovered`, and the cycle repeats while the card is
+   held. Polling continues normally once it is removed.
+4. Optional, two cards held together: expect no `Credential read` line
+   with a fingerprint that matches neither card.
+
 ## Results
 
 | ID | Date | Firmware commit | Polarity | Result | Notes |
 |---|---|---|---|---|---|
 | HW-01 | | | active-high | | |
 | HW-02 | | | active-low | | |
+| HW-03 | | | n/a | | |
