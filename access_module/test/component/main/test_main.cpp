@@ -27,6 +27,7 @@
 #endif
 
 #include <string.h>
+#include "freertos/semphr.h"
 
 void setUp(void) {
 #ifndef PORTUNUS_TEST_REAL_BUS
@@ -53,9 +54,7 @@ static portunus_event_t make_deny(void) {
     return e;
 }
 
-static portunus_event_t make_credential_read(bool online) {
-    /* Build an FSM with online/offline capability set manually via init. */
-    (void)online;  /* caps are set by init(); caller controls via has_network */
+static portunus_event_t make_credential_read(void) {
     portunus_event_t e;
     memset(&e, 0, sizeof(e));
     e.id = EVENT_CREDENTIAL_READ;
@@ -138,11 +137,12 @@ void test_credential_read_online_shows_card_read(void) {
 
     SystemFSM fsm(nullptr, nullptr, &fb, &clk);
     TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
-    /* Manually set has_network = true after init (init sets false, WiFi disabled). */
-    /* We control this via the caps struct — not exposed, so we test online = false path.
-     * WiFi is disabled in sdkconfig.defaults, so has_network is always false here.
-     * Online test is covered by the Tier A decide() table which is authoritative. */
-    (void)0;
+    SystemFSMTestFixture fix(fsm);
+    fix.set_network(true);
+    fix.inject(make_credential_read());
+
+    TEST_ASSERT_EQUAL(1, fb.count_of(feedback_type_t::CARD_READ));
+    TEST_ASSERT_EQUAL(0, fb.count_of(feedback_type_t::SYSTEM_ERROR));
 }
 
 /* Credential read while offline: CARD_READ then SYSTEM_ERROR. */
@@ -152,9 +152,9 @@ void test_credential_read_offline_shows_card_read_and_error(void) {
 
     SystemFSM fsm(nullptr, nullptr, &fb, &clk);
     TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
-    /* WiFi disabled in sdkconfig → has_network=false → offline path */
     SystemFSMTestFixture fix(fsm);
-    fix.inject(make_credential_read(false));
+    fix.set_network(false);
+    fix.inject(make_credential_read());
 
     TEST_ASSERT_EQUAL(1, fb.count_of(feedback_type_t::CARD_READ));
     TEST_ASSERT_EQUAL(1, fb.count_of(feedback_type_t::SYSTEM_ERROR));
@@ -231,19 +231,20 @@ void test_relock_failure_retries_on_next_tick(void) {
 #ifdef PORTUNUS_TEST_REAL_BUS
 
 void test_real_bus_publish_reaches_subscriber(void) {
-    /* Real bus: publish from this task, subscriber runs on dispatcher task. */
-    volatile int received = 0;
-    event_bus_subscribe(EVENT_ACCESS_GRANTED,
+    /* The real bus has no unsubscribe, so the subscriber outlives this test:
+     * its context must have static storage (see decision D-T2). */
+    static SemaphoreHandle_t s_rx = xSemaphoreCreateBinary();
+    TEST_ASSERT_NOT_NULL(s_rx);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, event_bus_subscribe(EVENT_ACCESS_GRANTED,
         [](const portunus_event_t *, void *ctx) {
-            (*static_cast<volatile int *>(ctx))++;
-        }, (void *)&received);
+            xSemaphoreGive(static_cast<SemaphoreHandle_t>(ctx));
+        }, s_rx));
 
     portunus_event_t e = make_grant();
-    event_bus_publish(&e);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, event_bus_publish(&e));
 
-    /* Give dispatcher task time to run. */
-    vTaskDelay(pdMS_TO_TICKS(50));
-    TEST_ASSERT_EQUAL(1, received);
+    /* Bounded wait on a real handoff instead of a fixed sleep on a volatile. */
+    TEST_ASSERT_EQUAL(pdTRUE, xSemaphoreTake(s_rx, pdMS_TO_TICKS(1000)));
 }
 
 #endif /* PORTUNUS_TEST_REAL_BUS */
@@ -258,6 +259,7 @@ extern "C" void app_main(void) {
     RUN_TEST(test_grant_unlock_failure_does_not_start_timer);
     RUN_TEST(test_grant_without_access_point_shows_feedback);
     RUN_TEST(test_deny_shows_feedback_only);
+    RUN_TEST(test_credential_read_online_shows_card_read);
     RUN_TEST(test_credential_read_offline_shows_card_read_and_error);
     RUN_TEST(test_no_feedback_hardware_emits_nothing);
     RUN_TEST(test_strike_relocks_after_hold_expires);
