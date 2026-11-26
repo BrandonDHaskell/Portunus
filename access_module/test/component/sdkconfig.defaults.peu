@@ -1,0 +1,3 @@
+# Provisioning console (PEU) variant of the component tier, layered on
+# sdkconfig.defaults: SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.peu"
+CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE=y

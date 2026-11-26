@@ -1,16 +1,27 @@
 set(AM ${CMAKE_CURRENT_LIST_DIR}/../../..)  # access_module root
 
+# One test app per module variant: the module type in sdkconfig picks the
+# test source. Both FSM components are always required: IDF resolves
+# REQUIRES in an early pass that runs before a fresh build has an sdkconfig,
+# so a Kconfig-conditional REQUIRES would pick the wrong one on first
+# configure. provisioning_fsm compiles no sources outside the PEU variant.
+if(CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE)
+    set(_test_src "test_peu_main.cpp")
+else()
+    set(_test_src "test_main.cpp")
+endif()
+
 idf_component_register(
-    SRCS "test_main.cpp"
+    SRCS ${_test_src}
     INCLUDE_DIRS
         "."
         "${CMAKE_CURRENT_LIST_DIR}/../support"
         "${AM}/components/portunus_interfaces/include"
         "${AM}/components/portunus_types/include"
-        "${AM}/core/system_fsm/include"
     REQUIRES
         unity
         system_fsm
+        provisioning_fsm
         event_bus
         portunus_types
         portunus_config

@@ -416,21 +416,30 @@ tasks:
       - task: test:firmware:unit
         vars: { PRESET: host-m32 }
 
+  # Each build directory keeps its own sdkconfig (absolute path: idf.py
+  # resolves a relative SDKCONFIG against the project), so the variants never
+  # share a stale config.
   test:firmware:component:
-    desc: "Firmware component tier: IDF linux target, POSIX FreeRTOS, fake event bus"
+    desc: "Firmware component tier: IDF linux target, POSIX FreeRTOS, fake event bus (access point and PEU)"
     env:
       IDF_PATH: "{{.IDF_PATH}}"
     cmds:
       - |
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
         {{if .HOST_CC}}export CC="{{.HOST_CC}}" CXX="{{.HOST_CXX}}" LDFLAGS="{{.HOST_LDFLAGS}}"{{end}}
-        APP={{.FIRMWARE_DIR}}/test/component
-        BUILD=${APP}/build/fake{{if .BUILD_TAG}}-{{.BUILD_TAG}}{{end}}
-        if [ ! -f "${BUILD}/CMakeCache.txt" ]; then
-          idf.py --preview -C "${APP}" -B "${BUILD}" set-target linux
-        fi
-        idf.py --preview -C "${APP}" -B "${BUILD}" build
-        "${BUILD}/portunus_host_tests.elf"
+        APP="$PWD/{{.FIRMWARE_DIR}}/test/component"
+        for VARIANT in fake peu; do
+          BUILD="${APP}/build/${VARIANT}{{if .BUILD_TAG}}-{{.BUILD_TAG}}{{end}}"
+          DEFAULTS="sdkconfig.defaults"
+          if [ "${VARIANT}" = peu ]; then DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.peu"; fi
+          if [ ! -f "${BUILD}/CMakeCache.txt" ]; then
+            idf.py --preview -C "${APP}" -B "${BUILD}" -D "SDKCONFIG=${BUILD}/sdkconfig" \
+              -D "SDKCONFIG_DEFAULTS=${DEFAULTS}" set-target linux
+          fi
+          idf.py --preview -C "${APP}" -B "${BUILD}" -D "SDKCONFIG=${BUILD}/sdkconfig" \
+            -D "SDKCONFIG_DEFAULTS=${DEFAULTS}" build
+          "${BUILD}/portunus_host_tests.elf"
+        done
 
   test:firmware:integration:
     desc: "Firmware integration tier: IDF linux target, real event bus and dispatcher task"
@@ -440,12 +449,13 @@ tasks:
       - |
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
         {{if .HOST_CC}}export CC="{{.HOST_CC}}" CXX="{{.HOST_CXX}}" LDFLAGS="{{.HOST_LDFLAGS}}"{{end}}
-        APP={{.FIRMWARE_DIR}}/test/component
-        BUILD=${APP}/build/real{{if .BUILD_TAG}}-{{.BUILD_TAG}}{{end}}
+        APP="$PWD/{{.FIRMWARE_DIR}}/test/component"
+        BUILD="${APP}/build/real{{if .BUILD_TAG}}-{{.BUILD_TAG}}{{end}}"
         if [ ! -f "${BUILD}/CMakeCache.txt" ]; then
-          idf.py --preview -C "${APP}" -B "${BUILD}" -DPORTUNUS_TEST_REAL_BUS=ON set-target linux
+          idf.py --preview -C "${APP}" -B "${BUILD}" -D "SDKCONFIG=${BUILD}/sdkconfig" \
+            -DPORTUNUS_TEST_REAL_BUS=ON set-target linux
         fi
-        idf.py --preview -C "${APP}" -B "${BUILD}" build
+        idf.py --preview -C "${APP}" -B "${BUILD}" -D "SDKCONFIG=${BUILD}/sdkconfig" build
         "${BUILD}/portunus_host_tests.elf"
 
   # ─── Deploy ────────────────────────────────────────────────────────────────

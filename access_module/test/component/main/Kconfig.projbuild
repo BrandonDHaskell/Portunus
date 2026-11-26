@@ -4,9 +4,18 @@
 
 menu "Portunus Test Build Configuration"
 
-    config PORTUNUS_MODULE_TYPE_ACCESS_POINT
-        bool
-        default y
+    # Selected per build: sdkconfig.defaults picks the access point, and
+    # sdkconfig.defaults.peu overrides it for the provisioning console build.
+    choice PORTUNUS_MODULE_TYPE
+        prompt "Module type"
+        default PORTUNUS_MODULE_TYPE_ACCESS_POINT
+
+        config PORTUNUS_MODULE_TYPE_ACCESS_POINT
+            bool "Access point"
+
+        config PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
+            bool "Provisioning console (PEU)"
+    endchoice
 
     config PORTUNUS_UNLOCK_HOLD_MS
         int
