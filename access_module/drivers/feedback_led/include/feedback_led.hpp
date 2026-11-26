@@ -7,8 +7,9 @@
  * FreeRTOS task notification, which preempts any in-progress pattern.
  *
  * Pattern types:
- *   - One-shot (ACCESS_GRANTED, ACCESS_DENIED): run to completion,
- *     then return to idle (LED off).
+ *   - One-shot (ACCESS_GRANTED, ACCESS_DENIED, results): run to
+ *     completion, then return to the SYSTEM_READY blink if it was the
+ *     last baseline indicated, otherwise LED off.
  *   - Continuous (SYSTEM_READY, SYSTEM_ERROR): loop until replaced.
  *   - Held (CARD_READ): LED stays on until replaced.
  *   - NONE: cancel current pattern, LED off immediately.

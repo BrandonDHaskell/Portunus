@@ -9,6 +9,7 @@ idf_component_register(
     SRCS
         "src/feedback_led.cpp"
         "src/led_hal.cpp"
+        "src/led_pattern.cpp"
     INCLUDE_DIRS
         "include"
     REQUIRES
