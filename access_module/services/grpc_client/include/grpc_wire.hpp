@@ -15,6 +15,11 @@
 /** gRPC frame header: 1 byte compression flag + 4 bytes big-endian length. */
 static constexpr size_t GRPC_FRAME_HEADER_LEN = 5;
 
+/** Upper bound on an outbound RPC payload; grpc_client frames requests in a
+ *  fixed stack buffer of GRPC_FRAME_HEADER_LEN + this, so no heap on the hot
+ *  path. server_comm static_asserts that every request message fits. */
+static constexpr size_t GRPC_MAX_REQUEST_PAYLOAD = 192;
+
 /** Result of decoding one length-prefixed gRPC message. */
 enum class grpc_frame_status_t : uint8_t {
     OK,

@@ -16,6 +16,7 @@
  */
 
 #include "wifi_mgr.hpp"
+#include "wifi_backoff.hpp"
 #include "network_config.hpp"
 #include "error_codes.hpp"
 
@@ -28,7 +29,6 @@
 #include "freertos/task.h"
 
 #include <string.h>
-#include <algorithm>   /* std::min */
 #include <atomic>
 #include <inttypes.h>
 
@@ -98,14 +98,13 @@ static void reconnect_task(void *arg)
            already reset s_reconnect_interval_ms.  Advancing backoff here would
            overwrite that reset, leaving the next real disconnect with a stale
            (too-long) interval.  Only advance when we actually attempt a connect. */
-        if (s_connected) {
+        const bool connected = s_connected;
+        s_reconnect_interval_ms =
+            wifi_backoff_after_wait(s_reconnect_interval_ms, connected, RECONNECT_CEILING_MS);
+        if (connected) {
             ESP_LOGI(TAG, "Reconnect: already connected, skipping attempt");
             continue;
         }
-
-        /* Advance the backoff for the NEXT attempt (cap at ceiling). */
-        s_reconnect_interval_ms =
-            std::min(s_reconnect_interval_ms * 2, RECONNECT_CEILING_MS);
 
         ESP_LOGI(TAG, "Reconnect: calling esp_wifi_connect()");
         esp_err_t err = esp_wifi_connect();

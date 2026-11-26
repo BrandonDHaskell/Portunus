@@ -72,6 +72,7 @@
 
 /* ESP-IDF */
 #include "grpc_client.hpp"
+#include "grpc_wire.hpp"
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_log.h"
@@ -88,6 +89,31 @@
 #include <inttypes.h>
 #include <time.h>
 #include <sys/time.h>
+
+/* ── Wire size contracts (checked at compile time) ───────────────────────────
+ * COMP-02: grpc_client frames each request in a fixed buffer, and writes the
+ * whole response frame (header included) into the caller's buffer before
+ * stripping the header. A proto change that grows a message past either
+ * limit must fail the build, not truncate at runtime. */
+static constexpr size_t RESP_FRAME_MARGIN = 16;
+static_assert(RESP_FRAME_MARGIN >= GRPC_FRAME_HEADER_LEN,
+              "response buffers must hold the gRPC frame header");
+static_assert(portunus_v1_HeartbeatRequest_size <= GRPC_MAX_REQUEST_PAYLOAD,
+              "HeartbeatRequest exceeds GRPC_MAX_REQUEST_PAYLOAD");
+static_assert(portunus_v1_AccessRequest_size <= GRPC_MAX_REQUEST_PAYLOAD,
+              "AccessRequest exceeds GRPC_MAX_REQUEST_PAYLOAD");
+static_assert(portunus_v1_ProvisionCredentialRequest_size <= GRPC_MAX_REQUEST_PAYLOAD,
+              "ProvisionCredentialRequest exceeds GRPC_MAX_REQUEST_PAYLOAD");
+
+/* COMP-03: firmware structs and Nanopb fields agree on string capacity. */
+static_assert(sizeof(event_access_decision_t::reason) ==
+              sizeof(portunus_v1_AccessResponse::reason),
+              "decision reason must match AccessResponse.reason");
+static_assert(CREDENTIAL_UID_MAX_LEN * 3 <= sizeof(portunus_v1_AccessRequest::credential_id),
+              "a 10-byte UID as XX:..:XX plus NUL must fit AccessRequest.credential_id");
+static_assert(CREDENTIAL_UID_MAX_LEN <=
+              sizeof(portunus_v1_ProvisionCredentialRequest_credential_uid_t::bytes),
+              "ProvisionCredentialRequest.credential_uid must hold the longest UID");
 
 static const char *TAG = "server_comm";
 
@@ -486,7 +512,7 @@ static void handle_heartbeat(const event_heartbeat_t *hb)
     }
 
     /* POST */
-    uint8_t resp_buf[portunus_v1_HeartbeatResponse_size + 16];  /* small margin */
+    uint8_t resp_buf[portunus_v1_HeartbeatResponse_size + RESP_FRAME_MARGIN];
     int resp_len = 0;
     int64_t t_before = esp_timer_get_time();
 
@@ -599,7 +625,7 @@ static void handle_credential(const event_credential_read_t *cred)
     }
 
     /* POST */
-    uint8_t resp_buf[portunus_v1_AccessResponse_size + 16];
+    uint8_t resp_buf[portunus_v1_AccessResponse_size + RESP_FRAME_MARGIN];
     int resp_len = 0;
 #if PORTUNUS_HMAC_ENABLED
     char resp_sig_hex[PORTUNUS_HMAC_HEX_LEN] = {};
@@ -743,7 +769,7 @@ static void handle_provision(const event_provision_request_t *req)
     }
 
     /* Send */
-    uint8_t resp_buf[portunus_v1_ProvisionCredentialResponse_size + 16];
+    uint8_t resp_buf[portunus_v1_ProvisionCredentialResponse_size + RESP_FRAME_MARGIN];
     int resp_len = 0;
 
     /* Hex-encode credential_uid for the HMAC projection.
