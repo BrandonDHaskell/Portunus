@@ -58,7 +58,7 @@ void test_every_pattern_trace(void) {
                              trace(ft::PROVISIONING_SUCCESS, 24).c_str());
     TEST_ASSERT_EQUAL_STRING((rep("####....", 2) + "....").c_str(),
                              trace(ft::PROVISIONING_DUPLICATE, 20).c_str());
-    TEST_ASSERT_EQUAL_STRING((std::string(10, '#') + "...." + rep("##..", 2) + "........").c_str(),
+    TEST_ASSERT_EQUAL_STRING((std::string(10, '#') + "...." + rep("##..", 3) + "....").c_str(),
                              trace(ft::PROVISIONING_UNAUTHORIZED, 30).c_str());
     TEST_ASSERT_EQUAL_STRING(rep("#...#" + std::string(115, '.'), 2).c_str(),
                              trace(ft::PEU_IDLE, 240).c_str());
@@ -76,6 +76,16 @@ void test_every_pattern_trace(void) {
                              trace(ft::PEU_RESULT_UNAUTHORIZED, 30).c_str());
     TEST_ASSERT_EQUAL_STRING(trace(ft::SYSTEM_ERROR, 16).c_str(),
                              trace(ft::PEU_RESULT_ERROR, 16).c_str());
+}
+
+/* DRV-06b: the unauthorised pattern shows three rapid blinks, as documented.
+ * It used to show two: the first rapid blink fell on the tick that ended the
+ * long on-phase and was swallowed. */
+void test_unauthorized_has_three_rapid_blinks(void) {
+    const std::string t = trace(ft::PROVISIONING_UNAUTHORIZED, 40).substr(10);
+    size_t rises = 0;
+    for (size_t i = 1; i < t.size(); ++i) rises += (t[i] == '#' && t[i - 1] == '.');
+    TEST_ASSERT_EQUAL_size_t(3, rises);
 }
 
 /* DRV-08: a new indication preempts mid-pattern and restarts at tick 0. */
@@ -137,6 +147,7 @@ void test_every_type_has_a_pattern(void) {
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_every_pattern_trace);
+    RUN_TEST(test_unauthorized_has_three_rapid_blinks);
     RUN_TEST(test_preemption_resets_tick);
     RUN_TEST(test_continuous_tick_stays_bounded);
     RUN_TEST(test_out_of_range_value_is_inert);

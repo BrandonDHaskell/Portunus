@@ -30,7 +30,7 @@ static constexpr uint32_t SUCCESS_ON = 2, SUCCESS_CYCLE = 4, SUCCESS_COUNT = 5;
 /* *_DUPLICATE: 2x medium blinks. */
 static constexpr uint32_t DUP_ON = 4, DUP_CYCLE = 8, DUP_COUNT = 2;
 
-/* *_UNAUTHORIZED: 500 ms on, then rapid blinks. */
+/* *_UNAUTHORIZED: 500 ms on, one rapid cycle off as a gap, then 3x rapid. */
 static constexpr uint32_t UNAUTH_LONG_ON = 10;
 static constexpr uint32_t UNAUTH_RAPID_ON = 2, UNAUTH_RAPID_CYCLE = 4, UNAUTH_RAPID_COUNT = 3;
 static constexpr uint32_t UNAUTH_RAPID_START = UNAUTH_LONG_ON + UNAUTH_RAPID_CYCLE;
@@ -86,7 +86,7 @@ uint32_t led_pattern_length(feedback_type_t type)
     case ft::PROVISIONING_DUPLICATE:
     case ft::PEU_RESULT_DUPLICATE:      return DUP_CYCLE * DUP_COUNT;
     case ft::PROVISIONING_UNAUTHORIZED:
-    case ft::PEU_RESULT_UNAUTHORIZED:   return UNAUTH_LONG_ON + UNAUTH_RAPID_CYCLE * UNAUTH_RAPID_COUNT;
+    case ft::PEU_RESULT_UNAUTHORIZED:   return UNAUTH_RAPID_START + UNAUTH_RAPID_CYCLE * UNAUTH_RAPID_COUNT;
     case ft::PEU_RESULT_PENDING:        return PENDING_CYCLE * PENDING_COUNT;
     case ft::SYSTEM_READY:              return READY_CYCLE;
     case ft::SYSTEM_ERROR:
