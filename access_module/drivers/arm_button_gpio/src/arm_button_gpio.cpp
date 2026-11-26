@@ -1,4 +1,5 @@
 #include "arm_button_gpio.hpp"
+#include "arm_edge.hpp"
 #include "error_codes.hpp"
 #include "driver/gpio.h"
 #include "esp_log.h"
@@ -30,22 +31,5 @@ portunus_err_t ArmButtonGpio::init()
 
 bool ArmButtonGpio::poll_arm()
 {
-    const int pressed_level = m_active_low ? 0 : 1;
-    const int level         = gpio_get_level(m_pin);
-
-    if (level == pressed_level) {
-        m_debounce_count++;
-        // Return true only on the exact threshold sample — once per press.
-        if (m_debounce_count == k_debounce_threshold) {
-            return true;
-        }
-        // Cap so we don't overflow on a long hold.
-        if (m_debounce_count > k_debounce_threshold) {
-            m_debounce_count = k_debounce_threshold;
-        }
-    } else {
-        m_debounce_count = 0;
-    }
-
-    return false;
+    return arm_edge_step(m_edge, arm_level_pressed(gpio_get_level(m_pin), m_active_low));
 }

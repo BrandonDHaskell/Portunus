@@ -74,3 +74,12 @@ target_include_directories(test_led_pattern PRIVATE
     ${AM}/components/portunus_types/include)
 target_link_libraries(test_led_pattern PRIVATE unity)
 add_test(NAME led_pattern COMMAND test_led_pattern)
+
+add_executable(test_input_debounce
+    test_input_debounce.cpp
+    ${AM}/drivers/access_point_gpio/src/debounce.cpp)
+target_include_directories(test_input_debounce PRIVATE
+    ${AM}/drivers/access_point_gpio/include
+    ${AM}/drivers/arm_button_gpio/include)
+target_link_libraries(test_input_debounce PRIVATE unity)
+add_test(NAME input_debounce COMMAND test_input_debounce)

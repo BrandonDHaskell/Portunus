@@ -1,6 +1,7 @@
 #pragma once
 
 #include "i_arm.hpp"
+#include "arm_edge.hpp"
 #include "driver/gpio.h"
 
 /**
@@ -25,9 +26,7 @@ public:
     bool poll_arm() override;
 
 private:
-    static constexpr int k_debounce_threshold = 3; // consecutive same-level reads required
-
     gpio_num_t m_pin;
     bool       m_active_low;
-    int        m_debounce_count = 0;
+    arm_edge_t m_edge;  // press-edge state, see arm_edge.hpp
 };
