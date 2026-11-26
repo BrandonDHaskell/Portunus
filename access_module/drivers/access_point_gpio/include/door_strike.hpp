@@ -27,8 +27,9 @@ extern "C" {
 /**
  * @brief Initialise the door strike GPIO.
  *
- * Configures the pin as a push-pull output and sets it to the
- * de-energized (locked) state.
+ * Sets the de-energized (locked) level, then configures the pin as a
+ * push-pull output with its input buffer enabled so that
+ * door_strike_deenergize() can read the pad back.
  *
  * @return PORTUNUS_OK on success, or an error code if GPIO
  *         configuration fails.
@@ -48,9 +49,11 @@ portunus_err_t door_strike_energize(void);
 /**
  * @brief De-energize the door strike (lock the door).
  *
- * Sets the GPIO to the inactive level.  Returns immediately.
+ * Sets the GPIO to the inactive level and reads the pad back.
  *
- * @return PORTUNUS_OK on success.
+ * @return PORTUNUS_OK on success, or PORTUNUS_ERR_GPIO_INIT if the write
+ *         fails or the readback does not show the inactive level (the
+ *         strike is then reported as still energized).
  */
 portunus_err_t door_strike_deenergize(void);
 
