@@ -7,7 +7,9 @@ set(AM ${CMAKE_CURRENT_LIST_DIR}/../../..)  # access_module root
 # wrong one on first configure. provisioning_fsm compiles no sources outside
 # the PEU variant, and the other variants never reference heartbeat_service,
 # so its esp_timer call (no linux implementation) is not linked there.
-if(CONFIG_PORTUNUS_TEST_HEARTBEAT)
+if(PORTUNUS_TEST_NVS)
+    set(_test_src "test_nvs_main.cpp")
+elseif(CONFIG_PORTUNUS_TEST_HEARTBEAT)
     set(_test_src "test_heartbeat_main.cpp")
 elseif(CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE)
     set(_test_src "test_peu_main.cpp")
@@ -39,4 +41,13 @@ idf_component_register(
 # real-bus variant compiles the fake-bus test paths and fails to link.
 if(PORTUNUS_TEST_REAL_BUS)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE PORTUNUS_TEST_REAL_BUS=1)
+endif()
+
+# The NVS variant links portunus_nvs after registration instead of through
+# REQUIRES: the early REQUIRES pass sees neither sdkconfig nor CMake cache
+# options, and an unconditional REQUIRES would compile nvs_flash and
+# esp_partition into every variant. The top-level CMakeLists.txt adds them to
+# COMPONENTS for this build only.
+if(PORTUNUS_TEST_NVS)
+    target_link_libraries(${COMPONENT_LIB} PRIVATE idf::portunus_nvs idf::nvs_flash)
 endif()

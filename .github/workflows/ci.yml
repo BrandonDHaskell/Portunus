@@ -136,6 +136,14 @@ jobs:
             -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.hb" set-target linux build
           $APP/build/hb/portunus_host_tests.elf
 
+      - name: Component tier, portunus_nvs (emulated flash)
+        run: |
+          . $IDF_PATH/export.sh
+          APP=$PWD/access_module/test/component
+          idf.py --preview -C $APP -B $APP/build/nvs -D SDKCONFIG=$APP/build/nvs/sdkconfig \
+            -DPORTUNUS_TEST_NVS=ON set-target linux build
+          $APP/build/nvs/portunus_host_tests.elf
+
       - name: Integration tier (real event bus)
         run: |
           . $IDF_PATH/export.sh
