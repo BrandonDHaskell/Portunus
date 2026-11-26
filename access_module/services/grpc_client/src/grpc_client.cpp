@@ -44,9 +44,6 @@ static const char *TAG = "grpc_client";
 
 /* ── Constants ─────────────────────────────────────────────────────────────── */
 
-/** Upper bound on outbound RPC payload; avoids heap allocation on the hot path.
- *  Sized to HeartbeatRequest_size (142) + margin. */
-static constexpr size_t GRPC_MAX_REQUEST_PAYLOAD = 192;
 
 /* ── Internal types ────────────────────────────────────────────────────────── */
 
