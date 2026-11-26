@@ -90,7 +90,7 @@ extern "C" {
  * at runtime in server_comm_init() — see portunus_nvs.hpp. */
 
 /** HTTP header name for the HMAC signature. */
-#define PORTUNUS_HMAC_HEADER_NAME  "X-Portunus-Sig"
+#define PORTUNUS_HMAC_HEADER_NAME  "x-portunus-sig"  /* HTTP/2 requires lowercase names */
 
 /** Hex-encoded HMAC-SHA256 is always 64 chars + NUL. */
 #define PORTUNUS_HMAC_HEX_LEN  65

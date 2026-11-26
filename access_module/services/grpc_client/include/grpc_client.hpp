@@ -3,16 +3,18 @@
  * @brief Lightweight gRPC client for ESP-IDF (unary RPCs only).
  *
  * Implements the gRPC wire protocol over HTTP/2 using nghttp2 + esp-tls.
- * Designed for the Portunus access module's two unary RPCs:
- *   - /portunus.v1.PortunusService/SendHeartbeat
- *   - /portunus.v1.PortunusService/RequestAccess
+ * Used for the Portunus access module's unary RPCs (SendHeartbeat,
+ * RequestAccess, ProvisionCredential).
  *
  * Architecture:
  *   The client maintains a persistent TLS+HTTP/2 connection to the server.
  *   Each unary call opens an HTTP/2 stream, sends the gRPC-framed request,
  *   receives the gRPC-framed response + trailers, and closes the stream.
- *   The connection is reused across calls and automatically re-established
- *   on failure.
+ *   The connection is reused across calls and re-established on demand.
+ *   Failed connection attempts are rate-limited with exponential backoff, so
+ *   an unreachable server costs one fast failure per call instead of a full
+ *   connect timeout.  Any RPC that fails mid-stream tears the connection
+ *   down so no stale stream state survives into the next call.
  *
  * gRPC wire format (sent in HTTP/2 DATA frames):
  *   [1 byte: compression flag (0x00)] [4 bytes: message length (big-endian)]
@@ -46,7 +48,22 @@ typedef struct {
     /* Timeouts */
     int         connect_timeout_ms; /**< TCP + TLS handshake timeout. */
     int         rpc_timeout_ms;     /**< Per-RPC timeout (send + receive). */
+
+    /* Reconnect backoff.  After a failed connect, further attempts are
+     * refused until the backoff elapses; the delay doubles per failure up to
+     * the maximum and resets on success.  0 for min disables backoff. */
+    uint32_t    reconnect_backoff_min_ms;
+    uint32_t    reconnect_backoff_max_ms;
 } grpc_client_config_t;
+
+/** One request metadata entry (HTTP/2 header) for a single call. */
+typedef struct {
+    const char *key;    /**< Lowercase header name, e.g. "x-portunus-sig". */
+    const char *value;  /**< Header value. */
+} grpc_metadata_t;
+
+/** Maximum metadata entries accepted per call. */
+#define GRPC_MAX_CALL_METADATA 4
 
 /* ── Handle ────────────────────────────────────────────────────────────────── */
 
@@ -99,6 +116,8 @@ void grpc_client_destroy(grpc_client_handle_t handle);
  *
  * @return PORTUNUS_OK on success.
  *         PORTUNUS_ERR_HTTP_CONNECT on TLS or HTTP/2 handshake failure.
+ *         PORTUNUS_ERR_RECONNECT_BACKOFF if a previous attempt failed and
+ *         the backoff delay has not elapsed yet (no attempt was made).
  */
 portunus_err_t grpc_client_connect(grpc_client_handle_t handle);
 
@@ -123,15 +142,21 @@ bool grpc_client_is_connected(grpc_client_handle_t handle);
  * Sends a protobuf-encoded request and receives the protobuf-encoded
  * response.  The gRPC 5-byte length prefix is added/stripped internally.
  *
- * If the connection is not open, it is established automatically.
- * If the connection drops mid-call, the call fails and the connection
- * is marked as closed for the next attempt to reconnect.
+ * If the connection is not open, it is established automatically (subject
+ * to reconnect backoff).  If the call fails after the request was submitted
+ * (timeout, stream reset, connection error), the connection is torn down so
+ * the next call starts from a clean session.
+ *
+ * Metadata is per call and is never retained by the client: a signature
+ * computed for one request cannot be lost to, or leak into, another.
  *
  * @param handle         Client handle from grpc_client_init().
  * @param service_method Full gRPC method path, e.g.
  *                       "/portunus.v1.PortunusService/SendHeartbeat".
  * @param req_buf        Protobuf-encoded request body (no gRPC prefix).
  * @param req_len        Length of req_buf in bytes.
+ * @param metadata       Request metadata for this call (may be NULL if count is 0).
+ * @param metadata_count Number of entries in metadata (<= GRPC_MAX_CALL_METADATA).
  * @param resp_buf       Buffer to receive the protobuf response (prefix stripped).
  * @param resp_cap       Capacity of resp_buf in bytes.
  * @param resp_len       [out] Actual protobuf bytes written to resp_buf.
@@ -142,43 +167,35 @@ bool grpc_client_is_connected(grpc_client_handle_t handle);
  *                       send the header.  Pass NULL to ignore.
  *
  * @return PORTUNUS_OK        Round-trip succeeded (check grpc_status for app errors).
- *         PORTUNUS_ERR_HTTP_CONNECT  Could not establish connection.
+ *         PORTUNUS_ERR_HTTP_CONNECT  Could not establish connection, or it failed mid-call.
+ *         PORTUNUS_ERR_RECONNECT_BACKOFF  Not connected and still backing off.
  *         PORTUNUS_ERR_TIMEOUT       RPC timed out.
+ *         PORTUNUS_ERR_INVALID_ARG   Bad arguments (including too much metadata).
  *         PORTUNUS_ERR_PROTO_ENCODE  gRPC frame encoding error.
  *         PORTUNUS_ERR_PROTO_DECODE  gRPC frame decoding error (bad response).
  */
 portunus_err_t grpc_client_unary_call(grpc_client_handle_t handle,
                                        const char *service_method,
                                        const uint8_t *req_buf, size_t req_len,
+                                       const grpc_metadata_t *metadata,
+                                       size_t metadata_count,
                                        uint8_t *resp_buf, size_t resp_cap,
                                        int *resp_len, int *grpc_status,
                                        char *out_sig_hex);
 
 /**
- * @brief Send an HTTP/2 PING and wait for the ACK (B18).
+ * @brief Send an HTTP/2 PING and wait for the server's ACK.
  *
- * Call periodically during idle periods to prevent NAT/firewall entries
- * from expiring between heartbeats.  No-op and returns
- * PORTUNUS_ERR_INVALID_ARG if the client is not connected.
+ * Call periodically during idle periods to keep NAT/firewall entries alive
+ * and to detect a dead peer between heartbeats.  On failure the connection
+ * is torn down so the next RPC reconnects.
  *
  * @return PORTUNUS_OK on success (ACK received within rpc_timeout_ms).
- *         PORTUNUS_ERR_HTTP_CONNECT if the ping fails (connection gone).
+ *         PORTUNUS_ERR_INVALID_ARG if the client is not connected.
+ *         PORTUNUS_ERR_TIMEOUT if no ACK arrived in time.
+ *         PORTUNUS_ERR_HTTP_CONNECT if the connection failed.
  */
 portunus_err_t grpc_client_send_ping(grpc_client_handle_t handle);
-
-/**
- * @brief Set custom metadata (headers) sent with every RPC.
- *
- * Used to attach the HMAC signature header.  The key/value are copied
- * internally.  Call again with NULL value to remove a key.
- *
- * @param handle Client handle.
- * @param key    Header name (e.g. "x-portunus-sig").
- * @param value  Header value (or NULL to remove).
- */
-portunus_err_t grpc_client_set_metadata(grpc_client_handle_t handle,
-                                         const char *key,
-                                         const char *value);
 
 #ifdef __cplusplus
 }

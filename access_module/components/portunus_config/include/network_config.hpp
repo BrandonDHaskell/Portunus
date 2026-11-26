@@ -32,6 +32,10 @@ extern "C" {
 /** Server request timeout (ms) for gRPC connect and RPC calls. */
 #define PORTUNUS_SERVER_REQUEST_TIMEOUT_MS  CONFIG_PORTUNUS_SERVER_REQUEST_TIMEOUT_MS
 
+/** Server reconnect backoff bounds (see Kconfig). */
+#define PORTUNUS_SERVER_RECONNECT_MIN_MS    CONFIG_PORTUNUS_SERVER_RECONNECT_MIN_MS
+#define PORTUNUS_SERVER_RECONNECT_MAX_MS    CONFIG_PORTUNUS_SERVER_RECONNECT_MAX_MS
+
 #ifdef __cplusplus
 }
 #endif
