@@ -58,3 +58,13 @@ target_include_directories(test_wifi_backoff PRIVATE
     ${AM}/services/wifi_mgr/include)
 target_link_libraries(test_wifi_backoff PRIVATE unity)
 add_test(NAME wifi_backoff COMMAND test_wifi_backoff)
+
+add_executable(test_led_pattern
+    test_led_pattern.cpp
+    ${AM}/drivers/feedback_led/src/led_pattern.cpp)
+target_include_directories(test_led_pattern PRIVATE
+    ${AM}/drivers/feedback_led/include
+    ${AM}/components/portunus_interfaces/include
+    ${AM}/components/portunus_types/include)
+target_link_libraries(test_led_pattern PRIVATE unity)
+add_test(NAME led_pattern COMMAND test_led_pattern)
