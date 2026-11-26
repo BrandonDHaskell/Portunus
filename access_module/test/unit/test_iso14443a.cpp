@@ -252,6 +252,58 @@ void test_collision_propagates(void) {
     }
 }
 
+/* DRV-13 (D-T7 a): a triple-size 10-byte UID needs CL3, which is not
+ * implemented. The read fails closed instead of returning the first seven
+ * bytes (cascade tag included) as a 7-byte UID, and CL3 is never sent. */
+void test_10_byte_uid_fails_closed(void) {
+    Card c = card(UID10);
+    credential_t cred;
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_CREDENTIAL_READ, read(c, cred));
+    assert_zeroed(cred);
+    TEST_ASSERT_TRUE(c.sent_command(PICC_SEL_CL2));
+    TEST_ASSERT_FALSE(c.sent_command(PICC_SEL_CL3));
+}
+
+/* SAK decides whether another cascade level follows. When the cascade tag
+ * and SAK disagree at CL1 the frame is not trusted (AN10927: uid0 of a
+ * single-size UID is never 88h). */
+void test_cascade_tag_and_sak_must_agree(void) {
+    credential_t cred;
+
+    Card tag_but_complete = card(UID7);   /* CT at CL1, SAK says done */
+    tag_but_complete.sak_level = 0;
+    tag_but_complete.sak       = 0x08;
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_CREDENTIAL_READ, read(tag_but_complete, cred));
+    assert_zeroed(cred);
+    TEST_ASSERT_FALSE(tag_but_complete.sent_command(PICC_SEL_CL2));
+
+    Card more_without_tag = card(UID4);   /* no CT, SAK says more */
+    more_without_tag.sak_level = 0;
+    more_without_tag.sak       = PICC_SAK_CASCADE;
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_CREDENTIAL_READ, read(more_without_tag, cred));
+    assert_zeroed(cred);
+    TEST_ASSERT_FALSE(more_without_tag.sent_command(PICC_SEL_CL2));
+
+    /* 88h is reserved only as uid0 of a single-size UID: a double-size UID
+     * whose uid3 is 88h reads normally, because at CL2 SAK alone decides. */
+    const bytes uid7_88 = {0x04, 0x11, 0x22, 0x88, 0x44, 0x55, 0x66};
+    Card tag_value_at_cl2 = card(uid7_88, 0x00);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, read(tag_value_at_cl2, cred));
+    TEST_ASSERT_EQUAL_UINT8(7, cred.uid_len);
+    TEST_ASSERT_EQUAL_HEX8_ARRAY(uid7_88.data(), cred.uid, 7);
+}
+
+/* A SAK reply that is not SAK plus CRC_A is a read error at every level. */
+void test_short_sak_is_read_error(void) {
+    for (int level = 0; level < 2; ++level) {
+        Card c = card(UID7);
+        c.short_sak_level = level;
+        credential_t cred;
+        TEST_ASSERT_EQUAL(PORTUNUS_ERR_CREDENTIAL_READ, read(c, cred));
+        assert_zeroed(cred);
+    }
+}
+
 void test_null_credential(void) {
     Card c = card(UID4);
     TEST_ASSERT_EQUAL(PORTUNUS_ERR_INVALID_ARG, iso14443a_read_uid(io_for(c), nullptr));
@@ -268,6 +320,9 @@ int main(void) {
     RUN_TEST(test_short_atqa_and_chip_error);
     RUN_TEST(test_transceive_status_decoding);
     RUN_TEST(test_collision_propagates);
+    RUN_TEST(test_10_byte_uid_fails_closed);
+    RUN_TEST(test_cascade_tag_and_sak_must_agree);
+    RUN_TEST(test_short_sak_is_read_error);
     RUN_TEST(test_null_credential);
     return UNITY_END();
 }
