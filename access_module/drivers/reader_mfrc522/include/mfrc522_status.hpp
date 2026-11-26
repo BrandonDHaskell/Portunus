@@ -45,3 +45,11 @@ constexpr portunus_err_t mfrc522_transceive_status(uint8_t com_irq, uint8_t erro
     }
     return PORTUNUS_OK;
 }
+
+/** VersionReg values that mean nothing is answering on SPI: a bus that
+ *  floats or is pulled high reads 0xFF, one held low reads 0x00. Any real
+ *  chip, clones included, reports something else. */
+constexpr bool mfrc522_version_is_dead(uint8_t version)
+{
+    return version == 0x00 || version == 0xFF;
+}

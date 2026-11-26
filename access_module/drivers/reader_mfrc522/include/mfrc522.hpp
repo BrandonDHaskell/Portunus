@@ -47,6 +47,8 @@ portunus_err_t mfrc522_init(void);
  * @return PORTUNUS_ERR_CREDENTIAL_COLLISION on anti-collision failure.
  * @return PORTUNUS_ERR_CREDENTIAL_READ on other read failures, a malformed
  *         reply, or a 10-byte UID.
+ * @return PORTUNUS_ERR_DEVICE_NOT_FOUND if no card answered and VersionReg
+ *         reads 0x00 or 0xFF (chip disconnected or unpowered).
  */
 portunus_err_t mfrc522_read_credential(credential_t *cred);
 

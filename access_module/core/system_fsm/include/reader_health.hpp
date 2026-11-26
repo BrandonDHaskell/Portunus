@@ -5,14 +5,23 @@
  * unit tier links it directly; the poll loop calls the same functions. */
 #pragma once
 
+#include "portunus_types.hpp"  /* portunus_err_t */
+
 #include <stdint.h>
 
 /** Outcome of one ICredentialReader::read(). */
 enum class reader_read_result_t : uint8_t {
     CREDENTIAL,     /**< A card was read. */
     NO_CREDENTIAL,  /**< No card in field; the chip answered, so it is healthy. */
-    HW_ERROR,       /**< Any other error: timeout, SPI, collision, CRC. */
+    CARD_ERROR,     /**< A card answered badly: collision, BCC, malformed reply,
+                         unsupported UID. Says nothing about the chip. */
+    HW_ERROR,       /**< The chip or bus failed: SPI, timeout, not found, unknown. */
 };
+
+/** Map an ICredentialReader::read() result to its health outcome. Unknown
+ *  codes count as hardware errors, so a new failure mode is reported rather
+ *  than ignored. */
+reader_read_result_t reader_classify(portunus_err_t err);
 
 /** Health transition the loop must announce on the event bus. */
 enum class reader_health_event_t : uint8_t {
@@ -22,7 +31,8 @@ enum class reader_health_event_t : uint8_t {
 };
 
 struct reader_health_cfg_t {
-    uint8_t  error_threshold;       /**< Consecutive HW errors before degraded. */
+    uint8_t  error_threshold;       /**< HW errors before degraded, with no healthy
+                                         read in between (card errors do not count). */
     uint32_t poll_interval_ms;      /**< Delay after an idle or failed read. */
     uint32_t reread_delay_ms;       /**< Delay after a successful read (debounce). */
     uint32_t recovery_interval_ms;  /**< Delay before each probe while degraded. */

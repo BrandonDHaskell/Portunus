@@ -304,6 +304,17 @@ void test_short_sak_is_read_error(void) {
     }
 }
 
+/* A floating or shorted bus reads VersionReg as 0xFF or 0x00; the idle
+ * read path and init both treat that as no chip. Real parts and the common
+ * clones report other values. */
+void test_version_dead_predicate(void) {
+    TEST_ASSERT_TRUE(mfrc522_version_is_dead(0x00));
+    TEST_ASSERT_TRUE(mfrc522_version_is_dead(0xFF));
+    for (const uint8_t v : {0x91, 0x92, 0x88, 0x12, 0xB2}) {
+        TEST_ASSERT_FALSE(mfrc522_version_is_dead(v));
+    }
+}
+
 void test_null_credential(void) {
     Card c = card(UID4);
     TEST_ASSERT_EQUAL(PORTUNUS_ERR_INVALID_ARG, iso14443a_read_uid(io_for(c), nullptr));
@@ -323,6 +334,7 @@ int main(void) {
     RUN_TEST(test_10_byte_uid_fails_closed);
     RUN_TEST(test_cascade_tag_and_sak_must_agree);
     RUN_TEST(test_short_sak_is_read_error);
+    RUN_TEST(test_version_dead_predicate);
     RUN_TEST(test_null_credential);
     return UNITY_END();
 }

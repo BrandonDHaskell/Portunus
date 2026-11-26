@@ -48,7 +48,7 @@ static const int FSM_TASK_PRIORITY          = 5;   /* Above card polling, same a
 static const int POLL_TASK_STACK            = 4096;
 static const int POLL_TASK_PRIORITY         = 4;   /* Between heartbeat (3) and FSM (5) */
 static const int FSM_EVENT_QUEUE_LEN        = 8;
-static const int READER_HW_ERROR_THRESHOLD  = 5;    /* consecutive non-NO_CREDENTIAL errors before degraded */
+static const int READER_HW_ERROR_THRESHOLD  = 5;    /* hardware errors (not card errors) before degraded */
 static const int READER_RECOVERY_INTERVAL_MS = 5000; /* ms between reconnection attempts when degraded */
 
 /* ── Constructor ──────────────────────────────────────────────────────────── */
@@ -509,10 +509,11 @@ void SystemFSM::poll_credential()
             }
         } else {
             err = m_reader->read(&cred);
-            const reader_read_result_t result =
-                (err == PORTUNUS_OK)                 ? reader_read_result_t::CREDENTIAL
-                : (err == PORTUNUS_ERR_NO_CREDENTIAL) ? reader_read_result_t::NO_CREDENTIAL
-                                                      : reader_read_result_t::HW_ERROR;
+            const reader_read_result_t result = reader_classify(err);
+            if (result == reader_read_result_t::CARD_ERROR) {
+                ESP_LOGD(TAG, "Card read failed (0x%" PRIx32 "); not a reader fault",
+                         (uint32_t)err);
+            }
             step = reader_health_on_read(health, result, cfg);
         }
 

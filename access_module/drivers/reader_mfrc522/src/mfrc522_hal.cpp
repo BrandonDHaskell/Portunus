@@ -312,7 +312,7 @@ portunus_err_t mfrc522_init(void)
 
     /* ── Verify communication ────────────────────────────────────────────── */
     uint8_t version = mfrc522_get_version();
-    if (version == 0x00 || version == 0xFF) {
+    if (mfrc522_version_is_dead(version)) {
         ESP_LOGE(TAG, "MFRC522 not detected (version=0x%02x). Check wiring.", version);
         return PORTUNUS_ERR_DEVICE_NOT_FOUND;
     }
@@ -326,7 +326,20 @@ portunus_err_t mfrc522_init(void)
 portunus_err_t mfrc522_read_credential(credential_t *cred)
 {
     reg_clear_bits(REG_COLL, 0x80);  /* ValuesAfterColl=0: clear bits received after a collision */
-    return iso14443a_read_uid(s_io, cred);
+    const portunus_err_t err = iso14443a_read_uid(s_io, cred);
+
+    /* A disconnected chip whose MISO floats high reads 0xFF from every
+     * register, including the timer IRQ bit, so it looks exactly like an
+     * empty field and would never be reported. One VersionReg read per idle
+     * poll tells the two apart and lets the reader-health policy degrade. */
+    if (err == PORTUNUS_ERR_NO_CREDENTIAL) {
+        const uint8_t version = mfrc522_get_version();
+        if (mfrc522_version_is_dead(version)) {
+            ESP_LOGD(TAG, "No card, and VersionReg reads 0x%02x: chip not answering", version);
+            return PORTUNUS_ERR_DEVICE_NOT_FOUND;
+        }
+    }
+    return err;
 }
 
 uint8_t mfrc522_get_version(void)

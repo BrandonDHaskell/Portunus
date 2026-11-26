@@ -66,13 +66,16 @@ print(f"{h:08x}")' DEADBEEF
    whose `id=` matches the fingerprint of its 4 UID bytes.
 2. Tap a 7-byte card (MIFARE Ultralight or NTAG). Same check over all
    7 bytes.
-3. Optional, 10-byte card: expect no `Credential read` line. Each poll is
-   a read error, so after about half a second the log shows
-   `entering degraded mode`; every 5 s the chip re-initialises and logs
-   `Credential reader recovered`, and the cycle repeats while the card is
-   held. Polling continues normally once it is removed.
+3. Optional, 10-byte card: expect no `Credential read` line and no
+   `entering degraded mode`, however long it is held. A 4-byte or 7-byte
+   card tapped afterwards reads normally.
 4. Optional, two cards held together: expect no `Credential read` line
-   with a fingerprint that matches neither card.
+   with a fingerprint that matches neither card, and no
+   `entering degraded mode` however long they are held.
+5. Optional, power off: unplug the reader's 3.3 V (or its MISO wire) while
+   idle. Expect `entering degraded mode` within about a second. Plug it
+   back in; expect `Credential reader recovered` within about 5 s and
+   card reads working again.
 
 ## Results
 
