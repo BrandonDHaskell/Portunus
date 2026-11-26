@@ -58,3 +58,9 @@ target_include_directories(test_wifi_backoff PRIVATE
     ${AM}/services/wifi_mgr/include)
 target_link_libraries(test_wifi_backoff PRIVATE unity)
 add_test(NAME wifi_backoff COMMAND test_wifi_backoff)
+
+add_executable(test_door_strike_levels test_door_strike_levels.cpp)
+target_include_directories(test_door_strike_levels PRIVATE
+    ${AM}/drivers/access_point_gpio/include)
+target_link_libraries(test_door_strike_levels PRIVATE unity)
+add_test(NAME door_strike_levels COMMAND test_door_strike_levels)

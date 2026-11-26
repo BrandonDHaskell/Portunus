@@ -9,6 +9,7 @@
  */
 
 #include "door_strike.hpp"
+#include "door_strike_levels.hpp"
 #include "pin_config.hpp"
 #include "error_codes.hpp"
 
@@ -26,13 +27,8 @@ static bool s_energized   = false;
 
 /* ── Active level helpers ─────────────────────────────────────────────────── */
 
-#if DOOR_STRIKE_ACTIVE_LOW
-    #define STRIKE_LEVEL_ACTIVE    0
-    #define STRIKE_LEVEL_INACTIVE  1
-#else
-    #define STRIKE_LEVEL_ACTIVE    1
-    #define STRIKE_LEVEL_INACTIVE  0
-#endif
+static constexpr int STRIKE_LEVEL_ACTIVE   = strike_level(DOOR_STRIKE_ACTIVE_LOW, true);
+static constexpr int STRIKE_LEVEL_INACTIVE = strike_level(DOOR_STRIKE_ACTIVE_LOW, false);
 
 /* ── Public API ───────────────────────────────────────────────────────────── */
 
@@ -51,7 +47,11 @@ portunus_err_t door_strike_init(void)
 
     gpio_config_t io_conf = {};
     io_conf.pin_bit_mask = (1ULL << PIN_DOOR_STRIKE);
-    io_conf.mode         = GPIO_MODE_OUTPUT;
+    /* INPUT_OUTPUT, not OUTPUT: gpio_get_level() reads the pad through the
+       input buffer, and IDF returns 0 for a pad without input enabled. With
+       plain OUTPUT the de-energize readback was vacuous on active-high wiring
+       and always failed on active-low wiring (F1). */
+    io_conf.mode         = GPIO_MODE_INPUT_OUTPUT;
     io_conf.pull_up_en   = GPIO_PULLUP_DISABLE;
     io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
     io_conf.intr_type    = GPIO_INTR_DISABLE;
@@ -88,10 +88,10 @@ portunus_err_t door_strike_deenergize(void)
         ESP_LOGE(TAG, "Strike de-energize gpio_set_level failed: %s", esp_err_to_name(err));
         return PORTUNUS_ERR_GPIO_INIT;
     }
-    /* Readback the output register to confirm the write landed. */
-    int readback = gpio_get_level(static_cast<gpio_num_t>(PIN_DOOR_STRIKE));
-    if (readback != STRIKE_LEVEL_INACTIVE) {
-        ESP_LOGE(TAG, "Strike de-energize readback mismatch: expected %d got %d — door may be unlocked",
+    /* Read the pad back to confirm the write landed. */
+    const int readback = gpio_get_level(static_cast<gpio_num_t>(PIN_DOOR_STRIKE));
+    if (!strike_readback_matches(DOOR_STRIKE_ACTIVE_LOW, false, readback)) {
+        ESP_LOGE(TAG, "Strike de-energize readback mismatch: expected %d got %d; door may be unlocked",
                  STRIKE_LEVEL_INACTIVE, readback);
         s_energized = true; /* reflect actual hardware state */
         return PORTUNUS_ERR_GPIO_INIT;
