@@ -4,7 +4,7 @@
 # drivers. Concrete driver instances are injected via constructor.
 
 idf_component_register(
-    SRCS "src/system_fsm.cpp" "src/system_fsm_decide.cpp"
+    SRCS "src/system_fsm.cpp" "src/system_fsm_decide.cpp" "src/reader_health.cpp"
     INCLUDE_DIRS "include"
     REQUIRES
         portunus_interfaces

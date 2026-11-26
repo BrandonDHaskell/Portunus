@@ -22,6 +22,7 @@
 
 #include "system_fsm.hpp"
 #include "system_fsm_decide.hpp"
+#include "reader_health.hpp"
 #include "event_bus.hpp"
 #include "timing_config.hpp"
 #include "error_codes.hpp"
@@ -486,72 +487,66 @@ void SystemFSM::check_unlock_timer()
 
 void SystemFSM::poll_credential()
 {
-    const TickType_t poll_interval = pdMS_TO_TICKS(MFRC522_POLL_INTERVAL_MS);
-    const TickType_t reread_delay  = pdMS_TO_TICKS(CARD_REREAD_DELAY_MS);
-
-    int  consecutive_hw_errors = 0;
-    bool reader_degraded       = false;
+    static const reader_health_cfg_t cfg = {
+        .error_threshold      = READER_HW_ERROR_THRESHOLD,
+        .poll_interval_ms     = MFRC522_POLL_INTERVAL_MS,
+        .reread_delay_ms      = CARD_REREAD_DELAY_MS,
+        .recovery_interval_ms = READER_RECOVERY_INTERVAL_MS,
+    };
+    reader_health_t health;
 
     for (;;) {
-        /* Recovery mode: chip absent, probe for reconnection periodically. */
-        if (reader_degraded) {
-            vTaskDelay(pdMS_TO_TICKS(READER_RECOVERY_INTERVAL_MS));
-            if (m_reader->init() == PORTUNUS_OK) {
-                ESP_LOGI(TAG, "Credential reader recovered — resuming polling");
-                m_caps.has_reader    = true;
-                reader_degraded      = false;
-                consecutive_hw_errors = 0;
+        reader_step_t  step;
+        credential_t   cred;
+        portunus_err_t err = PORTUNUS_OK;
 
-                portunus_event_t recovery_event;
-                memset(&recovery_event, 0, sizeof(recovery_event));
-                recovery_event.id = EVENT_CREDENTIAL_READER_RECOVERED;
-                event_bus_publish(&recovery_event);
-            } else {
-                ESP_LOGD(TAG, "Credential reader still absent — retrying in %d ms",
+        if (health.degraded) {
+            /* Recovery mode: chip absent, probe for reconnection. */
+            step = reader_health_on_probe(health, m_reader->init() == PORTUNUS_OK, cfg);
+            if (step.event == reader_health_event_t::NONE) {
+                ESP_LOGD(TAG, "Credential reader still absent; retrying in %d ms",
                          READER_RECOVERY_INTERVAL_MS);
             }
-            continue;
+        } else {
+            err = m_reader->read(&cred);
+            const reader_read_result_t result =
+                (err == PORTUNUS_OK)                 ? reader_read_result_t::CREDENTIAL
+                : (err == PORTUNUS_ERR_NO_CREDENTIAL) ? reader_read_result_t::NO_CREDENTIAL
+                                                      : reader_read_result_t::HW_ERROR;
+            step = reader_health_on_read(health, result, cfg);
         }
 
-        credential_t cred;
-        portunus_err_t err = m_reader->read(&cred);
-
-        if (err == PORTUNUS_OK) {
-            consecutive_hw_errors = 0;
-
+        if (step.publish_credential) {
             portunus_event_t event;
             memset(&event, 0, sizeof(event));
             event.id                                   = EVENT_CREDENTIAL_READ;
             event.payload.credential_read.credential   = cred;
             event.payload.credential_read.timestamp_ms = m_clock->now_ms();
             event_bus_publish(&event);
-
+        }
+        if (step.halt) {
             m_reader->halt();
-            vTaskDelay(reread_delay);
-            continue;
         }
 
-        if (err == PORTUNUS_ERR_NO_CREDENTIAL) {
-            /* Expected — no card in field, chip is healthy. */
-            consecutive_hw_errors = 0;
-        } else {
-            /* Hardware fault (timeout, SPI error, read error, etc.). */
-            if (++consecutive_hw_errors >= READER_HW_ERROR_THRESHOLD) {
+        if (step.event != reader_health_event_t::NONE) {
+            portunus_event_t health_event;
+            memset(&health_event, 0, sizeof(health_event));
+            if (step.event == reader_health_event_t::READ_ERROR) {
                 ESP_LOGW(TAG, "Credential reader hardware fault after %d errors "
-                         "(last err=0x%x) — entering degraded mode",
-                         consecutive_hw_errors, err);
+                         "(last err=0x%x); entering degraded mode",
+                         READER_HW_ERROR_THRESHOLD, err);
                 m_caps.has_reader = false;
-                reader_degraded   = true;
-
-                portunus_event_t fault_event;
-                memset(&fault_event, 0, sizeof(fault_event));
-                fault_event.id = EVENT_CREDENTIAL_READ_ERROR;
-                event_bus_publish(&fault_event);
-
-                continue;
+                health_event.id   = EVENT_CREDENTIAL_READ_ERROR;
+            } else {
+                ESP_LOGI(TAG, "Credential reader recovered; resuming polling");
+                m_caps.has_reader = true;
+                health_event.id   = EVENT_CREDENTIAL_READER_RECOVERED;
             }
+            event_bus_publish(&health_event);
         }
 
-        vTaskDelay(poll_interval);
+        if (step.delay_ms > 0) {
+            vTaskDelay(pdMS_TO_TICKS(step.delay_ms));
+        }
     }
 }
