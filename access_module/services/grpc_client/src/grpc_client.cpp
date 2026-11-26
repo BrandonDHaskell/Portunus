@@ -22,6 +22,7 @@
  */
 
 #include "grpc_client.hpp"
+#include "grpc_wire.hpp"
 #include "error_codes.hpp"
 
 #include "esp_tls.h"
@@ -37,15 +38,11 @@
 #include <cinttypes>
 #include <cstring>
 #include <cstdlib>
-#include <arpa/inet.h>  /* htonl / ntohl */
 #include <sys/socket.h> /* setsockopt / SO_RCVTIMEO */
 
 static const char *TAG = "grpc_client";
 
 /* ── Constants ─────────────────────────────────────────────────────────────── */
-
-/** gRPC frame header: 1 byte compression flag + 4 bytes message length. */
-static constexpr size_t GRPC_FRAME_HEADER_LEN = 5;
 
 /** Upper bound on outbound RPC payload; avoids heap allocation on the hot path.
  *  Sized to HeartbeatRequest_size (142) + margin. */
@@ -104,76 +101,6 @@ static nghttp2_nv make_nv(const char *name, const char *value)
     nv.valuelen = strlen(value);
     nv.flags    = NGHTTP2_NV_FLAG_NONE;
     return nv;
-}
-
-/* ── gRPC frame helpers ────────────────────────────────────────────────────── */
-
-/**
- * @brief Build a gRPC length-prefixed message frame.
- *
- * Layout: [0x00 (no compression)] [4-byte big-endian length] [protobuf bytes]
- *
- * @param proto_buf   Protobuf-encoded message.
- * @param proto_len   Length of the protobuf message.
- * @param out_buf     Output buffer (must be at least proto_len + 5).
- * @param out_cap     Capacity of out_buf.
- * @param out_len     [out] Total bytes written (5 + proto_len).
- * @return true on success, false if out_buf is too small.
- */
-static bool grpc_frame_encode(const uint8_t *proto_buf, size_t proto_len,
-                               uint8_t *out_buf, size_t out_cap, size_t *out_len)
-{
-    size_t total = GRPC_FRAME_HEADER_LEN + proto_len;
-    if (total > out_cap) {
-        return false;
-    }
-
-    out_buf[0] = 0x00; /* No compression */
-    uint32_t len_be = htonl(static_cast<uint32_t>(proto_len));
-    memcpy(&out_buf[1], &len_be, 4);
-    memcpy(&out_buf[GRPC_FRAME_HEADER_LEN], proto_buf, proto_len);
-
-    *out_len = total;
-    return true;
-}
-
-/**
- * @brief Strip the 5-byte gRPC frame header from a received message.
- *
- * @param frame_buf   Buffer containing the full gRPC frame.
- * @param frame_len   Length of the frame.
- * @param proto_buf   [out] Points into frame_buf past the header.
- * @param proto_len   [out] Length of the protobuf payload.
- * @return true on success, false if frame is malformed.
- */
-static bool grpc_frame_decode(const uint8_t *frame_buf, size_t frame_len,
-                               const uint8_t **proto_buf, size_t *proto_len)
-{
-    if (frame_len < GRPC_FRAME_HEADER_LEN) {
-        return false;
-    }
-
-    /* Byte 0: compression flag (we only support uncompressed). */
-    if (frame_buf[0] != 0x00) {
-        ESP_LOGE(TAG, "Compressed gRPC messages not supported (flag=0x%02x)",
-                 frame_buf[0]);
-        return false;
-    }
-
-    uint32_t msg_len;
-    memcpy(&msg_len, &frame_buf[1], 4);
-    msg_len = ntohl(msg_len);
-
-    if (GRPC_FRAME_HEADER_LEN + msg_len > frame_len) {
-        ESP_LOGE(TAG, "gRPC frame truncated: header says %lu bytes, have %zu",
-                 static_cast<unsigned long>(msg_len),
-                 frame_len - GRPC_FRAME_HEADER_LEN);
-        return false;
-    }
-
-    *proto_buf = &frame_buf[GRPC_FRAME_HEADER_LEN];
-    *proto_len = static_cast<size_t>(msg_len);
-    return true;
 }
 
 /* ── nghttp2 callbacks ─────────────────────────────────────────────────────── */
@@ -242,11 +169,9 @@ static int cb_on_header(nghttp2_session *session,
 
     /* Look for grpc-status in trailers. */
     if (namelen == 11 && memcmp(name, "grpc-status", 11) == 0) {
-        /* Parse the integer status. */
-        char status_str[8] = {};
-        size_t copy_len = valuelen < sizeof(status_str) - 1 ? valuelen : sizeof(status_str) - 1;
-        memcpy(status_str, value, copy_len);
-        ss->grpc_status = atoi(status_str);
+        /* Unparsable status must never read as OK (fail closed). */
+        const int st = grpc_parse_status(value, valuelen);
+        ss->grpc_status = (st < 0) ? GRPC_STATUS_INTERNAL : st;
     }
 
     /* Capture the response HMAC signature trailer from the server. */
@@ -451,20 +376,13 @@ static portunus_err_t pump_session(grpc_client *c, const bool *done, bool flush_
 /** Refuse connects until the current backoff elapses, then double it. */
 static void schedule_reconnect_backoff(grpc_client *c)
 {
-    if (c->cfg.reconnect_backoff_min_ms == 0) {
+    const uint32_t delay_ms = grpc_backoff_on_failure(
+        &c->backoff_ms, c->cfg.reconnect_backoff_min_ms, c->cfg.reconnect_backoff_max_ms);
+    if (delay_ms == 0) {
         return;
     }
-    if (c->backoff_ms == 0) {
-        c->backoff_ms = c->cfg.reconnect_backoff_min_ms;
-    }
-    c->next_connect_us = esp_timer_get_time() + static_cast<int64_t>(c->backoff_ms) * 1000;
-    ESP_LOGW(TAG, "Reconnect backoff: next attempt in %" PRIu32 " ms", c->backoff_ms);
-
-    uint32_t max_ms = c->cfg.reconnect_backoff_max_ms;
-    if (max_ms < c->cfg.reconnect_backoff_min_ms) {
-        max_ms = c->cfg.reconnect_backoff_min_ms;
-    }
-    c->backoff_ms = (c->backoff_ms > max_ms / 2) ? max_ms : c->backoff_ms * 2;
+    c->next_connect_us = esp_timer_get_time() + static_cast<int64_t>(delay_ms) * 1000;
+    ESP_LOGW(TAG, "Reconnect backoff: next attempt in %" PRIu32 " ms", delay_ms);
 }
 
 static void reset_reconnect_backoff(grpc_client *c)
@@ -877,12 +795,15 @@ portunus_err_t grpc_client_unary_call(grpc_client_handle_t c,
         const uint8_t *proto_ptr = nullptr;
         size_t proto_len = 0;
 
-        if (grpc_frame_decode(resp_buf, ss.resp_len, &proto_ptr, &proto_len)) {
+        const grpc_frame_status_t fst =
+            grpc_frame_decode(resp_buf, ss.resp_len, &proto_ptr, &proto_len);
+        if (fst == grpc_frame_status_t::OK) {
             /* Shift the protobuf payload to the start of resp_buf. */
             memmove(resp_buf, proto_ptr, proto_len);
             *resp_len = static_cast<int>(proto_len);
         } else {
-            ESP_LOGW(TAG, "Failed to decode gRPC response frame");
+            ESP_LOGW(TAG, "Failed to decode gRPC response frame (status=%u)",
+                     static_cast<unsigned>(fst));
             *resp_len = 0;
             return PORTUNUS_ERR_PROTO_DECODE;
         }

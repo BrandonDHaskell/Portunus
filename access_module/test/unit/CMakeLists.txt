@@ -34,3 +34,11 @@ target_include_directories(test_system_fsm_decide PRIVATE
     ${AM}/components/portunus_interfaces/include)
 target_link_libraries(test_system_fsm_decide PRIVATE unity)
 add_test(NAME system_fsm_decide COMMAND test_system_fsm_decide)
+
+add_executable(test_grpc_wire
+    test_grpc_wire.cpp
+    ${AM}/services/grpc_client/src/grpc_wire.cpp)
+target_include_directories(test_grpc_wire PRIVATE
+    ${AM}/services/grpc_client/include)
+target_link_libraries(test_grpc_wire PRIVATE unity)
+add_test(NAME grpc_wire COMMAND test_grpc_wire)
