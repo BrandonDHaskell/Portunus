@@ -88,6 +88,52 @@ void test_unauthorized_has_three_rapid_blinks(void) {
     TEST_ASSERT_EQUAL_size_t(3, rises);
 }
 
+/* DRV-07 (F11): one-shots end at their documented tick and then return to
+ * the SYSTEM_READY baseline instead of leaving the LED dark. */
+void test_one_shot_returns_to_ready_baseline(void) {
+    const struct { ft type; uint32_t end; } cases[] = {
+        {ft::ACCESS_GRANTED, 20}, {ft::ACCESS_DENIED, 12},
+        {ft::PROVISIONING_SUCCESS, 20}, {ft::PROVISIONING_DUPLICATE, 16},
+        {ft::PROVISIONING_UNAUTHORIZED, 26}, {ft::PEU_RESULT_PENDING, 48},
+    };
+    for (const auto &c : cases) {
+        TEST_ASSERT_EQUAL_UINT32(c.end, led_pattern_length(c.type));
+
+        led_engine_t e;
+        led_engine_indicate(e, ft::SYSTEM_READY);
+        run(e, 7);
+        led_engine_indicate(e, ft::CARD_READ);
+        run(e, 3);
+        led_engine_indicate(e, c.type);
+        run(e, c.end);
+
+        /* The end tick is dark, then READY resumes one tick into its cycle:
+         * the next pulse is a full period after the one-shot, not glued to it. */
+        TEST_ASSERT_FALSE(led_engine_step(e));
+        TEST_ASSERT_EQUAL(ft::SYSTEM_READY, e.current);
+        TEST_ASSERT_EQUAL_STRING((std::string(59, '.') + "#").c_str(), run(e, 60).c_str());
+    }
+}
+
+/* DRV-07b: SYSTEM_ERROR is not a baseline, so one offline card read (CARD_READ,
+ * SYSTEM_ERROR, then the no_network deny) returns to READY, not to the error
+ * blink forever. NONE clears the baseline. */
+void test_error_is_not_sticky_and_none_clears_baseline(void) {
+    led_engine_t e;
+    led_engine_indicate(e, ft::SYSTEM_READY);
+    led_engine_indicate(e, ft::CARD_READ);
+    led_engine_indicate(e, ft::SYSTEM_ERROR);
+    led_engine_indicate(e, ft::ACCESS_DENIED);
+    run(e, 13);
+    TEST_ASSERT_EQUAL(ft::SYSTEM_READY, e.current);
+
+    led_engine_indicate(e, ft::NONE);
+    led_engine_indicate(e, ft::ACCESS_DENIED);
+    run(e, 13);
+    TEST_ASSERT_EQUAL(ft::NONE, e.current);
+    TEST_ASSERT_EQUAL_STRING("....", run(e, 4).c_str());
+}
+
 /* DRV-08: a new indication preempts mid-pattern and restarts at tick 0. */
 void test_preemption_resets_tick(void) {
     led_engine_t e;
@@ -148,6 +194,8 @@ int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_every_pattern_trace);
     RUN_TEST(test_unauthorized_has_three_rapid_blinks);
+    RUN_TEST(test_one_shot_returns_to_ready_baseline);
+    RUN_TEST(test_error_is_not_sticky_and_none_clears_baseline);
     RUN_TEST(test_preemption_resets_tick);
     RUN_TEST(test_continuous_tick_stays_bounded);
     RUN_TEST(test_out_of_range_value_is_inert);

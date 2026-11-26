@@ -138,8 +138,7 @@ bool led_pattern_level(feedback_type_t type, uint32_t tick)
 
 bool led_pattern_is_baseline(feedback_type_t type)
 {
-    (void)type;
-    return false;  /* one-shots end with the LED off */
+    return type == ft::SYSTEM_READY;
 }
 
 /* ── Engine ────────────────────────────────────────────────────────────────── */
