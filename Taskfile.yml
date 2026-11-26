@@ -540,10 +540,12 @@ tasks:
       - task: ci:server:smoke
 
   ci:all:
-    desc: Full CI — server checks + proto drift + firmware compile
+    desc: "Full CI: server checks, proto drift, firmware tests, firmware compile"
     cmds:
       - task: ci:server
       - task: proto:check
+      - task: test:firmware
+      - task: test:firmware:unit:m32
       - task: firmware:build
         vars: { ALLOW_INSECURE: "1" }
 
