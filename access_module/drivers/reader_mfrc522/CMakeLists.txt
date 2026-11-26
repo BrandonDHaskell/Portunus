@@ -10,6 +10,7 @@ idf_component_register(
     SRCS
         "src/reader_mfrc522.cpp"
         "src/mfrc522_hal.cpp"
+        "src/iso14443a.cpp"
     INCLUDE_DIRS
         "include"
     REQUIRES
