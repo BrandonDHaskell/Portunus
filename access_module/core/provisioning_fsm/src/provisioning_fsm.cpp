@@ -157,14 +157,9 @@ portunus_err_t ProvisioningFSM::start()
         return PORTUNUS_ERR_TASK_CREATE;
     }
 
-    // Initial state: Idle if arm button present, Armed otherwise.
-    if (m_has_arm) {
-        enter_idle();
-    } else {
-        enter_armed();
-    }
+    enter_initial_state();
 
-    ESP_LOGI(TAG, "PEU FSM running — scan_timeout=%dms  arm_timeout=%dms",
+    ESP_LOGI(TAG, "PEU FSM running: provision_timeout=%dms  arm_timeout=%dms",
              CONFIG_PORTUNUS_PROVISION_TIMEOUT_MS,
              CONFIG_PORTUNUS_ARM_TIMEOUT_MS);
 
@@ -293,6 +288,12 @@ void ProvisioningFSM::check_timeout()
         }
         break;
 
+    case PEU_STATE_CAPTURE_SEND:
+        ESP_LOGW(TAG, "No provisioning result after %d ms, showing error",
+                 CONFIG_PORTUNUS_PROVISION_TIMEOUT_MS);
+        enter_result(feedback_type_t::PEU_RESULT_ERROR);
+        break;
+
     case PEU_STATE_RESULT:
         enter_idle_after_result();
         break;
@@ -339,8 +340,10 @@ void ProvisioningFSM::handle_credential_read(const event_credential_read_t *cred
     credential_uid_to_log_id(&cred->credential, log_id, sizeof(log_id));
     ESP_LOGI(TAG, "Card read — id=%s", log_id);
     publish_capture_request(cred);
-    m_state       = PEU_STATE_CAPTURE_SEND;
-    m_deadline_ms = 0;
+    m_state = PEU_STATE_CAPTURE_SEND;
+    /* server_comm may drop the request (WiFi down, queue full) or the reply
+     * may never come; without a deadline the PEU would wait until reboot. */
+    m_deadline_ms = m_clock->now_ms() + CONFIG_PORTUNUS_PROVISION_TIMEOUT_MS;
     if (m_has_feedback) {
         m_feedback->indicate(feedback_type_t::CARD_READ);
     }
@@ -382,6 +385,16 @@ void ProvisioningFSM::handle_provision_result(const event_provision_result_t *re
 }
 
 /* ── State transitions ────────────────────────────────────────────────────── */
+
+void ProvisioningFSM::enter_initial_state()
+{
+    // Idle if arm button present, Armed otherwise.
+    if (m_has_arm) {
+        enter_idle();
+    } else {
+        enter_armed();
+    }
+}
 
 void ProvisioningFSM::enter_sleep()
 {

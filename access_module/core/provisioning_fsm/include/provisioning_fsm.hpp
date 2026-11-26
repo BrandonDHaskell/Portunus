@@ -10,7 +10,8 @@
  *   └──(idle timeout)────── ┘                     card tap               │
  *                                                    │                   │
  *                                             CAPTURE_SEND               │
- *                                              (wait server)             │
+ *                                   (wait server; error after            │
+ *                                    PROVISION_TIMEOUT_MS)               │
  *                                                    │                   │
  *                                                 RESULT ────────────────┘
  *                                                    │
@@ -92,7 +93,7 @@ private:
 
     /* ── FSM state ────────────────────────────────────────────────────────── */
     peu_state_t  m_state       = PEU_STATE_IDLE;
-    int64_t      m_deadline_ms = 0;   /**< Multipurpose timeout (arm/idle/result) */
+    int64_t      m_deadline_ms = 0;   /**< Multipurpose timeout (idle/arm/capture/result); 0 = none */
 
     /* ── FreeRTOS handles ─────────────────────────────────────────────────── */
     TaskHandle_t  m_fsm_task_handle  = nullptr;
@@ -115,6 +116,7 @@ private:
     void handle_provision_result(const event_provision_result_t *result);
 
     /* ── State transitions ────────────────────────────────────────────────── */
+    void enter_initial_state();     /**< Idle if arm present, Armed if not (start()) */
     void enter_sleep();
     void enter_idle();
     void enter_armed();
@@ -126,4 +128,7 @@ private:
 
     /* ── Event bus bridge ─────────────────────────────────────────────────── */
     static void on_event_bus_event(const portunus_event_t *event, void *ctx);
+
+    /* Test-only: drives the FSM synchronously without starting tasks. */
+    friend class ProvisioningFSMTestFixture;
 };

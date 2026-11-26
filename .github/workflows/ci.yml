@@ -111,18 +111,29 @@ jobs:
 
       # idf.py is called directly (as in the Firmware job): the Taskfile's
       # IDF_PYTHON default points at a developer-machine venv path.
-      - name: Component tier (fake event bus)
+      # Each build keeps its own sdkconfig; SDKCONFIG must be absolute.
+      - name: Component tier, access point (fake event bus)
         run: |
           . $IDF_PATH/export.sh
-          APP=access_module/test/component
-          idf.py --preview -C $APP -B $APP/build/fake set-target linux build
+          APP=$PWD/access_module/test/component
+          idf.py --preview -C $APP -B $APP/build/fake -D SDKCONFIG=$APP/build/fake/sdkconfig \
+            set-target linux build
           $APP/build/fake/portunus_host_tests.elf
+
+      - name: Component tier, provisioning console (fake event bus)
+        run: |
+          . $IDF_PATH/export.sh
+          APP=$PWD/access_module/test/component
+          idf.py --preview -C $APP -B $APP/build/peu -D SDKCONFIG=$APP/build/peu/sdkconfig \
+            -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.peu" set-target linux build
+          $APP/build/peu/portunus_host_tests.elf
 
       - name: Integration tier (real event bus)
         run: |
           . $IDF_PATH/export.sh
-          APP=access_module/test/component
-          idf.py --preview -C $APP -B $APP/build/real -DPORTUNUS_TEST_REAL_BUS=ON set-target linux build
+          APP=$PWD/access_module/test/component
+          idf.py --preview -C $APP -B $APP/build/real -D SDKCONFIG=$APP/build/real/sdkconfig \
+            -DPORTUNUS_TEST_REAL_BUS=ON set-target linux build
           $APP/build/real/portunus_host_tests.elf
 
   firmware-prod-compile:

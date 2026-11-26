@@ -29,13 +29,15 @@ menu "Portunus Configuration"
             depends on PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
 
             config PORTUNUS_PROVISION_TIMEOUT_MS
-                int "Enroll scan-2 timeout (milliseconds)"
+                int "Capture result timeout (milliseconds)"
                 default 30000
                 range 5000 120000
                 help
-                    How long the PEU waits for the new-member card (scan 2)
-                    after the operator badge (scan 1) is accepted, before
-                    returning to Idle state.
+                    How long the PEU waits for the server's answer to a
+                    card capture before showing the error pattern and
+                    returning to Idle (or Armed without an arm button).
+                    Covers a request that was never sent (WiFi down) and
+                    a reply that never arrives.
 
             config PORTUNUS_DEFAULT_ROLE_ID
                 string "Default role ID for provisioned members"
