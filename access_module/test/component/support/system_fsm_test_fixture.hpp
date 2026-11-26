@@ -33,6 +33,7 @@ public:
     bool    strike_energized() const { return m_fsm.m_strike_energized; }
     int64_t unlock_deadline()  const { return m_fsm.m_unlock_deadline_ms; }
     int     pending_decisions() const { return m_fsm.m_pending_decisions; }
+    bool    last_door_open()   const { return m_fsm.m_last_door_open; }
 
 private:
     SystemFSM &m_fsm;

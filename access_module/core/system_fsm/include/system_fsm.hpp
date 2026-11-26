@@ -57,9 +57,14 @@ public:
      * has_access_point, has_feedback based on init results.
      * has_network is set from the WiFi manager's current state.
      *
-     * @return PORTUNUS_OK if at least the access point initialised.
-     *         Returns an error code only if a critical failure prevents
-     *         the system from operating at all.
+     * A missing or failing module is not fatal, the access point included:
+     * its capability flag stays false and the FSM degrades (a grant shows
+     * feedback but cannot unlock). The module keeps running and sending
+     * heartbeats, so the server still sees it rather than losing contact
+     * with a broken door (decision D-T11).
+     *
+     * @return PORTUNUS_OK unless the FSM's own event queue cannot be
+     *         created (PORTUNUS_ERR_QUEUE_CREATE).
      */
     portunus_err_t init();
 
