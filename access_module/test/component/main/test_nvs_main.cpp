@@ -131,7 +131,6 @@ void test_oversize_string_invalid_length(void) {
  * the header promises. Checked for every missing key (the earlier keys would
  * have been read by then), an oversize late key, and a missing namespace. */
 void test_out_unchanged_on_error(void) {
-    TEST_IGNORE_MESSAGE("F14: portunus_nvs_load writes out progressively; un-ignored by the fix");
     portunus_device_config_t before;
     memset(&before, 0xA5, sizeof before);
 

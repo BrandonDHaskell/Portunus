@@ -50,6 +50,8 @@ typedef struct {
  * @brief Load device configuration from the "portunus" NVS namespace.
  *
  * nvs_flash_init() must have been called successfully before this function.
+ * Not reentrant (it stages the values in a static buffer); call it once at
+ * boot.
  * On success all fields of @p out are populated.  On error @p out is left
  * unchanged so the caller can decide whether to use compile-time dev defaults
  * (PORTUNUS_ENV_DEV builds) or halt (production builds).
