@@ -3,7 +3,7 @@
 # Public interface: AccessPointGpio class (IAccessPoint)
 # Internal HAL (feature-gated):
 #   - door_strike.cpp (GPIO output)
-#   - reed_switch.cpp (GPIO input + debounce)
+#   - reed_switch.cpp (GPIO input) + debounce.cpp (pure debounce logic)
 #
 # Each HAL source is only compiled when its corresponding Kconfig feature
 # is enabled. This keeps builds working across different bench-test
@@ -18,7 +18,7 @@ if(CONFIG_PORTUNUS_ENABLE_DOOR_STRIKE)
 endif()
 
 if(CONFIG_PORTUNUS_ENABLE_REED_SWITCH)
-    list(APPEND _srcs "src/reed_switch.cpp")
+    list(APPEND _srcs "src/reed_switch.cpp" "src/debounce.cpp")
 endif()
 
 idf_component_register(
