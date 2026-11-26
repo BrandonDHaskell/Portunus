@@ -318,7 +318,6 @@ void test_result_returns_after_display_time(void) {
  * WiFi is down, queue full, lost reply) times out after PROVISION_TIMEOUT_MS
  * and shows an error, instead of wedging in CAPTURE_SEND until reboot. */
 void test_capture_send_times_out(void) {
-    TEST_IGNORE_MESSAGE("F3: CAPTURE_SEND has no timeout; un-ignored by the fix");
     Rig r(true);
     r.start();
     to_capture_send(r);

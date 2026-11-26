@@ -10,7 +10,8 @@
  *   └──(idle timeout)────── ┘                     card tap               │
  *                                                    │                   │
  *                                             CAPTURE_SEND               │
- *                                              (wait server)             │
+ *                                   (wait server; error after            │
+ *                                    PROVISION_TIMEOUT_MS)               │
  *                                                    │                   │
  *                                                 RESULT ────────────────┘
  *                                                    │
@@ -92,7 +93,7 @@ private:
 
     /* ── FSM state ────────────────────────────────────────────────────────── */
     peu_state_t  m_state       = PEU_STATE_IDLE;
-    int64_t      m_deadline_ms = 0;   /**< Multipurpose timeout (arm/idle/result) */
+    int64_t      m_deadline_ms = 0;   /**< Multipurpose timeout (idle/arm/capture/result); 0 = none */
 
     /* ── FreeRTOS handles ─────────────────────────────────────────────────── */
     TaskHandle_t  m_fsm_task_handle  = nullptr;
