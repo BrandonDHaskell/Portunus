@@ -220,15 +220,49 @@ tasks:
 
   # ─── Firmware ─────────────────────────────────────────────────────────────
 
+  # firmware:build reuses whatever sdkconfig is in the tree, so it silently
+  # inherits the last profile (often dev). It refuses an insecure config so a
+  # dev image cannot pass for a deployable one. Use firmware:build:dev or
+  # firmware:build:prod to pick a profile explicitly, or ALLOW_INSECURE=1 for a
+  # compile-only check (ci:all).
   firmware:build:
-    desc: Build the ESP32 firmware (requires ESP-IDF)
+    desc: Build the ESP32 firmware with the current sdkconfig (refuses insecure configs)
     dir: "{{.FIRMWARE_DIR}}"
     env:
       IDF_PATH: "{{.IDF_PATH}}"
+    vars:
+      ALLOW_INSECURE: '{{.ALLOW_INSECURE | default "0"}}'
     cmds:
       - |
+        refuse() {
+          echo "ERROR: $1 has an insecure config:" >&2
+          printf '%s\n' "$2" | sed 's/^/  /' >&2
+          echo "  Prod image:      task firmware:build:prod" >&2
+          echo "  Dev image:       task firmware:build:dev" >&2
+          echo "  Compile check:   task firmware:build ALLOW_INSECURE=1" >&2
+          exit 1
+        }
+        if [ "{{.ALLOW_INSECURE}}" != "1" ] && [ -f sdkconfig ]; then
+          bad=$(grep -E '^CONFIG_PORTUNUS_(ENV_DEV|TLS_SKIP_VERIFY)=y|^# CONFIG_PORTUNUS_(USE_TLS|HMAC_ENABLED) is not set' sdkconfig || true)
+          if [ -n "$bad" ]; then refuse sdkconfig "$bad"; fi
+        fi
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
         idf.py build
+        # Re-check what was actually compiled: cached CMake defaults can differ
+        # from the sdkconfig that existed before the build.
+        if [ "{{.ALLOW_INSECURE}}" != "1" ]; then
+          h=build/config/sdkconfig.h
+          bad=""
+          has() { grep -qE "^#define CONFIG_PORTUNUS_$1 1" "$h"; }
+          if has ENV_DEV; then bad="${bad}ENV_DEV on"$'\n'; fi
+          if has TLS_SKIP_VERIFY; then bad="${bad}TLS_SKIP_VERIFY on"$'\n'; fi
+          if has ENABLE_WIFI; then
+            if ! has USE_TLS; then bad="${bad}USE_TLS off"$'\n'; fi
+            if ! has HMAC_ENABLED; then bad="${bad}HMAC_ENABLED off"$'\n'; fi
+          fi
+          if [ -n "$bad" ]; then refuse "$h (image in build/ is NOT deployable)" "${bad%$'\n'}"; fi
+        fi
+        exit 0
 
   firmware:build:dev:
     desc: Build firmware with dev sdkconfig overlay
@@ -501,6 +535,7 @@ tasks:
       - task: ci:server
       - task: proto:check
       - task: firmware:build
+        vars: { ALLOW_INSECURE: "1" }
 
   release:
     desc: Full release — validate, deploy server, build prod firmware

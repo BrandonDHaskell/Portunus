@@ -97,6 +97,44 @@ static portunus_err_t init_nvs(void)
     return PORTUNUS_OK;
 }
 
+/**
+ * @brief Warn at boot when the image was built with insecure settings.
+ *
+ * `idf.py build` reuses whatever sdkconfig is in the tree, so a dev-profile
+ * image can end up flashed on a door that should be running prod. This makes
+ * that visible in the first lines of the serial log instead of surfacing only
+ * as unexplained server rejections.
+ */
+static void log_build_security_profile(void)
+{
+    bool insecure = false;
+
+#ifdef CONFIG_PORTUNUS_ENV_DEV
+    insecure = true;
+    ESP_LOGW(TAG, "  DEV BUILD: NVS-missing falls back to compile-time defaults");
+#endif
+#ifdef CONFIG_PORTUNUS_ENABLE_WIFI
+  #ifndef CONFIG_PORTUNUS_USE_TLS
+    insecure = true;
+    ESP_LOGW(TAG, "  TLS OFF: server traffic is unencrypted");
+  #endif
+  #ifdef CONFIG_PORTUNUS_TLS_SKIP_VERIFY
+    insecure = true;
+    ESP_LOGW(TAG, "  TLS VERIFY OFF: server identity is not checked");
+  #endif
+  #ifndef CONFIG_PORTUNUS_HMAC_ENABLED
+    insecure = true;
+    ESP_LOGW(TAG, "  HMAC OFF: requests are unsigned (prod servers reject them)");
+  #endif
+#endif
+
+    if (insecure) {
+        ESP_LOGW(TAG, "  WARNING: insecure build, NOT for deployment.");
+        ESP_LOGW(TAG, "  Rebuild with: task firmware:build:prod");
+        ESP_LOGW(TAG, "========================================");
+    }
+}
+
 /* ── Application entry point ──────────────────────────────────────────────── */
 
 extern "C" void app_main(void)
@@ -104,6 +142,7 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "  Portunus Access Module v%s", PORTUNUS_FW_VERSION);
     ESP_LOGI(TAG, "========================================");
+    log_build_security_profile();
 
     /* ── 1. NVS flash ────────────────────────────────────────────────────── */
     if (init_nvs() != PORTUNUS_OK) {
