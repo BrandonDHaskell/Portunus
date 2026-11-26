@@ -1,11 +1,15 @@
 set(AM ${CMAKE_CURRENT_LIST_DIR}/../../..)  # access_module root
 
-# One test app per module variant: the module type in sdkconfig picks the
-# test source. Both FSM components are always required: IDF resolves
-# REQUIRES in an early pass that runs before a fresh build has an sdkconfig,
-# so a Kconfig-conditional REQUIRES would pick the wrong one on first
-# configure. provisioning_fsm compiles no sources outside the PEU variant.
-if(CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE)
+# One test app per variant: the module type (or the heartbeat test switch)
+# in sdkconfig picks the test source. Every component under test is always
+# required: IDF resolves REQUIRES in an early pass that runs before a fresh
+# build has an sdkconfig, so a Kconfig-conditional REQUIRES would pick the
+# wrong one on first configure. provisioning_fsm compiles no sources outside
+# the PEU variant, and the other variants never reference heartbeat_service,
+# so its esp_timer call (no linux implementation) is not linked there.
+if(CONFIG_PORTUNUS_TEST_HEARTBEAT)
+    set(_test_src "test_heartbeat_main.cpp")
+elseif(CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE)
     set(_test_src "test_peu_main.cpp")
 else()
     set(_test_src "test_main.cpp")
@@ -22,6 +26,7 @@ idf_component_register(
         unity
         system_fsm
         provisioning_fsm
+        heartbeat_service
         event_bus
         portunus_types
         portunus_config

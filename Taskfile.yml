@@ -420,7 +420,7 @@ tasks:
   # resolves a relative SDKCONFIG against the project), so the variants never
   # share a stale config.
   test:firmware:component:
-    desc: "Firmware component tier: IDF linux target, POSIX FreeRTOS, fake event bus (access point and PEU)"
+    desc: "Firmware component tier: IDF linux target, POSIX FreeRTOS, fake event bus (access point, PEU, heartbeat)"
     env:
       IDF_PATH: "{{.IDF_PATH}}"
     cmds:
@@ -428,10 +428,10 @@ tasks:
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
         {{if .HOST_CC}}export CC="{{.HOST_CC}}" CXX="{{.HOST_CXX}}" LDFLAGS="{{.HOST_LDFLAGS}}"{{end}}
         APP="$PWD/{{.FIRMWARE_DIR}}/test/component"
-        for VARIANT in fake peu; do
+        for VARIANT in fake peu hb; do
           BUILD="${APP}/build/${VARIANT}{{if .BUILD_TAG}}-{{.BUILD_TAG}}{{end}}"
           DEFAULTS="sdkconfig.defaults"
-          if [ "${VARIANT}" = peu ]; then DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.peu"; fi
+          if [ "${VARIANT}" != fake ]; then DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.${VARIANT}"; fi
           if [ ! -f "${BUILD}/CMakeCache.txt" ]; then
             idf.py --preview -C "${APP}" -B "${BUILD}" -D "SDKCONFIG=${BUILD}/sdkconfig" \
               -D "SDKCONFIG_DEFAULTS=${DEFAULTS}" set-target linux
