@@ -315,6 +315,256 @@ void test_each_pending_read_accepts_one_decision(void) {
     TEST_ASSERT_EQUAL(1, access.unlocks);
 }
 
+/* ── Init, door and hold-timer tests (FSM-10..21) ────────────────────────── */
+/* They inspect published events through the fake bus, so the real-bus
+ * integration build skips them. */
+
+#ifndef PORTUNUS_TEST_REAL_BUS
+
+namespace {
+enum class Mod { ABSENT, FAILING, OK };
+}  // namespace
+
+/* FSM-10: each module that is missing or fails init leaves exactly its own
+ * capability flag false; the others are unaffected. All 27 combinations. */
+void test_init_capability_matrix(void) {
+    const Mod mods[] = {Mod::ABSENT, Mod::FAILING, Mod::OK};
+    for (Mod r : mods) for (Mod a : mods) for (Mod f : mods) {
+        FakeCredentialReader reader;
+        FakeAccessPoint      access;
+        FakeFeedback         fb;
+        FakeClock            clk;
+        reader.init_result = (r == Mod::FAILING) ? PORTUNUS_ERR_DEVICE_NOT_FOUND : PORTUNUS_OK;
+        access.init_result = (a == Mod::FAILING) ? PORTUNUS_ERR_GPIO_INIT : PORTUNUS_OK;
+        fb.init_result     = (f == Mod::FAILING) ? PORTUNUS_ERR_GPIO_INIT : PORTUNUS_OK;
+        SystemFSM fsm(r == Mod::ABSENT ? nullptr : &reader,
+                      a == Mod::ABSENT ? nullptr : &access,
+                      f == Mod::ABSENT ? nullptr : &fb, &clk);
+        TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
+        const system_capabilities_t caps = fsm.capabilities();
+        TEST_ASSERT_EQUAL(r == Mod::OK, caps.has_reader);
+        TEST_ASSERT_EQUAL(a == Mod::OK, caps.has_access_point);
+        TEST_ASSERT_EQUAL(f == Mod::OK, caps.has_feedback);
+    }
+}
+
+/* FSM-11 (D-T11): a failing access point is not fatal. init() succeeds, and
+ * a grant still shows feedback without touching the strike. */
+void test_init_nonfatal_when_access_point_fails(void) {
+    FakeAccessPoint access;
+    FakeFeedback    fb;
+    FakeClock       clk;
+    access.init_result = PORTUNUS_ERR_GPIO_INIT;
+    SystemFSM fsm(nullptr, &access, &fb, &clk);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
+    TEST_ASSERT_FALSE(fsm.capabilities().has_access_point);
+
+    SystemFSMTestFixture fix(fsm);
+    inject_decision(fix, make_grant());
+    TEST_ASSERT_EQUAL(0, access.unlocks);
+    TEST_ASSERT_FALSE(fix.strike_energized());
+    TEST_ASSERT_EQUAL(feedback_type_t::ACCESS_GRANTED, fb.last());
+}
+
+/* FSM-12: init reads the door state, so the first poll of an unchanged door
+ * publishes nothing, open or closed. */
+void test_initial_door_state_read_at_init(void) {
+    for (const bool open : {false, true}) {
+        event_bus_fake_reset();
+        event_bus_init();
+        FakeAccessPoint access;
+        FakeClock       clk;
+        access.door_open = open;
+        SystemFSM fsm(nullptr, &access, nullptr, &clk);
+        TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
+        SystemFSMTestFixture fix(fsm);
+        TEST_ASSERT_EQUAL(open, fix.last_door_open());
+        fix.poll_reed();
+        TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_count_of(EVENT_DOOR_OPENED));
+        TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_count_of(EVENT_DOOR_CLOSED));
+    }
+}
+
+/* FSM-13: open then close publishes DOOR_OPENED then DOOR_CLOSED, each with
+ * the clock time of the poll that saw it. */
+void test_door_open_close_events_with_timestamps(void) {
+    FakeAccessPoint access;
+    FakeClock       clk;
+    SystemFSM fsm(nullptr, &access, nullptr, &clk);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
+    SystemFSMTestFixture fix(fsm);
+
+    clk.set(1000);
+    access.door_open = true;
+    fix.poll_reed();
+    fix.poll_reed();                           /* unchanged: no second event */
+    clk.set(1500);
+    access.door_open = false;
+    fix.poll_reed();
+
+    TEST_ASSERT_EQUAL_size_t(2, event_bus_fake_count());
+    TEST_ASSERT_EQUAL(EVENT_DOOR_OPENED, event_bus_fake_at(0)->id);
+    TEST_ASSERT_EQUAL_INT64(1000, event_bus_fake_at(0)->payload.door_opened.timestamp_ms);
+    TEST_ASSERT_EQUAL(EVENT_DOOR_CLOSED, event_bus_fake_at(1)->id);
+    TEST_ASSERT_EQUAL_INT64(1500, event_bus_fake_at(1)->payload.door_closed.timestamp_ms);
+}
+
+/* Grant on a fresh FSM with an access point: strike energized at clk now. */
+static void grant_and_open(SystemFSMTestFixture &fix, FakeAccessPoint &access) {
+    inject_decision(fix, make_grant());
+    TEST_ASSERT_TRUE(fix.strike_energized());
+    access.door_open = true;
+    fix.poll_reed();
+}
+
+/* FSM-14: closing the door during the hold re-locks at once and cancels the
+ * timer, so no UNLOCK_TIMEOUT follows. */
+void test_close_during_hold_relocks_early(void) {
+    FakeAccessPoint access;
+    FakeClock       clk;
+    SystemFSM fsm(nullptr, &access, nullptr, &clk);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
+    SystemFSMTestFixture fix(fsm);
+
+    grant_and_open(fix, access);
+    clk.advance(1000);
+    access.door_open = false;
+    fix.poll_reed();
+    TEST_ASSERT_EQUAL(1, access.locks);
+    TEST_ASSERT_FALSE(fix.strike_energized());
+    TEST_ASSERT_EQUAL_INT64(0, fix.unlock_deadline());
+
+    clk.advance(UNLOCK_HOLD_MS);
+    fix.tick_unlock_timer();
+    TEST_ASSERT_EQUAL(1, access.locks);
+    TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_count_of(EVENT_FSM_UNLOCK_TIMEOUT));
+}
+
+/* FSM-15: if the early re-lock fails the timer stays armed with its original
+ * deadline; the timer path retries at that deadline and publishes
+ * UNLOCK_TIMEOUT once. */
+void test_early_relock_failure_falls_back_to_timer(void) {
+    FakeAccessPoint access;
+    FakeClock       clk;
+    SystemFSM fsm(nullptr, &access, nullptr, &clk);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
+    SystemFSMTestFixture fix(fsm);
+
+    grant_and_open(fix, access);
+    const int64_t deadline = fix.unlock_deadline();
+    access.lock_result = PORTUNUS_ERR_GPIO_INIT;
+    access.door_open   = false;
+    fix.poll_reed();
+    TEST_ASSERT_TRUE(fix.strike_energized());
+    TEST_ASSERT_EQUAL_INT64(deadline, fix.unlock_deadline());
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_DOOR_CLOSED));
+
+    access.lock_result = PORTUNUS_OK;
+    clk.set(deadline - 1);
+    fix.tick_unlock_timer();                  /* not yet: no early retry */
+    TEST_ASSERT_EQUAL(0, access.locks);
+    clk.set(deadline);
+    fix.tick_unlock_timer();
+    TEST_ASSERT_EQUAL(1, access.locks);
+    TEST_ASSERT_FALSE(fix.strike_energized());
+    fix.tick_unlock_timer();
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_FSM_UNLOCK_TIMEOUT));
+}
+
+/* FSM-16: a door closing while the strike is not energized never calls lock(). */
+void test_close_while_locked_does_not_lock(void) {
+    FakeAccessPoint access;
+    FakeClock       clk;
+    SystemFSM fsm(nullptr, &access, nullptr, &clk);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
+    SystemFSMTestFixture fix(fsm);
+
+    access.door_open = true;
+    fix.poll_reed();
+    access.door_open = false;
+    fix.poll_reed();
+    TEST_ASSERT_EQUAL(0, access.locks);
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_DOOR_CLOSED));
+}
+
+/* FSM-17: a second grant during the hold unlocks again and moves the
+ * deadline to now + hold, so the door stays open for the second person. */
+void test_second_grant_extends_hold(void) {
+    FakeAccessPoint access;
+    FakeClock       clk;
+    SystemFSM fsm(nullptr, &access, nullptr, &clk);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
+    SystemFSMTestFixture fix(fsm);
+
+    clk.set(1000);
+    inject_decision(fix, make_grant());
+    TEST_ASSERT_EQUAL_INT64(1000 + UNLOCK_HOLD_MS, fix.unlock_deadline());
+    clk.advance(UNLOCK_HOLD_MS / 2);
+    inject_decision(fix, make_grant());
+    TEST_ASSERT_EQUAL(2, access.unlocks);
+    TEST_ASSERT_EQUAL_INT64(clk.now_ms() + UNLOCK_HOLD_MS, fix.unlock_deadline());
+
+    clk.set(1000 + UNLOCK_HOLD_MS);           /* the first deadline: still held */
+    fix.tick_unlock_timer();
+    TEST_ASSERT_TRUE(fix.strike_energized());
+    TEST_ASSERT_EQUAL(0, access.locks);
+}
+
+/* FSM-19: the bridge queue holds FSM_EVENT_QUEUE_LEN (8) events; the 9th is
+ * dropped after the bridge's short send timeout instead of blocking the bus
+ * dispatcher. */
+void test_bridge_drops_ninth_event(void) {
+    FakeAccessPoint access;
+    FakeClock       clk;
+    SystemFSM fsm(nullptr, &access, nullptr, &clk);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
+    SystemFSMTestFixture fix(fsm);
+
+    const portunus_event_t e = make_grant();
+    for (int i = 0; i < 8; ++i) fix.bridge(e);
+    TEST_ASSERT_EQUAL(8, fix.queued());
+    fix.bridge(e);
+    TEST_ASSERT_EQUAL(8, fix.queued());
+}
+
+/* FSM-20: an event bridged before init() (no queue yet) is dropped quietly. */
+void test_bridge_before_init_is_noop(void) {
+    FakeAccessPoint access;
+    FakeClock       clk;
+    SystemFSM fsm(nullptr, &access, nullptr, &clk);
+    SystemFSMTestFixture fix(fsm);
+    fix.bridge(make_grant());
+    TEST_ASSERT_EQUAL(0, access.unlocks);
+}
+
+/* FSM-21: UNLOCK_TIMEOUT is published only once lock() has succeeded; while
+ * it fails the strike stays energized and every tick retries. */
+void test_unlock_timeout_only_after_lock_succeeds(void) {
+    FakeAccessPoint access;
+    FakeClock       clk;
+    SystemFSM fsm(nullptr, &access, nullptr, &clk);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
+    SystemFSMTestFixture fix(fsm);
+
+    inject_decision(fix, make_grant());
+    access.lock_result = PORTUNUS_ERR_GPIO_INIT;
+    clk.advance(UNLOCK_HOLD_MS);
+    for (int i = 0; i < 3; ++i) {
+        fix.tick_unlock_timer();
+        TEST_ASSERT_TRUE(fix.strike_energized());
+    }
+    TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_count_of(EVENT_FSM_UNLOCK_TIMEOUT));
+
+    access.lock_result = PORTUNUS_OK;
+    fix.tick_unlock_timer();
+    fix.tick_unlock_timer();
+    TEST_ASSERT_FALSE(fix.strike_energized());
+    TEST_ASSERT_EQUAL(1, access.locks);
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_FSM_UNLOCK_TIMEOUT));
+}
+
+#endif /* !PORTUNUS_TEST_REAL_BUS */
+
 /* ── Fake bus conformance (T3): the fake follows the real bus's contract ─── */
 
 #ifndef PORTUNUS_TEST_REAL_BUS
@@ -425,6 +675,20 @@ extern "C" void app_main(void) {
     RUN_TEST(test_decision_timeout_shows_deny);
     RUN_TEST(test_late_grant_after_timeout_is_ignored);
     RUN_TEST(test_each_pending_read_accepts_one_decision);
+#ifndef PORTUNUS_TEST_REAL_BUS
+    /* Init, door and hold timer (FSM-10..21) */
+    RUN_TEST(test_init_capability_matrix);
+    RUN_TEST(test_init_nonfatal_when_access_point_fails);
+    RUN_TEST(test_initial_door_state_read_at_init);
+    RUN_TEST(test_door_open_close_events_with_timestamps);
+    RUN_TEST(test_close_during_hold_relocks_early);
+    RUN_TEST(test_early_relock_failure_falls_back_to_timer);
+    RUN_TEST(test_close_while_locked_does_not_lock);
+    RUN_TEST(test_second_grant_extends_hold);
+    RUN_TEST(test_bridge_drops_ninth_event);
+    RUN_TEST(test_bridge_before_init_is_noop);
+    RUN_TEST(test_unlock_timeout_only_after_lock_succeeds);
+#endif
 
 #ifndef PORTUNUS_TEST_REAL_BUS
     /* Fake bus conformance (T3) */
