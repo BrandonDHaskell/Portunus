@@ -224,6 +224,24 @@ menu "Portunus Configuration"
             help
                 Maximum time to wait for a response from the server on
                 heartbeat, access-request, and provision calls.
+
+        config PORTUNUS_SERVER_RECONNECT_MIN_MS
+            int "Server reconnect backoff, initial (milliseconds)"
+            default 1000
+            range 0 60000
+            help
+                After a failed connection to the server, further attempts
+                are refused (calls fail immediately) for this long. The
+                delay doubles on each consecutive failure up to the maximum
+                below and resets on a successful connection. 0 disables
+                backoff, so every call retries the full connect.
+
+        config PORTUNUS_SERVER_RECONNECT_MAX_MS
+            int "Server reconnect backoff, ceiling (milliseconds)"
+            default 30000
+            range 1000 300000
+            help
+                Upper bound for the server reconnect backoff.
     endmenu
 
     menu "Development / NVS fallback"

@@ -337,20 +337,26 @@ static portunus_err_t grpc_post_proto(const char *method,
     /* Sign the canonical projection string, not the raw protobuf bytes.
      * The server interceptor computes the same projection from parsed fields,
      * so both sides agree even when Nanopb and Go encode the same message
-     * with different field ordering or varint padding. */
+     * with different field ordering or varint padding.
+     *
+     * The signature travels as per-call metadata: it is built for exactly
+     * this request and cannot be dropped by a reconnect inside the call. */
     char sig_hex[PORTUNUS_HMAC_HEX_LEN];
-    if (compute_hmac_hex((const uint8_t *)sig_projection, strlen(sig_projection), sig_hex)) {
-        grpc_client_set_metadata(s_grpc_handle, PORTUNUS_HMAC_HEADER_NAME, sig_hex);
-    } else {
+    if (!compute_hmac_hex((const uint8_t *)sig_projection, strlen(sig_projection), sig_hex)) {
         ESP_LOGE(TAG, "HMAC computation failed — aborting RPC");
         return PORTUNUS_ERR_HTTP_CONNECT;
     }
+    const grpc_metadata_t md[] = { { PORTUNUS_HMAC_HEADER_NAME, sig_hex } };
+    const size_t md_count = 1;
 #else
     (void)sig_projection;
+    const grpc_metadata_t *md = nullptr;
+    const size_t md_count = 0;
 #endif /* PORTUNUS_HMAC_ENABLED */
 
     return grpc_client_unary_call(s_grpc_handle, method,
                                   req_buf, req_len,
+                                  md, md_count,
                                   resp_buf, resp_cap,
                                   resp_len, grpc_status,
                                   out_sig_hex);
@@ -466,6 +472,10 @@ static void handle_heartbeat(const event_heartbeat_t *hb)
         proj,
         resp_buf, sizeof(resp_buf),
         &resp_len, &grpc_status, nullptr);
+    if (err == PORTUNUS_ERR_RECONNECT_BACKOFF) {
+        ESP_LOGD(TAG, "Heartbeat skipped: server reconnect backoff");
+        return;
+    }
     if (err != PORTUNUS_OK) {
         ESP_LOGW(TAG, "Heartbeat gRPC failed: err=0x%04x", (unsigned)err);
         return;
@@ -852,6 +862,8 @@ portunus_err_t server_comm_init(const portunus_device_config_t *cfg)
         grpc_cfg.connect_timeout_ms = PORTUNUS_SERVER_REQUEST_TIMEOUT_MS;
         grpc_cfg.rpc_timeout_ms     = PORTUNUS_SERVER_REQUEST_TIMEOUT_MS;
         grpc_cfg.skip_cert_verify   = PORTUNUS_TLS_SKIP_VERIFY;
+        grpc_cfg.reconnect_backoff_min_ms = PORTUNUS_SERVER_RECONNECT_MIN_MS;
+        grpc_cfg.reconnect_backoff_max_ms = PORTUNUS_SERVER_RECONNECT_MAX_MS;
 
       #if PORTUNUS_TLS_USE_CUSTOM_CA
         grpc_cfg.ca_cert_pem = ca_cert_pem_start;

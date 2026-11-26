@@ -16,7 +16,9 @@
  *   2. nghttp2_session_client_new() with send/recv callbacks
  *   3. Exchange HTTP/2 SETTINGS frames
  *   4. For each unary RPC: open stream → send HEADERS+DATA → recv DATA+trailers
- *   5. Connection kept alive between RPCs; reconnect on error
+ *   5. Connection kept alive between RPCs.  Any failure after a stream was
+ *      submitted tears the session down (see abandon_stream()); reconnects
+ *      are rate-limited by exponential backoff.
  */
 
 #include "grpc_client.hpp"
@@ -32,6 +34,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include <cinttypes>
 #include <cstring>
 #include <cstdlib>
 #include <arpa/inet.h>  /* htonl / ntohl */
@@ -44,24 +47,11 @@ static const char *TAG = "grpc_client";
 /** gRPC frame header: 1 byte compression flag + 4 bytes message length. */
 static constexpr size_t GRPC_FRAME_HEADER_LEN = 5;
 
-/** Maximum number of custom metadata entries. */
-static constexpr int MAX_CUSTOM_METADATA = 4;
-
-/** Maximum length for a metadata key or value. */
-static constexpr size_t MAX_METADATA_LEN = 128;
-
 /** Upper bound on outbound RPC payload; avoids heap allocation on the hot path.
  *  Sized to HeartbeatRequest_size (142) + margin. */
 static constexpr size_t GRPC_MAX_REQUEST_PAYLOAD = 192;
 
 /* ── Internal types ────────────────────────────────────────────────────────── */
-
-/** Custom metadata key-value pair. */
-struct metadata_entry_t {
-    char key[MAX_METADATA_LEN];
-    char value[MAX_METADATA_LEN];
-    bool active;
-};
 
 /**
  * Per-stream state for tracking an in-flight unary RPC.
@@ -96,9 +86,11 @@ struct grpc_client {
     /* HTTP/2 session */
     nghttp2_session      *session;
     bool                  settings_received; /**< True after server SETTINGS frame received. */
+    bool                  ping_ack_received; /**< True after the server ACKs our PING. */
 
-    /* Custom metadata headers sent with every RPC */
-    metadata_entry_t      metadata[MAX_CUSTOM_METADATA];
+    /* Reconnect backoff */
+    int64_t               next_connect_us;   /**< esp_timer time before which connect is refused (0 = none). */
+    uint32_t              backoff_ms;        /**< Delay applied after the next failed connect. */
 };
 
 /* ── Helper: build an nghttp2_nv from string literals / buffers ────────────── */
@@ -316,15 +308,16 @@ static int cb_on_frame_recv(nghttp2_session *session,
                              void *user_data)
 {
     if (frame->hd.stream_id == 0) {
-        /* Track server SETTINGS arrival for handshake completion (B19). */
-        if (frame->hd.type == NGHTTP2_SETTINGS &&
-            !(frame->hd.flags & NGHTTP2_FLAG_ACK)) {
-            auto *c = static_cast<grpc_client *>(user_data);
+        /* Connection-level frames: track handshake completion and PING ACKs. */
+        auto *c = static_cast<grpc_client *>(user_data);
+        const bool is_ack = (frame->hd.flags & NGHTTP2_FLAG_ACK) != 0;
+        if (frame->hd.type == NGHTTP2_SETTINGS && !is_ack) {
             c->settings_received = true;
+        } else if (frame->hd.type == NGHTTP2_PING && is_ack) {
+            c->ping_ack_received = true;
         }
-        return 0; /* Connection-level frame (SETTINGS, PING, etc.) */
+        return 0;
     }
-    (void)user_data;
 
     auto *ss = static_cast<stream_state_t *>(
         nghttp2_session_get_stream_user_data(session, frame->hd.stream_id));
@@ -398,30 +391,33 @@ static portunus_err_t create_nghttp2_session(grpc_client *c)
 }
 
 /**
- * @brief Pump the nghttp2 session: send pending frames and receive incoming.
+ * @brief Pump the nghttp2 session until @p done becomes true.
  *
- * Continues until nghttp2 has no more data to send and has processed
- * all pending receives, or until the stream_state indicates completion.
+ * Sends pending frames and processes incoming ones.  @p done is set by a
+ * callback: settings_received (handshake), ping_ack_received (keepalive),
+ * or a stream's stream_closed (unary RPC).  For connection-level waits the
+ * pump also flushes our own pending frames (e.g. the SETTINGS ACK) before
+ * returning.
  *
- * @param c  Client handle.
- * @param ss Stream state to monitor for completion (nullptr for connection-level).
- * @return PORTUNUS_OK on success, error code on failure.
+ * @param c           Client handle.
+ * @param done        Completion flag to wait on.
+ * @param flush_first If true, return only once nothing is left to send.
+ * @return PORTUNUS_OK on success, PORTUNUS_ERR_TIMEOUT, or
+ *         PORTUNUS_ERR_HTTP_CONNECT if the session failed.
  */
-static portunus_err_t pump_session(grpc_client *c, stream_state_t *ss)
+static portunus_err_t pump_session(grpc_client *c, const bool *done, bool flush_first)
 {
     int64_t start_us = esp_timer_get_time();
     int64_t timeout_us = static_cast<int64_t>(c->cfg.rpc_timeout_ms) * 1000;
 
     while (true) {
-        /* Check timeout. */
+        if (*done && (!flush_first || nghttp2_session_want_write(c->session) == 0)) {
+            return PORTUNUS_OK;
+        }
+
         if ((esp_timer_get_time() - start_us) > timeout_us) {
             ESP_LOGW(TAG, "Session pump timed out after %d ms", c->cfg.rpc_timeout_ms);
             return PORTUNUS_ERR_TIMEOUT;
-        }
-
-        /* Check if the stream we're waiting on is done. */
-        if (ss != nullptr && ss->stream_closed) {
-            return PORTUNUS_OK;
         }
 
         /* Send any pending outbound frames. */
@@ -445,19 +441,53 @@ static portunus_err_t pump_session(grpc_client *c, stream_state_t *ss)
             return PORTUNUS_ERR_HTTP_CONNECT;
         }
 
-        /* Connection-level pump (initial SETTINGS exchange or PING keepalive).
-         * Exit once the server's SETTINGS has been received and we have
-         * nothing left to send (our SETTINGS ACK has been flushed). */
-        if (ss == nullptr) {
-            if (c->settings_received &&
-                nghttp2_session_want_write(c->session) == 0) {
-                return PORTUNUS_OK;
-            }
-        }
-
         /* Small yield to avoid starving other tasks. */
         vTaskDelay(pdMS_TO_TICKS(1));
     }
+}
+
+/* ── Failure handling ──────────────────────────────────────────────────────── */
+
+/** Refuse connects until the current backoff elapses, then double it. */
+static void schedule_reconnect_backoff(grpc_client *c)
+{
+    if (c->cfg.reconnect_backoff_min_ms == 0) {
+        return;
+    }
+    if (c->backoff_ms == 0) {
+        c->backoff_ms = c->cfg.reconnect_backoff_min_ms;
+    }
+    c->next_connect_us = esp_timer_get_time() + static_cast<int64_t>(c->backoff_ms) * 1000;
+    ESP_LOGW(TAG, "Reconnect backoff: next attempt in %" PRIu32 " ms", c->backoff_ms);
+
+    uint32_t max_ms = c->cfg.reconnect_backoff_max_ms;
+    if (max_ms < c->cfg.reconnect_backoff_min_ms) {
+        max_ms = c->cfg.reconnect_backoff_min_ms;
+    }
+    c->backoff_ms = (c->backoff_ms > max_ms / 2) ? max_ms : c->backoff_ms * 2;
+}
+
+static void reset_reconnect_backoff(grpc_client *c)
+{
+    c->next_connect_us = 0;
+    c->backoff_ms      = 0;
+}
+
+/**
+ * @brief Give up on an in-flight stream and drop the connection.
+ *
+ * The stream's user data points at a stream_state_t on the caller's stack.
+ * Unregistering it first guarantees no later callback (late DATA, trailers,
+ * or close during session teardown) can write through a dangling pointer.
+ * Tearing the session down then discards whatever the server still sends
+ * for that stream, so the next call starts from a clean connection.
+ */
+static void abandon_stream(grpc_client *c, int32_t stream_id)
+{
+    if (c->session != nullptr) {
+        nghttp2_session_set_stream_user_data(c->session, stream_id, nullptr);
+    }
+    grpc_client_disconnect(c);
 }
 
 /* ── Data provider for nghttp2_submit_request ──────────────────────────────── */
@@ -518,10 +548,12 @@ portunus_err_t grpc_client_init(const grpc_client_config_t *cfg,
     }
 
     /* Copy configuration. */
-    c->cfg       = *cfg;
-    c->connected = false;
-    c->tls       = nullptr;
-    c->session   = nullptr;
+    c->cfg             = *cfg;
+    c->connected       = false;
+    c->tls             = nullptr;
+    c->session         = nullptr;
+    c->next_connect_us = 0;
+    c->backoff_ms      = 0;
 
     *handle = c;
     ESP_LOGI(TAG, "gRPC client created for %s:%u", cfg->host, cfg->port);
@@ -543,6 +575,11 @@ portunus_err_t grpc_client_connect(grpc_client_handle_t c)
 
     if (c->connected) {
         return PORTUNUS_OK;
+    }
+
+    if (c->next_connect_us != 0 && esp_timer_get_time() < c->next_connect_us) {
+        ESP_LOGD(TAG, "Connect skipped: reconnect backoff in effect");
+        return PORTUNUS_ERR_RECONNECT_BACKOFF;
     }
 
     /* Clean up any stale state. */
@@ -577,6 +614,7 @@ portunus_err_t grpc_client_connect(grpc_client_handle_t c)
     c->tls = esp_tls_init();
     if (c->tls == nullptr) {
         ESP_LOGE(TAG, "esp_tls_init failed");
+        schedule_reconnect_backoff(c);
         return PORTUNUS_ERR_HTTP_CONNECT;
     }
 
@@ -584,8 +622,8 @@ portunus_err_t grpc_client_connect(grpc_client_handle_t c)
                                     c->cfg.port, &tls_cfg, c->tls);
     if (rv < 0) {
         ESP_LOGE(TAG, "TLS connection failed (rv=%d)", rv);
-        esp_tls_conn_destroy(c->tls);
-        c->tls = nullptr;
+        grpc_client_disconnect(c);
+        schedule_reconnect_backoff(c);
         return PORTUNUS_ERR_HTTP_CONNECT;
     }
 
@@ -614,8 +652,8 @@ portunus_err_t grpc_client_connect(grpc_client_handle_t c)
 
     portunus_err_t err = create_nghttp2_session(c);
     if (err != PORTUNUS_OK) {
-        esp_tls_conn_destroy(c->tls);
-        c->tls = nullptr;
+        grpc_client_disconnect(c);
+        schedule_reconnect_backoff(c);
         return err;
     }
 
@@ -630,25 +668,22 @@ portunus_err_t grpc_client_connect(grpc_client_handle_t c)
                                   settings, 2);
     if (rv != 0) {
         ESP_LOGE(TAG, "nghttp2_submit_settings failed: %s", nghttp2_strerror(rv));
-        nghttp2_session_del(c->session);
-        c->session = nullptr;
-        esp_tls_conn_destroy(c->tls);
-        c->tls = nullptr;
+        grpc_client_disconnect(c);
+        schedule_reconnect_backoff(c);
         return PORTUNUS_ERR_HTTP_CONNECT;
     }
 
     /* Pump to exchange SETTINGS — reset the flag so pump_session knows to wait. */
     c->settings_received = false;
-    err = pump_session(c, nullptr);
+    err = pump_session(c, &c->settings_received, true);
     if (err != PORTUNUS_OK) {
         ESP_LOGE(TAG, "HTTP/2 SETTINGS exchange failed");
-        nghttp2_session_del(c->session);
-        c->session = nullptr;
-        esp_tls_conn_destroy(c->tls);
-        c->tls = nullptr;
+        grpc_client_disconnect(c);
+        schedule_reconnect_backoff(c);
         return err;
     }
 
+    reset_reconnect_backoff(c);
     c->connected = true;
     ESP_LOGI(TAG, "HTTP/2 connection established to %s:%u", c->cfg.host, c->cfg.port);
     return PORTUNUS_OK;
@@ -669,49 +704,12 @@ void grpc_client_disconnect(grpc_client_handle_t c)
     }
 
     c->connected = false;
-    memset(c->metadata, 0, sizeof(c->metadata));
 }
 
 bool grpc_client_is_connected(grpc_client_handle_t c)
 {
     if (c == nullptr) { return false; }
     return c->connected;
-}
-
-portunus_err_t grpc_client_set_metadata(grpc_client_handle_t c,
-                                         const char *key, const char *value)
-{
-    if (c == nullptr || key == nullptr) { return PORTUNUS_ERR_INVALID_ARG; }
-
-    /* Find existing entry with this key, or a free slot. */
-    int free_slot = -1;
-    for (int i = 0; i < MAX_CUSTOM_METADATA; i++) {
-        if (c->metadata[i].active && strcmp(c->metadata[i].key, key) == 0) {
-            if (value == nullptr) {
-                c->metadata[i].active = false;
-            } else {
-                strncpy(c->metadata[i].value, value, MAX_METADATA_LEN - 1);
-            }
-            return PORTUNUS_OK;
-        }
-        if (!c->metadata[i].active && free_slot < 0) {
-            free_slot = i;
-        }
-    }
-
-    if (value == nullptr) {
-        return PORTUNUS_OK; /* Key not found, nothing to remove. */
-    }
-
-    if (free_slot < 0) {
-        ESP_LOGE(TAG, "No free metadata slots (max %d)", MAX_CUSTOM_METADATA);
-        return PORTUNUS_ERR_NO_MEMORY;
-    }
-
-    strncpy(c->metadata[free_slot].key, key, MAX_METADATA_LEN - 1);
-    strncpy(c->metadata[free_slot].value, value, MAX_METADATA_LEN - 1);
-    c->metadata[free_slot].active = true;
-    return PORTUNUS_OK;
 }
 
 portunus_err_t grpc_client_send_ping(grpc_client_handle_t c)
@@ -721,16 +719,20 @@ portunus_err_t grpc_client_send_ping(grpc_client_handle_t c)
     }
 
     static const uint8_t opaque[8] = {'P','O','R','T','U','N','U','S'};
+    c->ping_ack_received = false;
     int rv = nghttp2_submit_ping(c->session, NGHTTP2_FLAG_NONE, opaque);
     if (rv != 0) {
         ESP_LOGE(TAG, "nghttp2_submit_ping failed: %s", nghttp2_strerror(rv));
-        c->connected = false;
+        grpc_client_disconnect(c);
         return PORTUNUS_ERR_HTTP_CONNECT;
     }
 
-    portunus_err_t err = pump_session(c, nullptr);
+    /* Wait for the ACK, not just for the PING to leave: a write can succeed
+     * on a half-open TCP connection, an ACK cannot. */
+    portunus_err_t err = pump_session(c, &c->ping_ack_received, false);
     if (err != PORTUNUS_OK) {
-        c->connected = false;
+        ESP_LOGW(TAG, "No PING ACK from server; dropping connection");
+        grpc_client_disconnect(c);
     }
     return err;
 }
@@ -738,6 +740,8 @@ portunus_err_t grpc_client_send_ping(grpc_client_handle_t c)
 portunus_err_t grpc_client_unary_call(grpc_client_handle_t c,
                                        const char *service_method,
                                        const uint8_t *req_buf, size_t req_len,
+                                       const grpc_metadata_t *metadata,
+                                       size_t metadata_count,
                                        uint8_t *resp_buf, size_t resp_cap,
                                        int *resp_len, int *grpc_status,
                                        char *out_sig_hex)
@@ -745,6 +749,15 @@ portunus_err_t grpc_client_unary_call(grpc_client_handle_t c,
     if (c == nullptr || service_method == nullptr || req_buf == nullptr ||
         resp_buf == nullptr || resp_len == nullptr || grpc_status == nullptr) {
         return PORTUNUS_ERR_INVALID_ARG;
+    }
+    if (metadata_count > GRPC_MAX_CALL_METADATA ||
+        (metadata_count > 0 && metadata == nullptr)) {
+        return PORTUNUS_ERR_INVALID_ARG;
+    }
+    for (size_t i = 0; i < metadata_count; i++) {
+        if (metadata[i].key == nullptr || metadata[i].value == nullptr) {
+            return PORTUNUS_ERR_INVALID_ARG;
+        }
     }
 
     *resp_len = 0;
@@ -785,25 +798,12 @@ portunus_err_t grpc_client_unary_call(grpc_client_handle_t c,
         make_nv("te",           "trailers"),
     };
 
-    /* Count active custom metadata. */
-    int custom_count = 0;
-    for (int i = 0; i < MAX_CUSTOM_METADATA; i++) {
-        if (c->metadata[i].active) { custom_count++; }
-    }
+    size_t total_hdrs = BASE_HDR_COUNT + metadata_count;
+    nghttp2_nv hdrs[BASE_HDR_COUNT + GRPC_MAX_CALL_METADATA];
 
-    size_t total_hdrs = BASE_HDR_COUNT + custom_count;
-    nghttp2_nv hdrs[BASE_HDR_COUNT + MAX_CUSTOM_METADATA];
-
-    /* Copy base headers. */
     memcpy(hdrs, base_hdrs, BASE_HDR_COUNT * sizeof(nghttp2_nv));
-
-    /* Append custom metadata. */
-    int idx = static_cast<int>(BASE_HDR_COUNT);
-    for (int i = 0; i < MAX_CUSTOM_METADATA; i++) {
-        if (c->metadata[i].active) {
-            hdrs[idx] = make_nv(c->metadata[i].key, c->metadata[i].value);
-            idx++;
-        }
+    for (size_t i = 0; i < metadata_count; i++) {
+        hdrs[BASE_HDR_COUNT + i] = make_nv(metadata[i].key, metadata[i].value);
     }
 
     /* ── Set up data provider ──────────────────────────────────────────── */
@@ -836,7 +836,7 @@ portunus_err_t grpc_client_unary_call(grpc_client_handle_t c,
     if (stream_id < 0) {
         ESP_LOGE(TAG, "nghttp2_submit_request failed: %s",
                  nghttp2_strerror(stream_id));
-        c->connected = false;
+        grpc_client_disconnect(c);
         return PORTUNUS_ERR_HTTP_CONNECT;
     }
 
@@ -845,9 +845,12 @@ portunus_err_t grpc_client_unary_call(grpc_client_handle_t c,
 
     /* ── Pump until stream completes ───────────────────────────────────── */
 
-    portunus_err_t err = pump_session(c, &ss);
+    portunus_err_t err = pump_session(c, &ss.stream_closed, false);
 
+    /* From here on `ss` must not outlive this frame inside nghttp2: every
+     * failure path unregisters it and drops the connection. */
     if (err != PORTUNUS_OK) {
+        abandon_stream(c, stream_id);
         return err;
     }
 
@@ -855,7 +858,7 @@ portunus_err_t grpc_client_unary_call(grpc_client_handle_t c,
         /* Log the HTTP/2 error code so operators can distinguish retry vs back-off. */
         ESP_LOGW(TAG, "Stream error on %s: RST code=0x%x", service_method,
                  static_cast<unsigned>(ss.stream_error_code));
-        c->connected = false;
+        abandon_stream(c, stream_id);
         return PORTUNUS_ERR_HTTP_CONNECT;
     }
 
