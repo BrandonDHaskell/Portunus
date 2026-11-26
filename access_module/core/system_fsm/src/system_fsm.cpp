@@ -30,7 +30,6 @@
 #include "wifi_mgr.hpp"
 #endif
 
-#include <inttypes.h>
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -152,9 +151,20 @@ portunus_err_t SystemFSM::start()
     ESP_LOGI(TAG, "Starting system FSM");
 
     /* ── Subscribe to event bus events ──────────────────────────────────── */
-    event_bus_subscribe(EVENT_CREDENTIAL_READ, on_event_bus_event, this);
-    event_bus_subscribe(EVENT_ACCESS_GRANTED,  on_event_bus_event, this);
-    event_bus_subscribe(EVENT_ACCESS_DENIED,   on_event_bus_event, this);
+    /* A missing subscription would silently stop grants or card reads from
+     * reaching the FSM, so treat any failure as fatal. */
+    static const portunus_event_id_t kEvents[] = {
+        EVENT_CREDENTIAL_READ, EVENT_ACCESS_GRANTED, EVENT_ACCESS_DENIED,
+    };
+    for (portunus_event_id_t id : kEvents) {
+        portunus_err_t err = event_bus_subscribe(id, on_event_bus_event, this);
+        if (err != PORTUNUS_OK) {
+            ESP_LOGE(TAG, "Subscribe to event 0x%04x failed (0x%" PRIx32 ")",
+                     (unsigned)id, (uint32_t)err);
+            m_state = SYSTEM_STATE_ERROR;
+            return PORTUNUS_ERR_SUBSCRIBE;
+        }
+    }
 
     /* ── Start FSM task ─────────────────────────────────────────────────── */
     BaseType_t ret = xTaskCreate(
@@ -267,7 +277,10 @@ void SystemFSM::run()
             check_unlock_timer();
         }
 
-        /* 5. Update network capability dynamically. */
+        /* 5. Give up on decisions the server never delivered. */
+        check_decision_timeout();
+
+        /* 6. Update network capability dynamically. */
 #ifdef CONFIG_PORTUNUS_ENABLE_WIFI
         m_caps.has_network = wifi_mgr_is_connected();
 #endif
@@ -276,8 +289,62 @@ void SystemFSM::run()
 
 /* ── Event processing ─────────────────────────────────────────────────────── */
 
+/**
+ * @brief Update pending-decision bookkeeping for @p event.
+ *
+ * @return false if the event is an access decision with no card read waiting
+ *         for it; the caller must then ignore the event entirely.
+ */
+bool SystemFSM::track_decision(const portunus_event_t &event)
+{
+    switch (event.id) {
+    case EVENT_CREDENTIAL_READ:
+        if (m_pending_decisions < UINT8_MAX) {
+            m_pending_decisions++;
+        }
+        m_decision_deadline_ms = m_clock->now_ms() + ACCESS_DECISION_TIMEOUT_MS;
+        return true;
+
+    case EVENT_ACCESS_GRANTED:
+    case EVENT_ACCESS_DENIED:
+        if (m_pending_decisions == 0) {
+            ESP_LOGW(TAG, "Ignoring %s with no pending request (late or unsolicited): credential=%s",
+                     event.id == EVENT_ACCESS_GRANTED ? "GRANT" : "DENY",
+                     event.payload.access_decision.credential_id);
+            return false;
+        }
+        if (--m_pending_decisions == 0) {
+            m_decision_deadline_ms = 0;
+        }
+        return true;
+
+    default:
+        return true;
+    }
+}
+
+void SystemFSM::check_decision_timeout()
+{
+    if (m_pending_decisions == 0 || m_clock->now_ms() < m_decision_deadline_ms) {
+        return;
+    }
+
+    ESP_LOGW(TAG, "No access decision within %d ms (%u pending); showing deny",
+             ACCESS_DECISION_TIMEOUT_MS, (unsigned)m_pending_decisions);
+    m_pending_decisions    = 0;
+    m_decision_deadline_ms = 0;
+
+    if (m_caps.has_feedback) {
+        m_feedback->indicate(feedback_type_t::ACCESS_DENIED);
+    }
+}
+
 void SystemFSM::process_event(const portunus_event_t &event)
 {
+    if (!track_decision(event)) {
+        return;
+    }
+
     const fsm_actions_t actions = decide_system_event(m_caps, event);
 
     /* Audit logging — preserved verbatim from the original handlers. */

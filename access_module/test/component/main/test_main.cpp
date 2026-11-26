@@ -61,6 +61,13 @@ static portunus_event_t make_credential_read(void) {
     return e;
 }
 
+/* The FSM only acts on a decision that answers a pending card read, so the
+ * decision tests first inject the read that the server is answering. */
+static void inject_decision(SystemFSMTestFixture &fix, const portunus_event_t &decision) {
+    fix.inject(make_credential_read());
+    fix.inject(decision);
+}
+
 /* ── Behavioral tests (fake bus) ──────────────────────────────────────────── */
 
 /* Grant with access point: unlock once, hold timer started, ACCESS_GRANTED feedback. */
@@ -73,7 +80,7 @@ void test_grant_unlocks_and_starts_hold_timer(void) {
     TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
     SystemFSMTestFixture fix(fsm);
 
-    fix.inject(make_grant());
+    inject_decision(fix, make_grant());
 
     TEST_ASSERT_EQUAL(1, access.unlocks);
     TEST_ASSERT_FALSE(access.locked);
@@ -93,7 +100,7 @@ void test_grant_unlock_failure_does_not_start_timer(void) {
     TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
     SystemFSMTestFixture fix(fsm);
 
-    fix.inject(make_grant());
+    inject_decision(fix, make_grant());
 
     TEST_ASSERT_EQUAL(0, access.unlocks);  /* unlock attempted but failed */
     TEST_ASSERT_FALSE(fix.strike_energized());
@@ -108,7 +115,7 @@ void test_grant_without_access_point_shows_feedback(void) {
     TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
     SystemFSMTestFixture fix(fsm);
 
-    fix.inject(make_grant());
+    inject_decision(fix, make_grant());
 
     TEST_ASSERT_EQUAL(1, fb.count_of(feedback_type_t::ACCESS_GRANTED));
     TEST_ASSERT_FALSE(fix.strike_energized());
@@ -124,7 +131,7 @@ void test_deny_shows_feedback_only(void) {
     TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
     SystemFSMTestFixture fix(fsm);
 
-    fix.inject(make_deny());
+    inject_decision(fix, make_deny());
 
     TEST_ASSERT_EQUAL(0, access.unlocks);
     TEST_ASSERT_EQUAL(1, fb.count_of(feedback_type_t::ACCESS_DENIED));
@@ -169,8 +176,8 @@ void test_no_feedback_hardware_emits_nothing(void) {
     TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
     SystemFSMTestFixture fix(fsm);
 
-    fix.inject(make_grant());
-    fix.inject(make_deny());
+    inject_decision(fix, make_grant());
+    inject_decision(fix, make_deny());
     /* No crash, no feedback object touched. */
     TEST_ASSERT_EQUAL(1, access.unlocks);
 }
@@ -185,7 +192,7 @@ void test_strike_relocks_after_hold_expires(void) {
     TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
     SystemFSMTestFixture fix(fsm);
 
-    fix.inject(make_grant());
+    inject_decision(fix, make_grant());
     TEST_ASSERT_EQUAL(1, access.unlocks);
     TEST_ASSERT_FALSE(access.locked);
 
@@ -213,7 +220,7 @@ void test_relock_failure_retries_on_next_tick(void) {
     TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
     SystemFSMTestFixture fix(fsm);
 
-    fix.inject(make_grant());
+    inject_decision(fix, make_grant());
     access.lock_result = PORTUNUS_FAIL;  /* set AFTER unlock so grant succeeds */
 
     clk.advance(UNLOCK_HOLD_MS);
@@ -224,6 +231,88 @@ void test_relock_failure_retries_on_next_tick(void) {
     fix.tick_unlock_timer();
     TEST_ASSERT_FALSE(fix.strike_energized());
     TEST_ASSERT_TRUE(access.locked);
+}
+
+/* A grant with no pending card read (late or unsolicited) never unlocks. */
+void test_unsolicited_grant_is_ignored(void) {
+    FakeAccessPoint access;
+    FakeFeedback    fb;
+    FakeClock       clk;
+
+    SystemFSM fsm(nullptr, &access, &fb, &clk);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
+    SystemFSMTestFixture fix(fsm);
+
+    fix.inject(make_grant());
+
+    TEST_ASSERT_EQUAL(0, access.unlocks);
+    TEST_ASSERT_FALSE(fix.strike_energized());
+    TEST_ASSERT_EQUAL(0, fb.count_of(feedback_type_t::ACCESS_GRANTED));
+}
+
+/* No decision within the timeout: deny feedback, nothing left pending. */
+void test_decision_timeout_shows_deny(void) {
+    FakeAccessPoint access;
+    FakeFeedback    fb;
+    FakeClock       clk;
+
+    SystemFSM fsm(nullptr, &access, &fb, &clk);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
+    SystemFSMTestFixture fix(fsm);
+
+    fix.inject(make_credential_read());
+    TEST_ASSERT_EQUAL(1, fix.pending_decisions());
+
+    clk.advance(ACCESS_DECISION_TIMEOUT_MS - 1);
+    fix.tick_decision_timeout();
+    TEST_ASSERT_EQUAL(0, fb.count_of(feedback_type_t::ACCESS_DENIED));
+
+    clk.advance(1);
+    fix.tick_decision_timeout();
+    TEST_ASSERT_EQUAL(1, fb.count_of(feedback_type_t::ACCESS_DENIED));
+    TEST_ASSERT_EQUAL(0, fix.pending_decisions());
+}
+
+/* A grant arriving after the timeout showed a deny must not unlock. */
+void test_late_grant_after_timeout_is_ignored(void) {
+    FakeAccessPoint access;
+    FakeFeedback    fb;
+    FakeClock       clk;
+
+    SystemFSM fsm(nullptr, &access, &fb, &clk);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
+    SystemFSMTestFixture fix(fsm);
+
+    fix.inject(make_credential_read());
+    clk.advance(ACCESS_DECISION_TIMEOUT_MS);
+    fix.tick_decision_timeout();
+
+    fix.inject(make_grant());
+    TEST_ASSERT_EQUAL(0, access.unlocks);
+    TEST_ASSERT_EQUAL(0, fb.count_of(feedback_type_t::ACCESS_GRANTED));
+}
+
+/* Two reads in flight (card held across a re-read): both decisions count. */
+void test_each_pending_read_accepts_one_decision(void) {
+    FakeAccessPoint access;
+    FakeFeedback    fb;
+    FakeClock       clk;
+
+    SystemFSM fsm(nullptr, &access, &fb, &clk);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
+    SystemFSMTestFixture fix(fsm);
+
+    fix.inject(make_credential_read());
+    fix.inject(make_credential_read());
+    TEST_ASSERT_EQUAL(2, fix.pending_decisions());
+
+    fix.inject(make_deny());
+    fix.inject(make_grant());
+    TEST_ASSERT_EQUAL(0, fix.pending_decisions());
+    TEST_ASSERT_EQUAL(1, access.unlocks);
+
+    fix.inject(make_grant());          /* third decision: nothing pending */
+    TEST_ASSERT_EQUAL(1, access.unlocks);
 }
 
 /* ── Concurrency tests (real bus, built with PORTUNUS_TEST_REAL_BUS=ON) ──── */
@@ -264,6 +353,10 @@ extern "C" void app_main(void) {
     RUN_TEST(test_no_feedback_hardware_emits_nothing);
     RUN_TEST(test_strike_relocks_after_hold_expires);
     RUN_TEST(test_relock_failure_retries_on_next_tick);
+    RUN_TEST(test_unsolicited_grant_is_ignored);
+    RUN_TEST(test_decision_timeout_shows_deny);
+    RUN_TEST(test_late_grant_after_timeout_is_ignored);
+    RUN_TEST(test_each_pending_read_accepts_one_decision);
 
 #ifdef PORTUNUS_TEST_REAL_BUS
     /* Concurrency suite — only meaningful with real async bus */

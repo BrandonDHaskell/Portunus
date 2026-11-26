@@ -45,6 +45,13 @@
            "A door image without TLS has no authenticated server-to-device channel. " \
            "Enable TLS in menuconfig → Security Configuration."
   #endif
+  /* Outside dev builds the grant must be authenticated by both layers:
+   * verified TLS (server identity) and HMAC (response signature).  Dropping
+   * either one lets an on-path device forge granted=true. */
+  #if !defined(CONFIG_PORTUNUS_ENV_DEV) && (PORTUNUS_TLS_SKIP_VERIFY || !PORTUNUS_HMAC_ENABLED)
+    #error "Non-dev ACCESS_POINT firmware requires TLS certificate verification and " \
+           "HMAC signing (CONFIG_PORTUNUS_TLS_SKIP_VERIFY=n, CONFIG_PORTUNUS_HMAC_ENABLED=y)."
+  #endif
 #endif
 
 /* TLS / HMAC */
@@ -95,6 +102,13 @@ static TaskHandle_t   s_comm_task     = NULL;
 static bool           s_initialized   = false;
 static bool           s_reader_degraded = false; /* set by EVENT_CREDENTIAL_READ_ERROR, cleared by RECOVERED */
 static bool           s_clock_synced    = false; /* true after first successful settimeofday() from heartbeat */
+static int64_t        s_last_sync_us    = 0;     /* esp_timer time of the last successful clock sync */
+static event_heartbeat_t s_last_heartbeat = {};  /* most recent heartbeat payload, reused for on-demand syncs */
+
+/* The server rejects access requests whose requested_at is missing or more
+ * than 60 s off its clock.  Re-syncing hourly keeps RTC drift (tens of ppm)
+ * far inside that window even when periodic heartbeats are disabled. */
+#define CLOCK_RESYNC_INTERVAL_US (60LL * 60LL * 1000000LL)
 
 /* gRPC client handle — persistent HTTP/2+TLS connection to the server. */
 static grpc_client_handle_t s_grpc_handle = NULL;
@@ -292,6 +306,7 @@ static void sync_clock_from_response(const char *server_time, int64_t rtt_us)
     }
 
     s_clock_synced = true;
+    s_last_sync_us = esp_timer_get_time();
     ESP_LOGI(TAG, "Clock synced — server_time=%s rtt=%" PRId64 "us", server_time, rtt_us);
 }
 
@@ -382,11 +397,21 @@ static void on_reader_fault_event(const portunus_event_t *event, void *ctx)
 }
 
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
+static void publish_access_denied(const char *credential_id, const char *reason);
+
 static void on_credential_event(const portunus_event_t *event, void *ctx)
 {
     (void)ctx;
     if (s_comm_queue == NULL) { return; }
-    xQueueSend(s_comm_queue, event, 0);
+    if (xQueueSend(s_comm_queue, event, 0) != pdTRUE) {
+        /* Dropping a card read silently would leave the user waiting for a
+         * decision that never comes; answer it with a deny instead. */
+        char log_id[CREDENTIAL_LOG_ID_LEN];
+        credential_uid_to_log_id(&event->payload.credential_read.credential,
+                                 log_id, sizeof(log_id));
+        ESP_LOGW(TAG, "Comm queue full: denying credential %s", log_id);
+        publish_access_denied(log_id, "comm_busy");
+    }
 }
 #endif /* CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT */
 
@@ -431,6 +456,8 @@ static void publish_access_denied(const char *credential_id, const char *reason)
 
 static void handle_heartbeat(const event_heartbeat_t *hb)
 {
+    s_last_heartbeat = *hb;
+
     /* Build protobuf request */
     portunus_v1_HeartbeatRequest req = portunus_v1_HeartbeatRequest_init_zero;
 
@@ -506,6 +533,32 @@ static void handle_heartbeat(const event_heartbeat_t *hb)
 }
 
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
+/**
+ * @brief Make sure requested_at will be accepted before sending an access request.
+ *
+ * Without a synced clock the request carries no requested_at and the server's
+ * replay check rejects it, so the first tap after boot (or after the server
+ * was unreachable at boot) would be denied.  If the clock has never been
+ * synced, or the last sync is older than CLOCK_RESYNC_INTERVAL_US, send a
+ * heartbeat first: its response carries server_time.  This works whether or
+ * not the periodic heartbeat service is enabled.  The heartbeat repeats the
+ * last sequence number; the server only records it, so a repeat is harmless.
+ */
+static void ensure_clock_synced(void)
+{
+    if (s_clock_synced &&
+        (esp_timer_get_time() - s_last_sync_us) < CLOCK_RESYNC_INTERVAL_US) {
+        return;
+    }
+
+    event_heartbeat_t hb = s_last_heartbeat;
+    hb.uptime_sec      = (uint32_t)(esp_timer_get_time() / 1000000);
+    hb.free_heap_bytes = esp_get_free_heap_size();
+
+    ESP_LOGI(TAG, "Syncing clock before access request");
+    handle_heartbeat(&hb);
+}
+
 static void handle_credential(const event_credential_read_t *cred)
 {
     /* Build protobuf request */
@@ -803,6 +856,7 @@ static void comm_task(void *arg)
             break;
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
         case EVENT_CREDENTIAL_READ:
+            ensure_clock_synced();
             handle_credential(&event.payload.credential_read);
             break;
 #endif
@@ -813,11 +867,11 @@ static void comm_task(void *arg)
 #endif
         case EVENT_CREDENTIAL_READ_ERROR:
             s_reader_degraded = true;
-            ESP_LOGW(TAG, "Credential reader degraded — heartbeats will reflect fault");
+            ESP_LOGW(TAG, "Credential reader degraded (logged locally only; not reported to the server)");
             break;
         case EVENT_CREDENTIAL_READER_RECOVERED:
             s_reader_degraded = false;
-            ESP_LOGI(TAG, "Credential reader recovered — heartbeats nominal");
+            ESP_LOGI(TAG, "Credential reader recovered");
             break;
         default:
             ESP_LOGW(TAG, "Unexpected event 0x%04x in comm queue",
@@ -891,36 +945,31 @@ portunus_err_t server_comm_init(const portunus_device_config_t *cfg)
         return PORTUNUS_ERR_QUEUE_CREATE;
     }
 
-    /* Subscribe to events */
-    portunus_err_t sub_err;
-
-    sub_err = event_bus_subscribe(EVENT_HEARTBEAT, on_heartbeat_event, NULL);
-    if (sub_err != PORTUNUS_OK) {
-        ESP_LOGE(TAG, "Failed to subscribe to heartbeat events: 0x%04x", (unsigned)sub_err);
-    }
-
-    sub_err = event_bus_subscribe(EVENT_CREDENTIAL_READ_ERROR, on_reader_fault_event, NULL);
-    if (sub_err != PORTUNUS_OK) {
-        ESP_LOGE(TAG, "Failed to subscribe to reader error events: 0x%04x", (unsigned)sub_err);
-    }
-
-    sub_err = event_bus_subscribe(EVENT_CREDENTIAL_READER_RECOVERED, on_reader_fault_event, NULL);
-    if (sub_err != PORTUNUS_OK) {
-        ESP_LOGE(TAG, "Failed to subscribe to reader recovery events: 0x%04x", (unsigned)sub_err);
-    }
-
+    /* Subscribe to events.  A missing subscription means card reads or
+     * provision requests never reach the server, so any failure is fatal:
+     * main.cpp then runs offline and the FSM's decision timeout reports it. */
+    const struct {
+        portunus_event_id_t id;
+        event_bus_handler_t handler;
+    } subs[] = {
+        { EVENT_HEARTBEAT,                   on_heartbeat_event },
+        { EVENT_CREDENTIAL_READ_ERROR,       on_reader_fault_event },
+        { EVENT_CREDENTIAL_READER_RECOVERED, on_reader_fault_event },
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
-    sub_err = event_bus_subscribe(EVENT_CREDENTIAL_READ, on_credential_event, NULL);
-    if (sub_err != PORTUNUS_OK) {
-        ESP_LOGE(TAG, "Failed to subscribe to credential events: 0x%04x", (unsigned)sub_err);
-    }
+        { EVENT_CREDENTIAL_READ,             on_credential_event },
 #endif
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
-    sub_err = event_bus_subscribe(EVENT_PROVISION_REQUEST, on_provision_event, NULL);
-    if (sub_err != PORTUNUS_OK) {
-        ESP_LOGE(TAG, "Failed to subscribe to provision events: 0x%04x", (unsigned)sub_err);
-    }
+        { EVENT_PROVISION_REQUEST,           on_provision_event },
 #endif
+    };
+    for (const auto &sub : subs) {
+        portunus_err_t sub_err = event_bus_subscribe(sub.id, sub.handler, NULL);
+        if (sub_err != PORTUNUS_OK) {
+            ESP_LOGE(TAG, "Failed to subscribe to event 0x%04x: 0x%04x",
+                     (unsigned)sub.id, (unsigned)sub_err);
+            return PORTUNUS_ERR_SUBSCRIBE;
+        }
+    }
 
     /* Start task */
     BaseType_t ret = xTaskCreate(
@@ -939,36 +988,4 @@ portunus_err_t server_comm_init(const portunus_device_config_t *cfg)
     s_initialized = true;
     ESP_LOGI(TAG, "Server comm initialised");
     return PORTUNUS_OK;
-}
-
-void server_comm_deinit(void)
-{
-    if (!s_initialized) {
-        return;
-    }
-
-    /* Delete the network task first so it stops pulling from the queue. */
-    if (s_comm_task != NULL) {
-        vTaskDelete(s_comm_task);
-        s_comm_task = NULL;
-    }
-
-    /* Drain and delete the internal queue. */
-    if (s_comm_queue != NULL) {
-        portunus_event_t discarded;
-        while (xQueueReceive(s_comm_queue, &discarded, 0) == pdTRUE) {
-            /* discard */
-        }
-        vQueueDelete(s_comm_queue);
-        s_comm_queue = NULL;
-    }
-
-    /* Destroy the gRPC client (closes TLS + HTTP/2 session). */
-    if (s_grpc_handle != NULL) {
-        grpc_client_destroy(s_grpc_handle);
-        s_grpc_handle = NULL;
-    }
-
-    s_initialized = false;
-    ESP_LOGI(TAG, "Server comm deinitialised");
 }

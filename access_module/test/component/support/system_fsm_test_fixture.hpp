@@ -23,12 +23,16 @@ public:
     /* One hold-timer check (run() step 4); call after advancing FakeClock. */
     void tick_unlock_timer() { if (m_fsm.m_strike_energized) m_fsm.check_unlock_timer(); }
 
+    /* One decision-timeout check (run() step 5); call after advancing FakeClock. */
+    void tick_decision_timeout() { m_fsm.check_decision_timeout(); }
+
     /* Network capability seam: tests set it explicitly instead of inheriting
      * whatever CONFIG_PORTUNUS_ENABLE_WIFI happens to be in sdkconfig. */
     void set_network(bool online) { m_fsm.m_caps.has_network = online; }
 
     bool    strike_energized() const { return m_fsm.m_strike_energized; }
     int64_t unlock_deadline()  const { return m_fsm.m_unlock_deadline_ms; }
+    int     pending_decisions() const { return m_fsm.m_pending_decisions; }
 
 private:
     SystemFSM &m_fsm;
