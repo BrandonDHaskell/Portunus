@@ -37,9 +37,9 @@ static void heartbeat_task(void *arg)
 
     ESP_LOGI(TAG, "Heartbeat task started (interval=%d ms)", HEARTBEAT_INTERVAL_MS);
 
+    /* Publish the first heartbeat immediately rather than one interval after
+     * boot: it is what registers the module as alive and syncs its clock. */
     for (;;) {
-        vTaskDelayUntil(&last_wake, interval);
-
         int64_t now_us = esp_timer_get_time();
 
         portunus_event_t event;
@@ -70,6 +70,8 @@ static void heartbeat_task(void *arg)
                  event.payload.heartbeat.uptime_sec,
                  event.payload.heartbeat.free_heap_bytes);
         }
+
+        vTaskDelayUntil(&last_wake, interval);
     }
 }
 

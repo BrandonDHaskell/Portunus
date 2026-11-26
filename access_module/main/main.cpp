@@ -269,18 +269,20 @@ extern "C" void app_main(void)
 
     /* ── 7. Start independent services ───────────────────────────────────── */
 
+    /* server_comm subscribes before the heartbeat service starts, because the
+     * first heartbeat is published immediately and would otherwise be lost. */
+#ifdef CONFIG_PORTUNUS_ENABLE_WIFI
+    if (server_comm_init(&s_device_cfg) != PORTUNUS_OK) {
+        ESP_LOGE(TAG, "Server comm init failed — running in offline mode");
+    }
+#endif
+
 #ifdef CONFIG_PORTUNUS_ENABLE_HEARTBEAT
     if (heartbeat_service_start() != PORTUNUS_OK) {
         ESP_LOGE(TAG, "Heartbeat service start failed — continuing without heartbeat");
     }
 #else
     ESP_LOGW(TAG, "Heartbeat service disabled by configuration");
-#endif
-
-#ifdef CONFIG_PORTUNUS_ENABLE_WIFI
-    if (server_comm_init(&s_device_cfg) != PORTUNUS_OK) {
-        ESP_LOGE(TAG, "Server comm init failed — running in offline mode");
-    }
 #endif
 
     /* ── 8. Start FSM ────────────────────────────────────────────────────── */

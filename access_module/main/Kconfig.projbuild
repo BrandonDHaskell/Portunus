@@ -155,11 +155,12 @@ menu "Portunus Configuration"
         config PORTUNUS_TLS_SKIP_VERIFY
             bool "Skip TLS certificate verification (INSECURE – dev only)"
             default n
-            depends on PORTUNUS_USE_TLS
+            depends on PORTUNUS_USE_TLS && PORTUNUS_ENV_DEV
             help
                 Bypass server certificate validation.  Allows self-signed or
                 expired certificates but removes all transport security
-                guarantees.  NEVER enable in production.
+                guarantees.  Only selectable in development builds
+                (PORTUNUS_ENV_DEV); a non-dev image always verifies.
 
         config PORTUNUS_TLS_USE_CUSTOM_CA
             bool "Pin to a custom CA certificate (LAN deployments)"
@@ -389,6 +390,19 @@ menu "Portunus Configuration"
                 timer expires OR when the door opens and closes,
                 whichever comes first.
 
+        config PORTUNUS_ACCESS_DECISION_TIMEOUT_MS
+            int "Access decision timeout (milliseconds)"
+            default 16000
+            range 2000 60000
+            help
+                After a card read, the FSM waits this long for the server's
+                decision. On expiry it shows a deny and stops waiting; a
+                grant that arrives later is ignored, so the door never
+                unlocks after the user was shown a deny. Must exceed the
+                worst-case server round trip: connect + clock-sync
+                heartbeat + access request, each bounded by
+                PORTUNUS_SERVER_REQUEST_TIMEOUT_MS (default 5000).
+
         config PORTUNUS_REED_SWITCH_DEBOUNCE_MS
             int "Reed switch debounce time (milliseconds)"
             default 50
@@ -457,7 +471,7 @@ menu "Portunus Configuration"
 
         config PORTUNUS_MAX_EVENT_SUBSCRIBERS
             int "Maximum event subscribers"
-            default 8
+            default 16
             range 2 32
             help
                 Maximum number of callback subscribers the event bus
