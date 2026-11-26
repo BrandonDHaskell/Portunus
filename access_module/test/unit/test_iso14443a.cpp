@@ -4,6 +4,7 @@
  * the field does; each test injects at most one fault. */
 #include "unity.h"
 #include "iso14443a.hpp"
+#include "mfrc522_status.hpp"
 #include "error_codes.hpp"
 
 #include <string.h>
@@ -219,6 +220,38 @@ void test_short_atqa_and_chip_error(void) {
     assert_zeroed(cred);
 }
 
+/* DRV-15 (F8): Transceive decoding. A timer IRQ is no card; CollErr on its
+ * own is a collision (it used to fall outside the error mask and pass as a
+ * good read); the other receive errors are read errors. */
+void test_transceive_status_decoding(void) {
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_NO_CREDENTIAL,
+                      mfrc522_transceive_status(MFRC522_IRQ_TIMER, 0));
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_NO_CREDENTIAL,
+                      mfrc522_transceive_status(MFRC522_IRQ_TIMER | MFRC522_IRQ_IDLE, 0));
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_CREDENTIAL_COLLISION,
+                      mfrc522_transceive_status(MFRC522_IRQ_RX | MFRC522_IRQ_ERR, MFRC522_ERR_COLL));
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_CREDENTIAL_COLLISION,
+                      mfrc522_transceive_status(MFRC522_IRQ_ERR,
+                                                MFRC522_ERR_COLL | MFRC522_ERR_PARITY));
+    for (const uint8_t e : {MFRC522_ERR_PROTOCOL, MFRC522_ERR_PARITY, MFRC522_ERR_BUF_OVFL}) {
+        TEST_ASSERT_EQUAL(PORTUNUS_ERR_CREDENTIAL_READ,
+                          mfrc522_transceive_status(MFRC522_IRQ_ERR, e));
+    }
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, mfrc522_transceive_status(MFRC522_IRQ_RX | MFRC522_IRQ_IDLE, 0));
+}
+
+/* DRV-15: a collision during anticollision ends the read with no UID. */
+void test_collision_propagates(void) {
+    for (int level = 0; level < 2; ++level) {
+        Card c = card(UID7);
+        c.err_level = level;
+        c.err       = PORTUNUS_ERR_CREDENTIAL_COLLISION;
+        credential_t cred;
+        TEST_ASSERT_EQUAL(PORTUNUS_ERR_CREDENTIAL_COLLISION, read(c, cred));
+        assert_zeroed(cred);
+    }
+}
+
 void test_null_credential(void) {
     Card c = card(UID4);
     TEST_ASSERT_EQUAL(PORTUNUS_ERR_INVALID_ARG, iso14443a_read_uid(io_for(c), nullptr));
@@ -233,6 +266,8 @@ int main(void) {
     RUN_TEST(test_halt_sends_hlta_with_crc);
     RUN_TEST(test_no_card);
     RUN_TEST(test_short_atqa_and_chip_error);
+    RUN_TEST(test_transceive_status_decoding);
+    RUN_TEST(test_collision_propagates);
     RUN_TEST(test_null_credential);
     return UNITY_END();
 }

@@ -23,20 +23,25 @@ static constexpr uint8_t MFRC522_ERR_PARITY   = 0x02;
 static constexpr uint8_t MFRC522_ERR_COLL     = 0x08;
 static constexpr uint8_t MFRC522_ERR_BUF_OVFL = 0x10;
 
-/** Errors that fail a Transceive. */
-static constexpr uint8_t MFRC522_ERR_FAIL =
+/** Receive errors other than a collision. */
+static constexpr uint8_t MFRC522_ERR_READ =
     MFRC522_ERR_BUF_OVFL | MFRC522_ERR_PARITY | MFRC522_ERR_PROTOCOL;
 
 /** Map a finished Transceive's IRQ and error registers to a result. A timer
- *  IRQ means no card answered. */
+ *  IRQ means no card answered. CollErr is checked on its own: when it was
+ *  only consulted inside the other-errors branch, a bare collision passed
+ *  this check and surfaced later as a BCC read error or a select nobody
+ *  answered, never as a collision. */
 constexpr portunus_err_t mfrc522_transceive_status(uint8_t com_irq, uint8_t error_reg)
 {
     if (com_irq & MFRC522_IRQ_TIMER) {
         return PORTUNUS_ERR_NO_CREDENTIAL;
     }
-    if (error_reg & MFRC522_ERR_FAIL) {
-        return (error_reg & MFRC522_ERR_COLL) ? PORTUNUS_ERR_CREDENTIAL_COLLISION
-                                              : PORTUNUS_ERR_CREDENTIAL_READ;
+    if (error_reg & MFRC522_ERR_COLL) {
+        return PORTUNUS_ERR_CREDENTIAL_COLLISION;
+    }
+    if (error_reg & MFRC522_ERR_READ) {
+        return PORTUNUS_ERR_CREDENTIAL_READ;
     }
     return PORTUNUS_OK;
 }
