@@ -4,7 +4,8 @@
  *
  * Low-level SPI driver for the NXP MFRC522 contactless reader IC.
  * Supports credential detection, anti-collision, and UID extraction for
- * MIFARE credentials with 4-byte and 7-byte UIDs.
+ * MIFARE credentials with 4-byte and 7-byte UIDs. A 10-byte UID is rejected
+ * with PORTUNUS_ERR_CREDENTIAL_READ (cascade level 3 is not implemented).
  *
  * This is an internal HAL header, private to the reader_mfrc522 driver.
 ReaderMfrc522 exposes this functionality via ICredentialReader.
@@ -44,7 +45,8 @@ portunus_err_t mfrc522_init(void);
  * @return PORTUNUS_OK if a credential was read successfully.
  * @return PORTUNUS_ERR_NO_CREDENTIAL if no credential is present.
  * @return PORTUNUS_ERR_CREDENTIAL_COLLISION on anti-collision failure.
- * @return PORTUNUS_ERR_CREDENTIAL_READ on other read failures.
+ * @return PORTUNUS_ERR_CREDENTIAL_READ on other read failures, a malformed
+ *         reply, or a 10-byte UID.
  */
 portunus_err_t mfrc522_read_credential(credential_t *cred);
 

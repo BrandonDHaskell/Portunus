@@ -2,11 +2,13 @@
  * @file mfrc522_hal.cpp
  * @brief MFRC522 HAL implementation — private to reader_mfrc522.
  *
- * Register-level SPI driver implementing ISO 14443A card detection,
- * anti-collision cascade levels 1 and 2, and UID extraction.
+ * Register-level SPI driver. The ISO 14443A card protocol lives in
+ * iso14443a.cpp; this file supplies its transceive and CRC_A operations.
  */
 
 #include "mfrc522.hpp"
+#include "iso14443a.hpp"
+#include "mfrc522_status.hpp"
 #include "pin_config.hpp"
 #include "error_codes.hpp"
 
@@ -65,23 +67,6 @@ static const char *TAG = "mfrc522";
 #define CMD_TRANSCEIVE     0x0C
 #define CMD_MF_AUTHENT     0x0E
 #define CMD_SOFT_RESET     0x0F
-
-/* ── ISO 14443A PICC commands ──────────────────────────────────────────────── */
-
-#define PICC_REQA          0x26
-#define PICC_WUPA          0x52
-#define PICC_SEL_CL1       0x93
-#define PICC_SEL_CL2       0x95
-#define PICC_SEL_CL3       0x97
-#define PICC_HLTA          0x50
-#define PICC_CASCADE_TAG   0x88
-
-/* ── IRQ bit masks ─────────────────────────────────────────────────────────── */
-
-#define IRQ_RX_DONE        0x20
-#define IRQ_IDLE           0x10
-#define IRQ_ERR            0x02
-#define IRQ_TIMER          0x01
 
 /* ── SPI configuration ─────────────────────────────────────────────────────── */
 
@@ -145,45 +130,32 @@ static void reg_clear_bits(uint8_t reg, uint8_t mask)
     reg_write(reg, reg_read(reg) & ~mask);
 }
 
-/* ── Internal helpers ──────────────────────────────────────────────────────── */
+/* ── iso14443a_io_t operations ─────────────────────────────────────────────── */
 
 /**
  * @brief Execute a Transceive command and wait for completion.
  *
- * Sends @p send_len bytes from @p send_buf via the antenna and waits for
- * a response. Received data is written to @p recv_buf (up to @p *recv_len
- * bytes); actual receive length is written back to @p *recv_len.
- *
- * @param send_buf     Data to transmit.
- * @param send_len     Number of bytes to transmit.
- * @param recv_buf     Buffer for received data (may be NULL if no response expected).
- * @param recv_len     [in/out] Max receive length → actual received length.
- * @param valid_bits   Number of valid bits in the last byte for short frames
- *                     (0 = all 8 bits valid). Updated with received last-byte valid bits.
- * @return PORTUNUS_OK on success.
+ * Implements iso14443a_io_t::transceive: sends @p tx_len bytes, waits for
+ * the card's reply or the timer, and copies up to @p *rx_len received bytes
+ * into @p rx.
  */
-static portunus_err_t transceive(const uint8_t *send_buf, uint8_t send_len,
-                                  uint8_t *recv_buf, uint8_t *recv_len,
-                                  uint8_t *valid_bits)
+static portunus_err_t hal_transceive(void * /*ctx*/, const uint8_t *tx, uint8_t tx_len,
+                                     uint8_t tx_last_bits, uint8_t *rx, uint8_t *rx_len)
 {
-    uint8_t tx_last_bits = valid_bits ? (*valid_bits & 0x07) : 0;
-
     s_spi_error = false;
 
     reg_write(REG_COMMAND, CMD_IDLE);          /* Stop any active command */
     reg_write(REG_COM_IRQ, 0x7F);             /* Clear all interrupt flags */
     reg_write(REG_FIFO_LEVEL, 0x80);          /* Flush FIFO */
 
-    /* Write data to FIFO */
-    for (uint8_t i = 0; i < send_len; i++) {
-        reg_write(REG_FIFO_DATA, send_buf[i]);
+    for (uint8_t i = 0; i < tx_len; i++) {
+        reg_write(REG_FIFO_DATA, tx[i]);
     }
 
-    reg_write(REG_BIT_FRAMING, tx_last_bits); /* Set number of valid bits in last tx byte */
-    reg_write(REG_COMMAND, CMD_TRANSCEIVE);   /* Execute Transceive */
-    reg_set_bits(REG_BIT_FRAMING, 0x80);      /* StartSend=1 — start transmission */
+    reg_write(REG_BIT_FRAMING, tx_last_bits & 0x07); /* Valid bits in last tx byte */
+    reg_write(REG_COMMAND, CMD_TRANSCEIVE);
+    reg_set_bits(REG_BIT_FRAMING, 0x80);      /* StartSend=1: start transmission */
 
-    /* Poll for completion (RxIRq, IdleIRq, TimerIRq, or ErrIRq) */
     uint16_t timeout_loops = 2000;
     uint8_t irq;
     do {
@@ -195,38 +167,29 @@ static portunus_err_t transceive(const uint8_t *send_buf, uint8_t send_len,
             ESP_LOGD(TAG, "Transceive timeout");
             return PORTUNUS_ERR_TIMEOUT;
         }
-    } while (!(irq & (IRQ_RX_DONE | IRQ_IDLE | IRQ_ERR | IRQ_TIMER)));
+    } while (!(irq & MFRC522_IRQ_DONE));
 
-    /* Check for timer timeout (no credential present) */
-    if (irq & IRQ_TIMER) {
-        return PORTUNUS_ERR_NO_CREDENTIAL;
-    }
-
-    /* Check for errors */
-    uint8_t error_reg = reg_read(REG_ERROR);
+    /* ErrorReg is only meaningful when the timer did not fire. */
+    const uint8_t error_reg = (irq & MFRC522_IRQ_TIMER) ? 0 : reg_read(REG_ERROR);
     if (s_spi_error) {
         return PORTUNUS_ERR_SPI_TRANSFER;
     }
-    if (error_reg & 0x13) {  /* BufferOvfl | ParityErr | ProtocolErr */
-        ESP_LOGD(TAG, "Transceive error: 0x%02x", error_reg);
-        if (error_reg & 0x08) {  /* CollErr */
-            return PORTUNUS_ERR_CREDENTIAL_COLLISION;
+    const portunus_err_t status = mfrc522_transceive_status(irq, error_reg);
+    if (status != PORTUNUS_OK) {
+        if (status != PORTUNUS_ERR_NO_CREDENTIAL) {
+            ESP_LOGD(TAG, "Transceive error: 0x%02x", error_reg);
         }
-        return PORTUNUS_ERR_CREDENTIAL_READ;
+        return status;
     }
 
-    /* Read received data from FIFO */
-    if (recv_buf && recv_len) {
+    if (rx && rx_len) {
         uint8_t n = reg_read(REG_FIFO_LEVEL);
-        if (n > *recv_len) {
-            n = *recv_len;
+        if (n > *rx_len) {
+            n = *rx_len;
         }
-        *recv_len = n;
+        *rx_len = n;
         for (uint8_t i = 0; i < n; i++) {
-            recv_buf[i] = reg_read(REG_FIFO_DATA);
-        }
-        if (valid_bits) {
-            *valid_bits = reg_read(REG_CONTROL) & 0x07;
+            rx[i] = reg_read(REG_FIFO_DATA);
         }
     }
 
@@ -236,14 +199,12 @@ static portunus_err_t transceive(const uint8_t *send_buf, uint8_t send_len,
 /**
  * @brief Calculate CRC_A using the MFRC522 coprocessor.
  *
- * @param data     Input bytes to CRC.
- * @param len      Number of input bytes.
- * @param crc_low  [out] CRC low byte (CRC_RESULT_L).
- * @param crc_high [out] CRC high byte (CRC_RESULT_H).
+ * Implements iso14443a_io_t::crc_a.
+ *
  * @return PORTUNUS_OK on success, PORTUNUS_ERR_TIMEOUT if the CRC unit stalls.
  */
-static portunus_err_t calculate_crc_a(const uint8_t *data, uint8_t len,
-                                       uint8_t *crc_low, uint8_t *crc_high)
+static portunus_err_t hal_crc_a(void * /*ctx*/, const uint8_t *data, uint8_t len,
+                                uint8_t out[2])
 {
     reg_write(REG_COMMAND, CMD_IDLE);
     reg_write(REG_DIV_IRQ, 0x04);        /* Clear CRCIRq */
@@ -262,96 +223,13 @@ static portunus_err_t calculate_crc_a(const uint8_t *data, uint8_t len,
         }
     }
 
-    *crc_low  = reg_read(REG_CRC_RESULT_L);
-    *crc_high = reg_read(REG_CRC_RESULT_H);
+    out[0] = reg_read(REG_CRC_RESULT_L);
+    out[1] = reg_read(REG_CRC_RESULT_H);
 
     return PORTUNUS_OK;
 }
 
-/**
- * @brief Send REQA (Request command Type A) to detect cards in the field.
- *
- * @param[out] atqa   2-byte ATQA response from the card.
- * @return PORTUNUS_OK if a card responded.
- */
-static portunus_err_t picc_request(uint8_t *atqa)
-{
-    reg_write(REG_BIT_FRAMING, 0x00);
-    reg_clear_bits(REG_COLL, 0x80);  /* ValuesAfterColl=0 — all received bits are valid */
-
-    uint8_t cmd = PICC_REQA;
-    uint8_t recv_len = 2;
-    uint8_t valid_bits = 7;  /* REQA is a short frame: 7 bits */
-
-    portunus_err_t err = transceive(&cmd, 1, atqa, &recv_len, &valid_bits);
-    if (err != PORTUNUS_OK) {
-        return err;
-    }
-    if (recv_len != 2) {
-        return PORTUNUS_ERR_CREDENTIAL_READ;
-    }
-
-    return PORTUNUS_OK;
-}
-
-/**
- * @brief Perform anti-collision and select for one cascade level.
- *
- * @param sel_cmd       Cascade level command (PICC_SEL_CL1/CL2/CL3).
- * @param[out] uid_part 4 UID bytes + 1 BCC byte (5 bytes total).
- * @return PORTUNUS_OK on success.
- */
-static portunus_err_t picc_anticoll_select(uint8_t sel_cmd, uint8_t *uid_part)
-{
-    /* Anti-collision: SEL + NVB(0x20 = 2 valid bytes, 0 bits) */
-    uint8_t buf[9];
-    buf[0] = sel_cmd;
-    buf[1] = 0x20;  /* NVB: 2 complete bytes sent (SEL + NVB only) */
-
-    uint8_t recv_len = 5;
-    uint8_t valid_bits = 0;
-    portunus_err_t err = transceive(buf, 2, uid_part, &recv_len, &valid_bits);
-    if (err != PORTUNUS_OK) {
-        return err;
-    }
-    if (recv_len != 5) {
-        return PORTUNUS_ERR_CREDENTIAL_READ;
-    }
-
-    /* Verify BCC (uid[0] ^ uid[1] ^ uid[2] ^ uid[3] == uid[4]) */
-    uint8_t bcc = uid_part[0] ^ uid_part[1] ^ uid_part[2] ^ uid_part[3];
-    if (bcc != uid_part[4]) {
-        ESP_LOGW(TAG, "BCC check failed: computed 0x%02x, received 0x%02x", bcc, uid_part[4]);
-        return PORTUNUS_ERR_CREDENTIAL_READ;
-    }
-
-    /* Select: SEL + NVB(0x70 = 7 valid bytes) + 4 UID + BCC + CRC_A */
-    buf[0] = sel_cmd;
-    buf[1] = 0x70;  /* NVB: 7 complete bytes */
-    memcpy(&buf[2], uid_part, 5);  /* 4 UID bytes + BCC */
-
-    /* Calculate CRC_A and append */
-    portunus_err_t crc_err = calculate_crc_a(buf, 7, &buf[7], &buf[8]);
-    if (crc_err != PORTUNUS_OK) {
-        return crc_err;
-    }
-
-    /* Send select with CRC */
-    uint8_t sak[3];  /* SAK + CRC_A (3 bytes) */
-    recv_len = 3;
-    valid_bits = 0;
-    err = transceive(buf, 9, sak, &recv_len, &valid_bits);
-    if (err != PORTUNUS_OK) {
-        return err;
-    }
-
-    /* SAK bit 2 (0x04) indicates UID not complete — cascade needed */
-    if (sak[0] & 0x04) {
-        ESP_LOGD(TAG, "Cascade bit set in SAK — continuing to next level");
-    }
-
-    return PORTUNUS_OK;
-}
+static const iso14443a_io_t s_io = { nullptr, hal_transceive, hal_crc_a };
 
 /* ── Public API ────────────────────────────────────────────────────────────── */
 
@@ -447,47 +325,8 @@ portunus_err_t mfrc522_init(void)
 
 portunus_err_t mfrc522_read_credential(credential_t *cred)
 {
-    if (cred == NULL) {
-        return PORTUNUS_ERR_INVALID_ARG;
-    }
-
-    memset(cred, 0, sizeof(credential_t));
-
-    /* Step 1 — Send REQA to detect cards */
-    uint8_t atqa[2];
-    portunus_err_t err = picc_request(atqa);
-    if (err != PORTUNUS_OK) {
-        return err;  /* No card or error */
-    }
-    ESP_LOGD(TAG, "ATQA: 0x%02x 0x%02x", atqa[0], atqa[1]);
-
-    /* Step 2 — Cascade level 1 anti-collision + select */
-    uint8_t uid_cl1[5];  /* 4 UID bytes + BCC */
-    err = picc_anticoll_select(PICC_SEL_CL1, uid_cl1);
-    if (err != PORTUNUS_OK) {
-        return err;
-    }
-
-    if (uid_cl1[0] == PICC_CASCADE_TAG) {
-        /* 7- or 10-byte UID: first byte is cascade tag, real UID starts at [1] */
-        memcpy(&cred->uid[0], &uid_cl1[1], 3);
-
-        /* Cascade level 2 */
-        uint8_t uid_cl2[5];
-        err = picc_anticoll_select(PICC_SEL_CL2, uid_cl2);
-        if (err != PORTUNUS_OK) {
-            return err;
-        }
-
-        memcpy(&cred->uid[3], uid_cl2, 4);
-        cred->uid_len = 7;
-    } else {
-        /* Single-size 4-byte UID */
-        memcpy(cred->uid, uid_cl1, 4);
-        cred->uid_len = 4;
-    }
-
-    return PORTUNUS_OK;
+    reg_clear_bits(REG_COLL, 0x80);  /* ValuesAfterColl=0: clear bits received after a collision */
+    return iso14443a_read_uid(s_io, cred);
 }
 
 uint8_t mfrc522_get_version(void)
@@ -497,19 +336,7 @@ uint8_t mfrc522_get_version(void)
 
 void mfrc522_halt_credential(void)
 {
-    uint8_t buf[4];
-    buf[0] = PICC_HLTA;
-    buf[1] = 0x00;
-
-    /* Calculate CRC_A */
-    portunus_err_t crc_err = calculate_crc_a(buf, 2, &buf[2], &buf[3]);
-    if (crc_err != PORTUNUS_OK) {
-        return;
-    }
-
-    /* Transmit HALT — we don't expect a response */
-    uint8_t recv_len = 0;
-    transceive(buf, 4, NULL, &recv_len, NULL);
+    iso14443a_halt(s_io);
 }
 
 void mfrc522_antenna_on(void)
