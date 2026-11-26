@@ -157,12 +157,7 @@ portunus_err_t ProvisioningFSM::start()
         return PORTUNUS_ERR_TASK_CREATE;
     }
 
-    // Initial state: Idle if arm button present, Armed otherwise.
-    if (m_has_arm) {
-        enter_idle();
-    } else {
-        enter_armed();
-    }
+    enter_initial_state();
 
     ESP_LOGI(TAG, "PEU FSM running — scan_timeout=%dms  arm_timeout=%dms",
              CONFIG_PORTUNUS_PROVISION_TIMEOUT_MS,
@@ -382,6 +377,16 @@ void ProvisioningFSM::handle_provision_result(const event_provision_result_t *re
 }
 
 /* ── State transitions ────────────────────────────────────────────────────── */
+
+void ProvisioningFSM::enter_initial_state()
+{
+    // Idle if arm button present, Armed otherwise.
+    if (m_has_arm) {
+        enter_idle();
+    } else {
+        enter_armed();
+    }
+}
 
 void ProvisioningFSM::enter_sleep()
 {

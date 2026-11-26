@@ -115,6 +115,7 @@ private:
     void handle_provision_result(const event_provision_result_t *result);
 
     /* ── State transitions ────────────────────────────────────────────────── */
+    void enter_initial_state();     /**< Idle if arm present, Armed if not (start()) */
     void enter_sleep();
     void enter_idle();
     void enter_armed();
@@ -126,4 +127,7 @@ private:
 
     /* ── Event bus bridge ─────────────────────────────────────────────────── */
     static void on_event_bus_event(const portunus_event_t *event, void *ctx);
+
+    /* Test-only: drives the FSM synchronously without starting tasks. */
+    friend class ProvisioningFSMTestFixture;
 };

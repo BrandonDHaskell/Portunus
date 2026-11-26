@@ -10,8 +10,9 @@ public:
     void enqueue_error(portunus_err_t err) { credential_t c{}; m_queue.push({err, c}); }
 
     int halts = 0;
+    portunus_err_t init_result = PORTUNUS_OK;  /* what init() returns */
 
-    portunus_err_t init() override { return PORTUNUS_OK; }
+    portunus_err_t init() override { return init_result; }
 
     portunus_err_t read(credential_t *out) override {
         if (m_queue.empty()) return PORTUNUS_ERR_NO_CREDENTIAL;
