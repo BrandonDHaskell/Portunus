@@ -38,6 +38,10 @@ typedef struct {
  *
  *   {0x04, 0xA3, 0x2B}  →  "04:A3:2B"
  *
+ * Writes only whole bytes: if buf is too small the output is truncated at
+ * the last byte that fits (always NUL-terminated). buf_len == 0 writes
+ * nothing. uid_len is clamped to CREDENTIAL_UID_MAX_LEN.
+ *
  * @param cred    Source credential.
  * @param buf     Destination buffer (recommend CREDENTIAL_UID_HEX_STR_LEN).
  * @param buf_len Size of buf in bytes.
@@ -49,7 +53,8 @@ void credential_uid_to_hex(const credential_t *cred, char *buf, size_t buf_len);
  *
  * Computes FNV-1a 32-bit over the raw UID bytes and formats the result as
  * 8 lowercase hex characters.  Suitable for log correlation without exposing
- * the raw UID.  Buf must be at least CREDENTIAL_LOG_ID_LEN bytes.
+ * the raw UID.  Buf must be at least CREDENTIAL_LOG_ID_LEN bytes; a smaller
+ * non-empty buffer receives "". uid_len is clamped to CREDENTIAL_UID_MAX_LEN.
  *
  * @param cred    Source credential.
  * @param buf     Destination buffer (recommend CREDENTIAL_LOG_ID_LEN).

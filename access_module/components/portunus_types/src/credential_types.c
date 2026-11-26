@@ -2,12 +2,23 @@
 
 #include <stdint.h>
 
+/* uid_len comes from driver code; never let a bad length read past uid[]. */
+static uint8_t clamped_uid_len(const credential_t *cred)
+{
+    return cred->uid_len > CREDENTIAL_UID_MAX_LEN ? CREDENTIAL_UID_MAX_LEN : cred->uid_len;
+}
+
 void credential_uid_to_hex(const credential_t *cred, char *buf, size_t buf_len)
 {
     static const char hex[] = "0123456789ABCDEF";
+    const uint8_t uid_len = clamped_uid_len(cred);
     size_t pos = 0;
 
-    for (uint8_t i = 0; i < cred->uid_len && pos + 3 < buf_len; i++) {
+    if (buf_len == 0) {
+        return;
+    }
+
+    for (uint8_t i = 0; i < uid_len && pos + 3 < buf_len; i++) {
         if (i > 0) buf[pos++] = ':';
         buf[pos++] = hex[cred->uid[i] >> 4];
         buf[pos++] = hex[cred->uid[i] & 0x0F];
@@ -18,14 +29,15 @@ void credential_uid_to_hex(const credential_t *cred, char *buf, size_t buf_len)
 void credential_uid_to_log_id(const credential_t *cred, char *buf, size_t buf_len)
 {
     static const char hex[] = "0123456789abcdef";
+    const uint8_t uid_len = clamped_uid_len(cred);
 
-    if (buf_len < CREDENTIAL_LOG_ID_LEN || cred->uid_len == 0) {
+    if (buf_len < CREDENTIAL_LOG_ID_LEN || uid_len == 0) {
         if (buf_len > 0) buf[0] = '\0';
         return;
     }
 
     uint32_t h = 2166136261u;  /* FNV-1a 32-bit offset basis */
-    for (uint8_t i = 0; i < cred->uid_len; i++) {
+    for (uint8_t i = 0; i < uid_len; i++) {
         h ^= cred->uid[i];
         h *= 16777619u;  /* FNV prime */
     }
