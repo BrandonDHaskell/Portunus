@@ -1,12 +1,14 @@
 #pragma once
 #include "i_feedback.hpp"
+#include "error_codes.hpp"
 #include <vector>
 
 class FakeFeedback : public IFeedback {
 public:
     std::vector<feedback_type_t> indications;
+    portunus_err_t init_result = PORTUNUS_OK;  /* what init() returns */
 
-    portunus_err_t init() override { return PORTUNUS_OK; }
+    portunus_err_t init() override { return init_result; }
 
     void indicate(feedback_type_t type) override {
         indications.push_back(type);
