@@ -13,14 +13,20 @@
  *     the protobuf request, performs the gRPC call, decodes the response,
  *     and publishes access decision events back to the event bus.
  *
- * Handles two event types:
- *   EVENT_HEARTBEAT       → SendHeartbeat RPC      → sync clock, log result
- *   EVENT_CREDENTIAL_READ → RequestAccess RPC      → publish
- *                           EVENT_ACCESS_GRANTED or EVENT_ACCESS_DENIED
+ * Handles:
+ *   EVENT_HEARTBEAT         → SendHeartbeat RPC       → sync clock, log result
+ *   EVENT_CREDENTIAL_READ   → RequestAccess RPC       → publish
+ *                             EVENT_ACCESS_GRANTED or EVENT_ACCESS_DENIED
+ *                             (ACCESS_POINT; every read gets exactly one decision)
+ *   EVENT_PROVISION_REQUEST → ProvisionCredential RPC → publish provision result
+ *                             (PROVISIONING_CONSOLE)
  *
  * Clock synchronisation: each successful heartbeat response carries a
  * server_time field (RFC 3339 UTC).  server_comm applies an RTT/2 correction
- * and calls settimeofday() so the module has a usable wall-clock time.
+ * and calls settimeofday() so the module has a usable wall-clock time.  Before
+ * an access request, if the clock was never synced or the last sync is over an
+ * hour old, server_comm sends a heartbeat first, because the server rejects
+ * access requests without a current requested_at.
  * server_comm_clock_synced() returns true once the first sync has succeeded.
  *
  * Call server_comm_init() after event_bus_init() and wifi_mgr_init().
@@ -50,6 +56,7 @@ extern "C" {
  * @return PORTUNUS_OK on success.
  *         PORTUNUS_ERR_ALREADY_INIT if called more than once.
  *         PORTUNUS_ERR_QUEUE_CREATE if queue allocation failed.
+ *         PORTUNUS_ERR_SUBSCRIBE    if an event bus subscription failed.
  *         PORTUNUS_ERR_TASK_CREATE  if task creation failed.
  *         PORTUNUS_FAIL             if HMAC is enabled but hmac_secret is empty.
  */
@@ -63,17 +70,6 @@ portunus_err_t server_comm_init(const portunus_device_config_t *cfg);
  * to populate AccessRequest.requested_at for replay protection.
  */
 bool server_comm_clock_synced(void);
-
-/**
- * @brief Stop the server communication component and release resources.
- *
- * Deletes the network task and drains/deletes the internal queue.
- * After this call no further events will be forwarded to the server
- * until server_comm_init() is called again.
- *
- * Safe to call if the component is not initialised (no-op).
- */
-void server_comm_deinit(void);
 
 #ifdef __cplusplus
 }

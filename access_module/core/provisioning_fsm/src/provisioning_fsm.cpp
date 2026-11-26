@@ -126,10 +126,20 @@ portunus_err_t ProvisioningFSM::start()
 {
     ESP_LOGI(TAG, "Starting PEU FSM");
 
-    event_bus_subscribe(EVENT_PROVISION_SUCCESS, on_event_bus_event, this);
-    event_bus_subscribe(EVENT_PROVISION_FAILED,  on_event_bus_event, this);
-    event_bus_subscribe(EVENT_CREDENTIAL_READ,   on_event_bus_event, this);
-    event_bus_subscribe(EVENT_ARM_REQUESTED,     on_event_bus_event, this);
+    /* A missing subscription would leave the FSM deaf to card reads or
+     * results, so treat any failure as fatal. */
+    static const portunus_event_id_t kEvents[] = {
+        EVENT_PROVISION_SUCCESS, EVENT_PROVISION_FAILED,
+        EVENT_CREDENTIAL_READ,   EVENT_ARM_REQUESTED,
+    };
+    for (portunus_event_id_t id : kEvents) {
+        portunus_err_t err = event_bus_subscribe(id, on_event_bus_event, this);
+        if (err != PORTUNUS_OK) {
+            ESP_LOGE(TAG, "Subscribe to event 0x%04x failed (0x%" PRIx32 ")",
+                     (unsigned)id, (uint32_t)err);
+            return PORTUNUS_ERR_SUBSCRIBE;
+        }
+    }
 
     BaseType_t ret = xTaskCreate(
         fsm_task_entry, "peu_fsm",

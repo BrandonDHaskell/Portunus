@@ -20,9 +20,15 @@ public:
         }
     }
 
+    /* Run the decision-timeout check; call after advancing FakeClock. */
+    void tick_decision_timeout() {
+        m_fsm.check_decision_timeout();
+    }
+
     /* Expose internal state for assertions. */
     bool strike_energized()    const { return m_fsm.m_strike_energized; }
     int64_t unlock_deadline()  const { return m_fsm.m_unlock_deadline_ms; }
+    int pending_decisions()    const { return m_fsm.m_pending_decisions; }
 
 private:
     SystemFSM &m_fsm;

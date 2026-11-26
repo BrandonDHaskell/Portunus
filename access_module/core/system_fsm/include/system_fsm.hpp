@@ -102,6 +102,13 @@ private:
     /* ── Reed switch tracking ─────────────────────────────────────────────── */
     bool m_last_door_open = false;
 
+    /* ── Pending access decisions ─────────────────────────────────────────── */
+    /* Card reads awaiting a server decision.  A decision with nothing pending
+     * (late, after the timeout already showed a deny) is ignored, so the door
+     * never unlocks for a request the user was told failed. */
+    uint8_t m_pending_decisions    = 0;
+    int64_t m_decision_deadline_ms = 0;  /**< Clock time when the oldest wait expires */
+
     /* ── FreeRTOS handles ─────────────────────────────────────────────────── */
     TaskHandle_t  m_fsm_task_handle  = nullptr;
     TaskHandle_t  m_poll_task_handle = nullptr;
@@ -119,6 +126,8 @@ private:
     void check_unlock_timer();
     void start_unlock_timer();
     void cancel_unlock_timer();
+    void check_decision_timeout();
+    bool track_decision(const portunus_event_t &event);
 
     /* ── Event bus bridge ─────────────────────────────────────────────────── */
     static void on_event_bus_event(const portunus_event_t *event, void *ctx);
