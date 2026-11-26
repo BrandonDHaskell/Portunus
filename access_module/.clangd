@@ -26,11 +26,11 @@ Diagnostics:
 ---
 # Host tests have their own CMake projects and compile databases.
 If:
-  PathMatch: test/host/.*
+  PathMatch: test/unit/.*
 CompileFlags:
-  CompilationDatabase: test/host/build/host
+  CompilationDatabase: test/unit/build/host
 ---
 If:
-  PathMatch: test/host_idf/.*
+  PathMatch: test/component/.*
 CompileFlags:
-  CompilationDatabase: test/host_idf/build/fake
+  CompilationDatabase: test/component/build/fake

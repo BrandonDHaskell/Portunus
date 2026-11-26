@@ -75,3 +75,73 @@ jobs:
         run: |
           . $IDF_PATH/export.sh
           idf.py build
+
+  firmware-unit:
+    name: Firmware unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host toolchain
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q ninja-build gcc-multilib g++-multilib
+
+      - uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Unit tier (native)
+        run: task test:firmware:unit
+
+      - name: Unit tier (ASan + UBSan)
+        run: task test:firmware:unit PRESET=host-asan
+
+      - name: Unit tier (32-bit size_t, ESP32 width)
+        run: task test:firmware:unit:m32
+
+  firmware-component:
+    name: Firmware component + integration tests
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v5.5.1
+    steps:
+      - uses: actions/checkout@v4
+
+      # idf.py is called directly (as in the Firmware job): the Taskfile's
+      # IDF_PYTHON default points at a developer-machine venv path.
+      - name: Component tier (fake event bus)
+        run: |
+          . $IDF_PATH/export.sh
+          APP=access_module/test/component
+          idf.py --preview -C $APP -B $APP/build/fake set-target linux build
+          $APP/build/fake/portunus_host_tests.elf
+
+      - name: Integration tier (real event bus)
+        run: |
+          . $IDF_PATH/export.sh
+          APP=access_module/test/component
+          idf.py --preview -C $APP -B $APP/build/real -DPORTUNUS_TEST_REAL_BUS=ON set-target linux build
+          $APP/build/real/portunus_host_tests.elf
+
+  firmware-prod-compile:
+    name: Firmware compile (prod profile, HMAC + pinned CA)
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v5.5.1
+    steps:
+      - uses: actions/checkout@v4
+
+      # Throwaway CA so the CONFIG_PORTUNUS_TLS_USE_CUSTOM_CA embed succeeds.
+      # Compile-only: this image is never flashed.
+      - name: Generate throwaway CA
+        run: bash scripts/generate_certs.sh --ip 127.0.0.1
+
+      - name: Build with prod overlay
+        working-directory: access_module
+        env:
+          SDKCONFIG_DEFAULTS: "sdkconfig.defaults;sdkconfig.defaults.prod"
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py build

@@ -8,6 +8,7 @@
 idf_component_register(
     SRCS
         "src/grpc_client.cpp"
+        "src/grpc_wire.cpp"
     INCLUDE_DIRS
         "include"
     REQUIRES

@@ -14,7 +14,7 @@ FetchContent_Declare(unity
     GIT_TAG        v2.6.0)
 FetchContent_MakeAvailable(unity)
 
-# access_module root, two levels up from test/host
+# access_module root, two levels up from test/unit
 set(AM ${CMAKE_CURRENT_LIST_DIR}/../..)
 
 add_executable(test_credential_types
@@ -34,3 +34,11 @@ target_include_directories(test_system_fsm_decide PRIVATE
     ${AM}/components/portunus_interfaces/include)
 target_link_libraries(test_system_fsm_decide PRIVATE unity)
 add_test(NAME system_fsm_decide COMMAND test_system_fsm_decide)
+
+add_executable(test_grpc_wire
+    test_grpc_wire.cpp
+    ${AM}/services/grpc_client/src/grpc_wire.cpp)
+target_include_directories(test_grpc_wire PRIVATE
+    ${AM}/services/grpc_client/include)
+target_link_libraries(test_grpc_wire PRIVATE unity)
+add_test(NAME grpc_wire COMMAND test_grpc_wire)

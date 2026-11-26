@@ -1,4 +1,4 @@
-/* Tier A host test: credential_types pure functions.
+/* Unit tier: credential_types pure functions.
  * No ESP-IDF, no FreeRTOS, no sdkconfig. Bare host compiler. */
 #include "unity.h"
 #include "credential_types.h"

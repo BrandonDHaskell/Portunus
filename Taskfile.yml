@@ -67,7 +67,7 @@ tasks:
     desc: Run all tests
     cmds:
       - task: test:server
-      - task: test:all
+      - task: test:firmware
 
   clean:
     desc: Clean all build artifacts
@@ -384,12 +384,25 @@ tasks:
         idf.py fullclean
 
   # ─── Firmware tests ───────────────────────────────────────────────────────
+  # Tiers are partitioned by dependency coupling, mirroring test:server:*.
+  #   unit         plain CMake + Unity, no ESP-IDF   access_module/test/unit
+  #   component    IDF linux target, fake event bus  access_module/test/component
+  #   integration  IDF linux target, real event bus  access_module/test/component
+  # The component tier uses the host C/C++ compiler (the IDF linux toolchain
+  # file is empty). To try another compiler without clobbering the default build:
+  #   task test:firmware:component BUILD_TAG=gcc16 HOST_CC=/opt/gcc/bin/gcc \
+  #     HOST_CXX=/opt/gcc/bin/g++ HOST_LDFLAGS=-Wl,-rpath,/opt/gcc/lib64
 
-  test:a:
-    desc: "Host unit tests — pure logic, no ESP-IDF (credential_types, system_fsm_decide)"
-    # PRESET selects a CMakePresets.json / CMakeUserPresets.json preset in
-    # access_module/test/host, e.g. `task test:a PRESET=host-clang`.
-    dir: access_module/test/host
+  test:firmware:
+    desc: "All host-runnable firmware tests (unit, component, integration)"
+    cmds:
+      - task: test:firmware:unit
+      - task: test:firmware:component
+      - task: test:firmware:integration
+
+  test:firmware:unit:
+    desc: "Firmware unit tier, no ESP-IDF (PRESET=host|host-clang|host-asan|host-m32)"
+    dir: "{{.FIRMWARE_DIR}}/test/unit"
     vars:
       PRESET: '{{.PRESET | default "host"}}'
     cmds:
@@ -397,46 +410,43 @@ tasks:
       - cmake --build --preset {{.PRESET}}
       - ctest --preset {{.PRESET}}
 
-  # Tier B uses the host C/C++ compiler (the IDF linux toolchain file is
-  # empty). To try another compiler without clobbering the default build:
-  #   task test:b BUILD_TAG=gcc16 HOST_CC=/opt/gcc/bin/gcc \
-  #     HOST_CXX=/opt/gcc/bin/g++ HOST_LDFLAGS=-Wl,-rpath,/opt/gcc/lib64
-  test:b:
-    desc: "Host behavioral tests — ESP-IDF linux target, FreeRTOS POSIX, fake event bus"
+  test:firmware:unit:m32:
+    desc: "Firmware unit tier with 32-bit size_t, the ESP32 width (needs gcc-multilib)"
+    cmds:
+      - task: test:firmware:unit
+        vars: { PRESET: host-m32 }
+
+  test:firmware:component:
+    desc: "Firmware component tier: IDF linux target, POSIX FreeRTOS, fake event bus"
     env:
       IDF_PATH: "{{.IDF_PATH}}"
     cmds:
       - |
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
         {{if .HOST_CC}}export CC="{{.HOST_CC}}" CXX="{{.HOST_CXX}}" LDFLAGS="{{.HOST_LDFLAGS}}"{{end}}
-        BUILD=access_module/test/host_idf/build/fake{{if .BUILD_TAG}}-{{.BUILD_TAG}}{{end}}
+        APP={{.FIRMWARE_DIR}}/test/component
+        BUILD=${APP}/build/fake{{if .BUILD_TAG}}-{{.BUILD_TAG}}{{end}}
         if [ ! -f "${BUILD}/CMakeCache.txt" ]; then
-          idf.py --preview -C access_module/test/host_idf -B "${BUILD}" set-target linux
+          idf.py --preview -C "${APP}" -B "${BUILD}" set-target linux
         fi
-        idf.py --preview -C access_module/test/host_idf -B "${BUILD}" build
+        idf.py --preview -C "${APP}" -B "${BUILD}" build
         "${BUILD}/portunus_host_tests.elf"
 
-  test:b:concurrency:
-    desc: "Host concurrency tests — ESP-IDF linux target, real event bus"
+  test:firmware:integration:
+    desc: "Firmware integration tier: IDF linux target, real event bus and dispatcher task"
     env:
       IDF_PATH: "{{.IDF_PATH}}"
     cmds:
       - |
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
         {{if .HOST_CC}}export CC="{{.HOST_CC}}" CXX="{{.HOST_CXX}}" LDFLAGS="{{.HOST_LDFLAGS}}"{{end}}
-        BUILD=access_module/test/host_idf/build/real{{if .BUILD_TAG}}-{{.BUILD_TAG}}{{end}}
+        APP={{.FIRMWARE_DIR}}/test/component
+        BUILD=${APP}/build/real{{if .BUILD_TAG}}-{{.BUILD_TAG}}{{end}}
         if [ ! -f "${BUILD}/CMakeCache.txt" ]; then
-          idf.py --preview -C access_module/test/host_idf -B "${BUILD}" \
-            -DPORTUNUS_TEST_REAL_BUS=ON set-target linux
+          idf.py --preview -C "${APP}" -B "${BUILD}" -DPORTUNUS_TEST_REAL_BUS=ON set-target linux
         fi
-        idf.py --preview -C access_module/test/host_idf -B "${BUILD}" build
+        idf.py --preview -C "${APP}" -B "${BUILD}" build
         "${BUILD}/portunus_host_tests.elf"
-
-  test:all:
-    desc: "All firmware host tests (Tier A + Tier B)"
-    cmds:
-      - task: test:a
-      - task: test:b
 
   # ─── Deploy ────────────────────────────────────────────────────────────────
   # Requires SSH key-based auth to the Pi. Configure target in .env:
@@ -530,10 +540,12 @@ tasks:
       - task: ci:server:smoke
 
   ci:all:
-    desc: Full CI — server checks + proto drift + firmware compile
+    desc: "Full CI: server checks, proto drift, firmware tests, firmware compile"
     cmds:
       - task: ci:server
       - task: proto:check
+      - task: test:firmware
+      - task: test:firmware:unit:m32
       - task: firmware:build
         vars: { ALLOW_INSECURE: "1" }
 

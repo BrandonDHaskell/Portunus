@@ -11,7 +11,7 @@
     // CMake Tools drives the plain-CMake host tests via CMakePresets.json.
     // Firmware builds go through Task or the ESP-IDF extension, which source
     // the IDF environment first.
-    "cmake.sourceDirectory": "${workspaceFolder}/access_module/test/host",
+    "cmake.sourceDirectory": "${workspaceFolder}/access_module/test/unit",
     "cmake.useCMakePresets": "always",
     "cmake.configureOnOpen": false,
 

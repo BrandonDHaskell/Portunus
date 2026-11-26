@@ -1,4 +1,4 @@
-/* Tier A host test: SystemFSM decision core.
+/* Unit tier: SystemFSM decision core.
  * No ESP-IDF, no FreeRTOS, no sdkconfig. Bare host compiler. */
 #include "unity.h"
 #include "system_fsm_decide.hpp"
