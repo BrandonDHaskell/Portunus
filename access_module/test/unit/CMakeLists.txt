@@ -14,7 +14,7 @@ FetchContent_Declare(unity
     GIT_TAG        v2.6.0)
 FetchContent_MakeAvailable(unity)
 
-# access_module root, two levels up from test/host
+# access_module root, two levels up from test/unit
 set(AM ${CMAKE_CURRENT_LIST_DIR}/../..)
 
 add_executable(test_credential_types

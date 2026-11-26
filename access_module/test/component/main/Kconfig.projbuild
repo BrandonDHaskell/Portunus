@@ -1,4 +1,4 @@
-# Minimal Portunus symbol definitions for the Tier B host test build.
+# Minimal Portunus symbol definitions for the component-tier test build.
 # Values mirror the production defaults in main/Kconfig.projbuild.
 # Only the symbols actually referenced in FSM source under test are listed.
 

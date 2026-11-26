@@ -1,4 +1,4 @@
-# Tier B host test sdkconfig defaults
+# Component tier sdkconfig defaults
 # Target: linux (POSIX FreeRTOS simulator)
 CONFIG_IDF_TARGET="linux"
 

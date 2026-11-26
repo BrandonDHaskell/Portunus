@@ -1,4 +1,4 @@
-# Stub wifi_mgr for the Tier B host test build.
+# Stub wifi_mgr for the component-tier test build.
 #
 # CONFIG_PORTUNUS_ENABLE_WIFI is not set in sdkconfig.defaults, so
 # system_fsm.cpp never compiles the wifi_mgr include or API calls.

@@ -1,4 +1,4 @@
-# Fake (or real) event_bus for host_idf Tier B tests.
+# Fake (or real) event_bus for component-tier tests.
 #
 # When PORTUNUS_TEST_REAL_BUS=OFF (default): registers the synchronous
 # capture-and-dispatch fake. Behavioral tests get deterministic, inline dispatch.

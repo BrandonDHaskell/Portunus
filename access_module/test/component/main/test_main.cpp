@@ -1,4 +1,4 @@
-/* Tier B host tests — ESP-IDF linux target (POSIX FreeRTOS simulator).
+/* Component tier: ESP-IDF linux target (POSIX FreeRTOS simulator).
  *
  * Build with fake bus (behavioral):  idf.py set-target linux build
  * Build with real bus (concurrency): idf.py -DPORTUNUS_TEST_REAL_BUS=ON ... build

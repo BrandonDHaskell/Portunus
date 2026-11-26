@@ -5,7 +5,7 @@
     {
       "name": "host",
       "displayName": "Host tests (default compiler)",
-      "description": "Tier A host tests with whatever cc/c++ CMake finds on PATH.",
+      "description": "Unit tier with whatever cc/c++ CMake finds on PATH.",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {

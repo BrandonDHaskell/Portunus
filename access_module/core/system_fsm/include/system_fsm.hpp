@@ -81,7 +81,7 @@ public:
     system_capabilities_t capabilities() const { return m_caps; }
 
 private:
-    /* Tier B test fixture needs access to process_event and check_unlock_timer
+    /* Component-tier test fixture needs access to process_event and check_unlock_timer
      * to inject events and advance the timer without starting FreeRTOS tasks. */
     friend class SystemFSMTestFixture;
 
