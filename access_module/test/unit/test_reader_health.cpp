@@ -2,6 +2,7 @@
  * No ESP-IDF, no FreeRTOS, no sdkconfig. Bare host compiler. */
 #include "unity.h"
 #include "reader_health.hpp"
+#include "error_codes.hpp"
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -99,6 +100,53 @@ void test_second_fault_cycle_announces_again(void) {
     TEST_ASSERT_EQUAL_INT(2, read_errors);
 }
 
+/* RH-06: card errors (a held 10-byte card, two cards at once) never
+ * degrade the reader, however long they last. */
+void test_card_errors_never_degrade(void) {
+    reader_health_t h;
+    for (int i = 0; i < 1000; ++i) {
+        const reader_step_t s = reader_health_on_read(h, reader_read_result_t::CARD_ERROR, CFG);
+        TEST_ASSERT_EQUAL(reader_health_event_t::NONE, s.event);
+        TEST_ASSERT_EQUAL_UINT32(CFG.poll_interval_ms, s.delay_ms);
+        TEST_ASSERT_FALSE(s.publish_credential);
+        TEST_ASSERT_FALSE(s.halt);
+    }
+    TEST_ASSERT_FALSE(h.degraded);
+    TEST_ASSERT_EQUAL_UINT8(0, h.consecutive_errors);
+}
+
+/* RH-07: a card error does not reset the hardware count either, so card
+ * replies garbled by a failing bus cannot hide a run of hardware errors. */
+void test_card_error_does_not_reset_hw_count(void) {
+    reader_health_t h;
+    for (int i = 0; i < 4; ++i) fail(h);
+    reader_health_on_read(h, reader_read_result_t::CARD_ERROR, CFG);
+    TEST_ASSERT_EQUAL_UINT8(4, h.consecutive_errors);
+    const reader_step_t s = fail(h);
+    TEST_ASSERT_TRUE(h.degraded);
+    TEST_ASSERT_EQUAL(reader_health_event_t::READ_ERROR, s.event);
+}
+
+/* RH-08: driver results map to health outcomes; anything unrecognised is a
+ * hardware error so a new failure mode is reported, not ignored. */
+void test_classify_reader_results(void) {
+    TEST_ASSERT_EQUAL(reader_read_result_t::CREDENTIAL, reader_classify(PORTUNUS_OK));
+    TEST_ASSERT_EQUAL(reader_read_result_t::NO_CREDENTIAL,
+                      reader_classify(PORTUNUS_ERR_NO_CREDENTIAL));
+    TEST_ASSERT_EQUAL(reader_read_result_t::CARD_ERROR,
+                      reader_classify(PORTUNUS_ERR_CREDENTIAL_COLLISION));
+    TEST_ASSERT_EQUAL(reader_read_result_t::CARD_ERROR,
+                      reader_classify(PORTUNUS_ERR_CREDENTIAL_READ));
+    const portunus_err_t hw[] = {
+        PORTUNUS_ERR_SPI_TRANSFER, PORTUNUS_ERR_SPI_INIT, PORTUNUS_ERR_TIMEOUT,
+        PORTUNUS_ERR_DEVICE_NOT_FOUND, PORTUNUS_ERR_INVALID_ARG,
+        static_cast<portunus_err_t>(0x7FFF),
+    };
+    for (const portunus_err_t e : hw) {
+        TEST_ASSERT_EQUAL(reader_read_result_t::HW_ERROR, reader_classify(e));
+    }
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_fifth_consecutive_error_enters_degraded_once);
@@ -106,5 +154,8 @@ int main(void) {
     RUN_TEST(test_credential_resets_count_and_requests_halt);
     RUN_TEST(test_probe_cadence_and_recovery);
     RUN_TEST(test_second_fault_cycle_announces_again);
+    RUN_TEST(test_card_errors_never_degrade);
+    RUN_TEST(test_card_error_does_not_reset_hw_count);
+    RUN_TEST(test_classify_reader_results);
     return UNITY_END();
 }

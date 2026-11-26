@@ -1,4 +1,16 @@
 #include "reader_health.hpp"
+#include "error_codes.hpp"
+
+reader_read_result_t reader_classify(portunus_err_t err)
+{
+    switch (err) {
+    case PORTUNUS_OK:                       return reader_read_result_t::CREDENTIAL;
+    case PORTUNUS_ERR_NO_CREDENTIAL:        return reader_read_result_t::NO_CREDENTIAL;
+    case PORTUNUS_ERR_CREDENTIAL_COLLISION:
+    case PORTUNUS_ERR_CREDENTIAL_READ:      return reader_read_result_t::CARD_ERROR;
+    default:                                return reader_read_result_t::HW_ERROR;
+    }
+}
 
 reader_step_t reader_health_on_read(reader_health_t &h, reader_read_result_t result,
                                     const reader_health_cfg_t &cfg)
@@ -15,6 +27,13 @@ reader_step_t reader_health_on_read(reader_health_t &h, reader_read_result_t res
     case reader_read_result_t::NO_CREDENTIAL:
         h.consecutive_errors = 0;
         s.delay_ms           = cfg.poll_interval_ms;
+        return s;
+
+    case reader_read_result_t::CARD_ERROR:
+        /* Neither counts nor resets: a held unsupported card or two cards
+         * must not degrade the reader, and a failing bus that also garbles
+         * card replies must not hide a run of hardware errors. */
+        s.delay_ms = cfg.poll_interval_ms;
         return s;
 
     case reader_read_result_t::HW_ERROR:

@@ -47,7 +47,8 @@ add_executable(test_reader_health
     test_reader_health.cpp
     ${AM}/core/system_fsm/src/reader_health.cpp)
 target_include_directories(test_reader_health PRIVATE
-    ${AM}/core/system_fsm/include)
+    ${AM}/core/system_fsm/include
+    ${AM}/components/portunus_types/include)
 target_link_libraries(test_reader_health PRIVATE unity)
 add_test(NAME reader_health COMMAND test_reader_health)
 

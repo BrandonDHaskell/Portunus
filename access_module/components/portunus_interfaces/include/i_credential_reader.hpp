@@ -42,9 +42,15 @@ public:
      * is present and successfully read, it is written into @p cred.
      *
      * @param[out] cred  Destination for the credential data.
-     * @return PORTUNUS_OK           Credential read successfully.
-     * @return PORTUNUS_ERR_NO_CARD  No credential present in the field.
-     * @return Other                 Hardware-specific read error.
+     * @return PORTUNUS_OK                        Credential read successfully.
+     * @return PORTUNUS_ERR_NO_CREDENTIAL         No credential present in the field.
+     * @return PORTUNUS_ERR_CREDENTIAL_COLLISION  More than one card answered.
+     * @return PORTUNUS_ERR_CREDENTIAL_READ       A card answered but could not be
+     *                                            read (bad reply, unsupported UID).
+     * @return Other                              Reader hardware or bus error. The
+     *                                            access point counts these toward
+     *                                            degraded mode; card errors above
+     *                                            do not.
      */
     virtual portunus_err_t read(credential_t *cred) = 0;
 
