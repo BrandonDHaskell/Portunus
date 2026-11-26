@@ -17,6 +17,12 @@ menu "Portunus Test Build Configuration"
             bool "Provisioning console (PEU)"
     endchoice
 
+    # Test-only: build test_heartbeat_main.cpp against the real
+    # heartbeat_service (sdkconfig.defaults.hb, with a short interval).
+    config PORTUNUS_TEST_HEARTBEAT
+        bool "Heartbeat service test app"
+        default n
+
     config PORTUNUS_UNLOCK_HOLD_MS
         int
         default 5000
@@ -37,8 +43,11 @@ menu "Portunus Test Build Configuration"
         int
         default 1000
 
+    # Promptless, so sdkconfig.defaults files cannot set it: the heartbeat
+    # variant gets its short interval through the conditional default.
     config PORTUNUS_HEARTBEAT_INTERVAL_MS
         int
+        default 100 if PORTUNUS_TEST_HEARTBEAT
         default 30000
 
     config PORTUNUS_EVENT_QUEUE_TIMEOUT_MS

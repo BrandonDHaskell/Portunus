@@ -21,6 +21,9 @@ set(EXTRA_COMPONENT_DIRS
     # Production components the FSM depends on
     ${AM}/components
     ${AM}/core
+    # Only this service: the whole services/ directory would also register
+    # the real event_bus under the fake's component name.
+    ${AM}/services/heartbeat_service
 )
 
 # Limit the build to exactly what main requires (and their transitive deps).

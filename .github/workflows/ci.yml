@@ -128,6 +128,14 @@ jobs:
             -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.peu" set-target linux build
           $APP/build/peu/portunus_host_tests.elf
 
+      - name: Component tier, heartbeat service (fake event bus)
+        run: |
+          . $IDF_PATH/export.sh
+          APP=$PWD/access_module/test/component
+          idf.py --preview -C $APP -B $APP/build/hb -D SDKCONFIG=$APP/build/hb/sdkconfig \
+            -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.hb" set-target linux build
+          $APP/build/hb/portunus_host_tests.elf
+
       - name: Integration tier (real event bus)
         run: |
           . $IDF_PATH/export.sh
