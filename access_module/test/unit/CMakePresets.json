@@ -4,7 +4,7 @@
   "configurePresets": [
     {
       "name": "host",
-      "displayName": "Host tests (default compiler)",
+      "displayName": "Unit tests (default compiler)",
       "description": "Unit tier with whatever cc/c++ CMake finds on PATH.",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${presetName}",
@@ -16,7 +16,7 @@
     {
       "name": "host-gcc",
       "inherits": "host",
-      "displayName": "Host tests (gcc on PATH)",
+      "displayName": "Unit tests (gcc on PATH)",
       "cacheVariables": {
         "CMAKE_C_COMPILER": "gcc",
         "CMAKE_CXX_COMPILER": "g++"
@@ -25,17 +25,40 @@
     {
       "name": "host-clang",
       "inherits": "host",
-      "displayName": "Host tests (clang on PATH)",
+      "displayName": "Unit tests (clang on PATH)",
       "cacheVariables": {
         "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++"
+      }
+    },
+    {
+      "name": "host-m32",
+      "inherits": "host",
+      "displayName": "Unit tests, 32-bit size_t (ESP32 width)",
+      "description": "Requires gcc-multilib/g++-multilib. Catches size_t wrap bugs that 64-bit hosts hide.",
+      "cacheVariables": {
+        "CMAKE_C_FLAGS": "-m32",
+        "CMAKE_CXX_FLAGS": "-m32",
+        "CMAKE_EXE_LINKER_FLAGS": "-m32"
+      }
+    },
+    {
+      "name": "host-asan",
+      "inherits": "host",
+      "displayName": "Unit tests with ASan + UBSan",
+      "cacheVariables": {
+        "CMAKE_C_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined"
       }
     }
   ],
   "buildPresets": [
     { "name": "host", "configurePreset": "host" },
     { "name": "host-gcc", "configurePreset": "host-gcc" },
-    { "name": "host-clang", "configurePreset": "host-clang" }
+    { "name": "host-clang", "configurePreset": "host-clang" },
+    { "name": "host-m32", "configurePreset": "host-m32" },
+    { "name": "host-asan", "configurePreset": "host-asan" }
   ],
   "testPresets": [
     {
@@ -43,15 +66,9 @@
       "configurePreset": "host",
       "output": { "outputOnFailure": true }
     },
-    {
-      "name": "host-gcc",
-      "inherits": "host",
-      "configurePreset": "host-gcc"
-    },
-    {
-      "name": "host-clang",
-      "inherits": "host",
-      "configurePreset": "host-clang"
-    }
+    { "name": "host-gcc",   "inherits": "host", "configurePreset": "host-gcc" },
+    { "name": "host-clang", "inherits": "host", "configurePreset": "host-clang" },
+    { "name": "host-m32",   "inherits": "host", "configurePreset": "host-m32" },
+    { "name": "host-asan",  "inherits": "host", "configurePreset": "host-asan" }
   ]
 }

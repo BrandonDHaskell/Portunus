@@ -401,7 +401,7 @@ tasks:
       - task: test:firmware:integration
 
   test:firmware:unit:
-    desc: "Firmware unit tier, no ESP-IDF (PRESET=host|host-gcc|host-clang)"
+    desc: "Firmware unit tier, no ESP-IDF (PRESET=host|host-clang|host-asan|host-m32)"
     dir: "{{.FIRMWARE_DIR}}/test/unit"
     vars:
       PRESET: '{{.PRESET | default "host"}}'
@@ -409,6 +409,12 @@ tasks:
       - cmake --preset {{.PRESET}}
       - cmake --build --preset {{.PRESET}}
       - ctest --preset {{.PRESET}}
+
+  test:firmware:unit:m32:
+    desc: "Firmware unit tier with 32-bit size_t, the ESP32 width (needs gcc-multilib)"
+    cmds:
+      - task: test:firmware:unit
+        vars: { PRESET: host-m32 }
 
   test:firmware:component:
     desc: "Firmware component tier: IDF linux target, POSIX FreeRTOS, fake event bus"

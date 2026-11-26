@@ -204,7 +204,7 @@ include paths:
 | File | Purpose |
 |------|---------|
 | `access_module/CMakePresets.json` | `fw-dev` / `fw-prod` presets for IDE indexing. Builds go to `cmake-build-<preset>/` with their own `sdkconfig`, so they never touch `build/` or your menuconfig `sdkconfig`. |
-| `access_module/test/unit/CMakePresets.json` | Unit-tier presets: `host`, `host-gcc`, `host-clang`. |
+| `access_module/test/unit/CMakePresets.json` | Unit-tier presets: `host`, `host-gcc`, `host-clang`, `host-asan`, `host-m32` (32-bit `size_t`, needs `gcc-multilib`). |
 | `CMakeUserPresets.json` (gitignored) | Per-machine presets, e.g. a specific compiler install. |
 | `access_module/.clangd` | Lets clangd parse Xtensa GCC compile commands. |
 
