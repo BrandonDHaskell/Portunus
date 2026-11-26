@@ -416,11 +416,17 @@ tasks:
       - task: test:firmware:unit
         vars: { PRESET: host-m32 }
 
+  # One IDF linux build of the component test app, then run it. Called by the
+  # component and integration tasks below.
+  #
   # Each build directory keeps its own sdkconfig (absolute path: idf.py
-  # resolves a relative SDKCONFIG against the project), so the variants never
-  # share a stale config.
-  test:firmware:component:
-    desc: "Firmware component tier: IDF linux target, POSIX FreeRTOS, fake event bus (access point, PEU, heartbeat, NVS)"
+  # resolves a relative SDKCONFIG against the project), so variants never
+  # share a config. IDF applies sdkconfig.defaults only to symbols an existing
+  # sdkconfig lacks, so a changed defaults file or Kconfig would never reach a
+  # local build: the build directory records a hash of those inputs and its
+  # sdkconfig is regenerated when the hash changes. (CI builds fresh.)
+  test:firmware:_variant:
+    internal: true
     env:
       IDF_PATH: "{{.IDF_PATH}}"
     cmds:
@@ -428,39 +434,38 @@ tasks:
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
         {{if .HOST_CC}}export CC="{{.HOST_CC}}" CXX="{{.HOST_CXX}}" LDFLAGS="{{.HOST_LDFLAGS}}"{{end}}
         APP="$PWD/{{.FIRMWARE_DIR}}/test/component"
-        for VARIANT in fake peu hb nvs; do
-          BUILD="${APP}/build/${VARIANT}{{if .BUILD_TAG}}-{{.BUILD_TAG}}{{end}}"
-          DEFAULTS="sdkconfig.defaults"
-          NVS=OFF
-          case "${VARIANT}" in
-            peu|hb) DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.${VARIANT}" ;;
-            nvs)    NVS=ON ;;
-          esac
-          if [ ! -f "${BUILD}/CMakeCache.txt" ]; then
-            idf.py --preview -C "${APP}" -B "${BUILD}" -D "SDKCONFIG=${BUILD}/sdkconfig" \
-              -D "SDKCONFIG_DEFAULTS=${DEFAULTS}" -D "PORTUNUS_TEST_NVS=${NVS}" set-target linux
-          fi
-          idf.py --preview -C "${APP}" -B "${BUILD}" -D "SDKCONFIG=${BUILD}/sdkconfig" \
-            -D "SDKCONFIG_DEFAULTS=${DEFAULTS}" -D "PORTUNUS_TEST_NVS=${NVS}" build
-          "${BUILD}/portunus_host_tests.elf"
-        done
+        BUILD="${APP}/build/{{.VARIANT}}{{if .BUILD_TAG}}-{{.BUILD_TAG}}{{end}}"
+        INPUTS=$(cat "${APP}"/sdkconfig.defaults* "${APP}/main/Kconfig.projbuild" \
+          "$PWD/{{.FIRMWARE_DIR}}/main/Kconfig.projbuild" | sha256sum | cut -c1-16)
+        if [ -f "${BUILD}/sdkconfig" ] && [ "$(cat "${BUILD}/.sdkconfig-inputs" 2>/dev/null)" != "${INPUTS}" ]; then
+          echo "Kconfig inputs changed: regenerating ${BUILD}/sdkconfig"
+          rm -f "${BUILD}/sdkconfig"
+        fi
+        ARGS="-C ${APP} -B ${BUILD} -D SDKCONFIG=${BUILD}/sdkconfig -D SDKCONFIG_DEFAULTS={{.DEFAULTS}} {{.EXTRA}}"
+        if [ ! -f "${BUILD}/CMakeCache.txt" ]; then
+          idf.py --preview ${ARGS} set-target linux
+        fi
+        idf.py --preview ${ARGS} build
+        echo "${INPUTS}" > "${BUILD}/.sdkconfig-inputs"
+        "${BUILD}/portunus_host_tests.elf"
+
+  test:firmware:component:
+    desc: "Firmware component tier: IDF linux target, POSIX FreeRTOS, fake event bus (access point, PEU, heartbeat, NVS)"
+    cmds:
+      - task: test:firmware:_variant
+        vars: { VARIANT: fake, DEFAULTS: "sdkconfig.defaults", EXTRA: "-DPORTUNUS_TEST_NVS=OFF" }
+      - task: test:firmware:_variant
+        vars: { VARIANT: peu, DEFAULTS: "sdkconfig.defaults;sdkconfig.defaults.peu", EXTRA: "-DPORTUNUS_TEST_NVS=OFF" }
+      - task: test:firmware:_variant
+        vars: { VARIANT: hb, DEFAULTS: "sdkconfig.defaults;sdkconfig.defaults.hb", EXTRA: "-DPORTUNUS_TEST_NVS=OFF" }
+      - task: test:firmware:_variant
+        vars: { VARIANT: nvs, DEFAULTS: "sdkconfig.defaults", EXTRA: "-DPORTUNUS_TEST_NVS=ON" }
 
   test:firmware:integration:
     desc: "Firmware integration tier: IDF linux target, real event bus and dispatcher task"
-    env:
-      IDF_PATH: "{{.IDF_PATH}}"
     cmds:
-      - |
-        eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
-        {{if .HOST_CC}}export CC="{{.HOST_CC}}" CXX="{{.HOST_CXX}}" LDFLAGS="{{.HOST_LDFLAGS}}"{{end}}
-        APP="$PWD/{{.FIRMWARE_DIR}}/test/component"
-        BUILD="${APP}/build/real{{if .BUILD_TAG}}-{{.BUILD_TAG}}{{end}}"
-        if [ ! -f "${BUILD}/CMakeCache.txt" ]; then
-          idf.py --preview -C "${APP}" -B "${BUILD}" -D "SDKCONFIG=${BUILD}/sdkconfig" \
-            -DPORTUNUS_TEST_REAL_BUS=ON set-target linux
-        fi
-        idf.py --preview -C "${APP}" -B "${BUILD}" -D "SDKCONFIG=${BUILD}/sdkconfig" build
-        "${BUILD}/portunus_host_tests.elf"
+      - task: test:firmware:_variant
+        vars: { VARIANT: real, DEFAULTS: "sdkconfig.defaults", EXTRA: "-DPORTUNUS_TEST_REAL_BUS=ON" }
 
   # ─── Deploy ────────────────────────────────────────────────────────────────
   # Requires SSH key-based auth to the Pi. Configure target in .env:

@@ -1,81 +1,16 @@
-# Minimal Portunus symbol definitions for the component-tier test build.
-# Values mirror the production defaults in main/Kconfig.projbuild.
-# Only the symbols actually referenced in FSM source under test are listed.
+# Component-tier Kconfig: the production menu, sourced rather than copied
+# (decision D-T3), plus the test-only switches below. Test builds therefore
+# run on production defaults; the sdkconfig.defaults* files override only
+# what a variant must, and COMP-05 (test:firmware:component) rejects any
+# other CONFIG_PORTUNUS_* override.
+rsource "../../../main/Kconfig.projbuild"
 
-menu "Portunus Test Build Configuration"
+menu "Portunus component tests"
 
-    # Selected per build: sdkconfig.defaults picks the access point, and
-    # sdkconfig.defaults.peu overrides it for the provisioning console build.
-    choice PORTUNUS_MODULE_TYPE
-        prompt "Module type"
-        default PORTUNUS_MODULE_TYPE_ACCESS_POINT
-
-        config PORTUNUS_MODULE_TYPE_ACCESS_POINT
-            bool "Access point"
-
-        config PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
-            bool "Provisioning console (PEU)"
-    endchoice
-
-    # Test-only: build test_heartbeat_main.cpp against the real
-    # heartbeat_service (sdkconfig.defaults.hb, with a short interval).
+    # Build test_heartbeat_main.cpp against the real heartbeat_service
+    # (sdkconfig.defaults.hb, which also shortens the interval).
     config PORTUNUS_TEST_HEARTBEAT
         bool "Heartbeat service test app"
         default n
-
-    config PORTUNUS_UNLOCK_HOLD_MS
-        int
-        default 5000
-
-    config PORTUNUS_FSM_POLL_INTERVAL_MS
-        int
-        default 50
-
-    config PORTUNUS_ACCESS_DECISION_TIMEOUT_MS
-        int
-        default 16000
-
-    config PORTUNUS_MFRC522_POLL_INTERVAL_MS
-        int
-        default 250
-
-    config PORTUNUS_CARD_REREAD_DELAY_MS
-        int
-        default 1000
-
-    # Promptless, so sdkconfig.defaults files cannot set it: the heartbeat
-    # variant gets its short interval through the conditional default.
-    config PORTUNUS_HEARTBEAT_INTERVAL_MS
-        int
-        default 100 if PORTUNUS_TEST_HEARTBEAT
-        default 30000
-
-    config PORTUNUS_EVENT_QUEUE_TIMEOUT_MS
-        int
-        default 10
-
-    config PORTUNUS_EVENT_QUEUE_LENGTH
-        int
-        default 16
-
-    config PORTUNUS_MAX_EVENT_SUBSCRIBERS
-        int
-        default 16
-
-    config PORTUNUS_PROVISION_TIMEOUT_MS
-        int
-        default 30000
-
-    config PORTUNUS_ARM_TIMEOUT_MS
-        int
-        default 60000
-
-    config PORTUNUS_IDLE_TIMEOUT_MS
-        int
-        default 300000
-
-    config PORTUNUS_RESULT_DISPLAY_MS
-        int
-        default 3000
 
 endmenu
