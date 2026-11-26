@@ -83,3 +83,12 @@ target_include_directories(test_input_debounce PRIVATE
     ${AM}/drivers/arm_button_gpio/include)
 target_link_libraries(test_input_debounce PRIVATE unity)
 add_test(NAME input_debounce COMMAND test_input_debounce)
+
+add_executable(test_iso14443a
+    test_iso14443a.cpp
+    ${AM}/drivers/reader_mfrc522/src/iso14443a.cpp)
+target_include_directories(test_iso14443a PRIVATE
+    ${AM}/drivers/reader_mfrc522/include
+    ${AM}/components/portunus_types/include)
+target_link_libraries(test_iso14443a PRIVATE unity)
+add_test(NAME iso14443a COMMAND test_iso14443a)
