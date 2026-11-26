@@ -315,6 +315,74 @@ void test_each_pending_read_accepts_one_decision(void) {
     TEST_ASSERT_EQUAL(1, access.unlocks);
 }
 
+/* ── Fake bus conformance (T3): the fake follows the real bus's contract ─── */
+
+#ifndef PORTUNUS_TEST_REAL_BUS
+
+namespace {
+int g_late_hits = 0;
+void late_handler(const portunus_event_t *, void *) { ++g_late_hits; }
+void subscribing_handler(const portunus_event_t *, void *) {
+    event_bus_subscribe(EVENT_ACCESS_GRANTED, late_handler, nullptr);
+}
+void noop_handler(const portunus_event_t *, void *) {}
+}  // namespace
+
+/* A handler may subscribe mid-dispatch (the real bus snapshots under its
+ * mutex for this); the new handler misses the in-flight event and gets the
+ * next. The fake used to iterate the live vector, so this reallocated it
+ * under the loop. */
+void test_fake_bus_subscribe_from_handler(void) {
+    g_late_hits = 0;
+    TEST_ASSERT_EQUAL(PORTUNUS_OK,
+                      event_bus_subscribe(EVENT_ACCESS_GRANTED, subscribing_handler, nullptr));
+    portunus_event_t e = make_grant();
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, event_bus_publish(&e));
+    TEST_ASSERT_EQUAL_INT(0, g_late_hits);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, event_bus_publish(&e));
+    TEST_ASSERT_EQUAL_INT(1, g_late_hits);
+}
+
+/* MAX_EVENT_SUBSCRIBERS are accepted, the next is refused; NULL arguments
+ * and use before init return the real bus's codes. */
+void test_fake_bus_limits_and_arguments(void) {
+    for (int i = 0; i < MAX_EVENT_SUBSCRIBERS; ++i) {
+        TEST_ASSERT_EQUAL(PORTUNUS_OK,
+                          event_bus_subscribe(EVENT_HEARTBEAT, noop_handler, nullptr));
+    }
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_MAX_SUBSCRIBERS,
+                      event_bus_subscribe(EVENT_HEARTBEAT, noop_handler, nullptr));
+    TEST_ASSERT_EQUAL_size_t(MAX_EVENT_SUBSCRIBERS, event_bus_fake_subscriber_count());
+
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_INVALID_ARG, event_bus_publish(nullptr));
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_INVALID_ARG,
+                      event_bus_subscribe(EVENT_HEARTBEAT, nullptr, nullptr));
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_ALREADY_INIT, event_bus_init());
+
+    event_bus_fake_reset();
+    portunus_event_t e = make_grant();
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_NOT_INIT, event_bus_publish(&e));
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_NOT_INIT,
+                      event_bus_subscribe(EVENT_HEARTBEAT, noop_handler, nullptr));
+}
+
+/* fail_next drops the next n publishes with the given error, records and
+ * dispatches nothing for them, then the bus works normally again. */
+void test_fake_bus_fail_next(void) {
+    g_late_hits = 0;
+    TEST_ASSERT_EQUAL(PORTUNUS_OK,
+                      event_bus_subscribe(EVENT_ACCESS_GRANTED, late_handler, nullptr));
+    event_bus_fake_fail_next(2, PORTUNUS_ERR_QUEUE_FULL);
+    portunus_event_t e = make_grant();
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_QUEUE_FULL, event_bus_publish(&e));
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_QUEUE_FULL, event_bus_publish(&e));
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, event_bus_publish(&e));
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count());
+    TEST_ASSERT_EQUAL_INT(1, g_late_hits);
+}
+
+#endif /* !PORTUNUS_TEST_REAL_BUS */
+
 /* ── Concurrency tests (real bus, built with PORTUNUS_TEST_REAL_BUS=ON) ──── */
 
 #ifdef PORTUNUS_TEST_REAL_BUS
@@ -357,6 +425,13 @@ extern "C" void app_main(void) {
     RUN_TEST(test_decision_timeout_shows_deny);
     RUN_TEST(test_late_grant_after_timeout_is_ignored);
     RUN_TEST(test_each_pending_read_accepts_one_decision);
+
+#ifndef PORTUNUS_TEST_REAL_BUS
+    /* Fake bus conformance (T3) */
+    RUN_TEST(test_fake_bus_subscribe_from_handler);
+    RUN_TEST(test_fake_bus_limits_and_arguments);
+    RUN_TEST(test_fake_bus_fail_next);
+#endif
 
 #ifdef PORTUNUS_TEST_REAL_BUS
     /* Concurrency suite — only meaningful with real async bus */
