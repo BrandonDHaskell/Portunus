@@ -103,7 +103,9 @@ private:
     bool m_has_network  = false;
 
     /* ── FSM state ────────────────────────────────────────────────────────── */
-    peu_state_t  m_state       = PEU_STATE_IDLE;
+    /* Written by the FSM task, read by the poll task (it reads cards only
+     * while ARMED): atomic (F15). */
+    std::atomic<peu_state_t> m_state{PEU_STATE_IDLE};
     int64_t      m_deadline_ms = 0;   /**< Multipurpose timeout (idle/arm/capture/result); 0 = none */
     /* Events lost to a full FSM queue (bus dispatcher) or a failed publish
      * from the poll task: atomic. Checked by the FSM task (D-T5). */

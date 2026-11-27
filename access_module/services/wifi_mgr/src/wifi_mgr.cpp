@@ -50,7 +50,9 @@ static char s_wifi_psk[PORTUNUS_NVS_WIFI_PSK_LEN];
 
 /* ── Reconnect task ────────────────────────────────────────────────────────── */
 static TaskHandle_t  s_reconnect_task   = NULL;
-static uint32_t      s_reconnect_interval_ms = PORTUNUS_WIFI_RECONNECT_INTERVAL_MS;
+/* Reset by the WiFi event handler on connect and advanced by the reconnect
+ * task: atomic (F15). */
+static std::atomic<uint32_t> s_reconnect_interval_ms{PORTUNUS_WIFI_RECONNECT_INTERVAL_MS};
 static const uint32_t RECONNECT_CEILING_MS   = 60000;   /* 60 s hard ceiling */
 
 #define RECONNECT_TASK_STACK_SIZE  2560
@@ -99,8 +101,12 @@ static void reconnect_task(void *arg)
            overwrite that reset, leaving the next real disconnect with a stale
            (too-long) interval.  Only advance when we actually attempt a connect. */
         const bool connected = s_connected;
-        s_reconnect_interval_ms =
-            wifi_backoff_after_wait(s_reconnect_interval_ms, connected, RECONNECT_CEILING_MS);
+        /* Compare-and-swap: if the event handler reset the interval since
+         * delay_ms was read (a connect), keep its reset rather than
+         * overwriting it with a backoff computed from the stale value. */
+        uint32_t expected = delay_ms;
+        s_reconnect_interval_ms.compare_exchange_strong(
+            expected, wifi_backoff_after_wait(delay_ms, connected, RECONNECT_CEILING_MS));
         if (connected) {
             ESP_LOGI(TAG, "Reconnect: already connected, skipping attempt");
             continue;
@@ -142,7 +148,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
             (wifi_event_sta_disconnected_t *)event_data;
         ESP_LOGW(TAG, "Disconnected (reason=%d) — notifying reconnect task "
                  "(next backoff=%" PRIu32 " ms)",
-                 info->reason, s_reconnect_interval_ms);
+                 info->reason, s_reconnect_interval_ms.load());
 
         /* Wake the reconnect task.  If it's already handling a previous
            disconnect, the notification count increments and the task

@@ -93,7 +93,7 @@ public:
     system_state_t state() const { return m_state; }
 
     /** @brief Get the current capability flags. */
-    system_capabilities_t capabilities() const { return m_caps; }
+    system_capabilities_t capabilities() const;
 
 private:
     /* Component-tier test fixture needs access to process_event and check_unlock_timer
@@ -108,7 +108,15 @@ private:
 
     /* ── FSM state ────────────────────────────────────────────────────────── */
     system_state_t        m_state = SYSTEM_STATE_BOOT;
-    system_capabilities_t m_caps  = {};
+    /* Capability flags. has_reader is flipped by the credential poll task
+     * (degraded / recovered) and has_network by the FSM task, while either
+     * may be read from another task (capabilities()): atomic (F15). The
+     * decision core gets a consistent snapshot through caps(). */
+    std::atomic<bool> m_has_reader{false};
+    std::atomic<bool> m_has_access_point{false};
+    std::atomic<bool> m_has_feedback{false};
+    std::atomic<bool> m_has_network{false};
+    system_capabilities_t caps() const;
 
     /* ── Unlock timer state ───────────────────────────────────────────────── */
     bool    m_strike_energized = false;

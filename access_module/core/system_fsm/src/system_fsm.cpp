@@ -75,14 +75,14 @@ portunus_err_t SystemFSM::init()
     if (m_reader != nullptr) {
         portunus_err_t err = m_reader->init();
         if (err == PORTUNUS_OK) {
-            m_caps.has_reader = true;
+            m_has_reader = true;
             ESP_LOGI(TAG, "Credential reader: OK");
         } else {
-            m_caps.has_reader = false;
+            m_has_reader = false;
             ESP_LOGW(TAG, "Credential reader init failed (0x%" PRIx32 ") — credential polling disabled", (uint32_t)err);
         }
     } else {
-        m_caps.has_reader = false;
+        m_has_reader = false;
         ESP_LOGW(TAG, "Credential reader: not present");
     }
 
@@ -90,14 +90,14 @@ portunus_err_t SystemFSM::init()
     if (m_access != nullptr) {
         portunus_err_t err = m_access->init();
         if (err == PORTUNUS_OK) {
-            m_caps.has_access_point = true;
+            m_has_access_point = true;
             ESP_LOGI(TAG, "Access point: OK");
         } else {
-            m_caps.has_access_point = false;
+            m_has_access_point = false;
             ESP_LOGW(TAG, "Access point init failed (0x%" PRIx32 ") — door control disabled", (uint32_t)err);
         }
     } else {
-        m_caps.has_access_point = false;
+        m_has_access_point = false;
         ESP_LOGW(TAG, "Access point: not present");
     }
 
@@ -105,26 +105,26 @@ portunus_err_t SystemFSM::init()
     if (m_feedback != nullptr) {
         portunus_err_t err = m_feedback->init();
         if (err == PORTUNUS_OK) {
-            m_caps.has_feedback = true;
+            m_has_feedback = true;
             ESP_LOGI(TAG, "Feedback: OK");
         } else {
-            m_caps.has_feedback = false;
+            m_has_feedback = false;
             ESP_LOGW(TAG, "Feedback init failed (0x%" PRIx32 ") — LED disabled", (uint32_t)err);
         }
     } else {
-        m_caps.has_feedback = false;
+        m_has_feedback = false;
         ESP_LOGW(TAG, "Feedback: not present");
     }
 
     /* ── Network ────────────────────────────────────────────────────────── */
 #ifdef CONFIG_PORTUNUS_ENABLE_WIFI
-    m_caps.has_network = wifi_mgr_is_connected();
+    m_has_network = wifi_mgr_is_connected();
 #else
-    m_caps.has_network = false;
+    m_has_network = false;
 #endif
 
     /* ── Initial reed switch state ──────────────────────────────────────── */
-    if (m_caps.has_access_point) {
+    if (m_has_access_point) {
         m_last_door_open = m_access->is_open();
         ESP_LOGI(TAG, "Initial door state: %s", m_last_door_open ? "OPEN" : "CLOSED");
     }
@@ -139,8 +139,8 @@ portunus_err_t SystemFSM::init()
 
     /* Report capabilities */
     ESP_LOGI(TAG, "Capabilities: reader=%d access_point=%d feedback=%d network=%d",
-             m_caps.has_reader, m_caps.has_access_point,
-             m_caps.has_feedback, m_caps.has_network);
+             (int)m_has_reader.load(), (int)m_has_access_point.load(),
+             (int)m_has_feedback.load(), (int)m_has_network.load());
 
     return PORTUNUS_OK;
 }
@@ -180,7 +180,7 @@ portunus_err_t SystemFSM::start()
     }
 
     /* ── Start credential polling sub-task ──────────────────────────────── */
-    if (m_caps.has_reader) {
+    if (m_has_reader) {
         ret = xTaskCreate(
             credential_poll_task_entry,
             "credential_poll",
@@ -191,7 +191,7 @@ portunus_err_t SystemFSM::start()
         );
         if (ret != pdPASS) {
             ESP_LOGE(TAG, "Failed to create credential polling task");
-            m_caps.has_reader = false;
+            m_has_reader = false;
         } else {
             ESP_LOGI(TAG, "Credential polling task started (interval=%d ms)",
                      MFRC522_POLL_INTERVAL_MS);
@@ -207,12 +207,27 @@ portunus_err_t SystemFSM::start()
     boot_event.id = EVENT_SYSTEM_BOOT_COMPLETE;
     event_bus_publish(&boot_event);
 
-    if (m_caps.has_feedback) {
+    if (m_has_feedback) {
         m_feedback->indicate(feedback_type_t::SYSTEM_READY);
     }
 
     ESP_LOGI(TAG, "System FSM running — state=OPERATIONAL");
     return PORTUNUS_OK;
+}
+
+system_capabilities_t SystemFSM::caps() const
+{
+    system_capabilities_t c = {};
+    c.has_reader       = m_has_reader.load();
+    c.has_access_point = m_has_access_point.load();
+    c.has_feedback     = m_has_feedback.load();
+    c.has_network      = m_has_network.load();
+    return c;
+}
+
+system_capabilities_t SystemFSM::capabilities() const
+{
+    return caps();
 }
 
 /* ── Event bus bridge ─────────────────────────────────────────────────────── */
@@ -251,7 +266,7 @@ void SystemFSM::check_dropped_events()
     ESP_LOGE(TAG, "%" PRIu32 " event(s) lost to a full queue (%" PRIu32 " since boot)",
              dropped - m_dropped_seen, dropped);
     m_dropped_seen = dropped;
-    if (m_caps.has_feedback) {
+    if (m_has_feedback) {
         m_feedback->indicate(feedback_type_t::SYSTEM_ERROR);
     }
 }
@@ -318,7 +333,7 @@ void SystemFSM::run()
         check_dropped_events();
 
         /* 3. Poll reed switch for door state changes. */
-        if (m_caps.has_access_point) {
+        if (m_has_access_point) {
             poll_reed_switch();
         }
 
@@ -337,7 +352,7 @@ void SystemFSM::run()
 
         /* 6. Update network capability dynamically. */
 #ifdef CONFIG_PORTUNUS_ENABLE_WIFI
-        m_caps.has_network = wifi_mgr_is_connected();
+        m_has_network = wifi_mgr_is_connected();
 #endif
     }
 }
@@ -389,7 +404,7 @@ void SystemFSM::check_decision_timeout()
     m_pending_decisions    = 0;
     m_decision_deadline_ms = 0;
 
-    if (m_caps.has_feedback) {
+    if (m_has_feedback) {
         m_feedback->indicate(feedback_type_t::ACCESS_DENIED);
     }
 }
@@ -400,7 +415,7 @@ void SystemFSM::process_event(const portunus_event_t &event)
         return;
     }
 
-    const fsm_actions_t actions = decide_system_event(m_caps, event);
+    const fsm_actions_t actions = decide_system_event(caps(), event);
 
     /* Audit logging — preserved verbatim from the original handlers. */
     switch (event.id) {
@@ -409,7 +424,7 @@ void SystemFSM::process_event(const portunus_event_t &event)
         char log_id[CREDENTIAL_LOG_ID_LEN];
         credential_uid_to_log_id(&cred->credential, log_id, sizeof(log_id));
         ESP_LOGI(TAG, "Credential read — id=%s", log_id);
-        if (!m_caps.has_network) {
+        if (!m_has_network) {
             ESP_LOGW(TAG, "Network unavailable — credential logged locally only");
         }
         break;
@@ -418,7 +433,7 @@ void SystemFSM::process_event(const portunus_event_t &event)
         const event_access_decision_t *ad = &event.payload.access_decision;
         ESP_LOGI(TAG, "ACCESS GRANTED — credential=%s reason=%s",
                  ad->credential_id, ad->reason);
-        if (!m_caps.has_access_point) {
+        if (!m_has_access_point) {
             ESP_LOGW(TAG, "Access granted but no access point: cannot unlock, showing error");
         }
         break;
@@ -452,7 +467,7 @@ void SystemFSM::process_event(const portunus_event_t &event)
 
     /* Feedback: the decided indications in order, or the decided failure
      * indication if the unlock signal could not be sent. */
-    if (m_caps.has_feedback) {
+    if (m_has_feedback) {
         if (unlock_failed) {
             m_feedback->indicate(actions.feedback_if_unlock_fails);
         } else {
@@ -548,13 +563,13 @@ void SystemFSM::note_lock_result(bool locked)
     if (!locked && !m_lock_fault) {
         m_lock_fault = true;
         ESP_LOGE(TAG, "Strike did not lock; retrying, door may be unlocked");
-        if (m_caps.has_feedback) {
+        if (m_has_feedback) {
             m_feedback->indicate(feedback_type_t::SYSTEM_ERROR);
         }
     } else if (locked && m_lock_fault) {
         m_lock_fault = false;
         ESP_LOGI(TAG, "Strike locked after retrying");
-        if (m_caps.has_feedback) {
+        if (m_has_feedback) {
             m_feedback->indicate(feedback_type_t::SYSTEM_READY);
         }
     }
@@ -565,7 +580,7 @@ void SystemFSM::check_unlock_timer()
     if (m_clock->now_ms() >= m_unlock_deadline_ms) {
         ESP_LOGI(TAG, "Unlock hold timer expired, re-locking");
 
-        if (m_caps.has_access_point) {
+        if (m_has_access_point) {
             portunus_err_t lock_err = m_access->lock();
             if (lock_err != PORTUNUS_OK) {
                 ESP_LOGE(TAG, "Re-lock after timer expiry failed (0x%" PRIx32 "), will retry",
@@ -633,11 +648,11 @@ void SystemFSM::poll_credential()
                 ESP_LOGW(TAG, "Credential reader hardware fault after %d errors "
                          "(last err=0x%x); entering degraded mode",
                          READER_HW_ERROR_THRESHOLD, err);
-                m_caps.has_reader = false;
+                m_has_reader = false;
                 health_event.id   = EVENT_CREDENTIAL_READ_ERROR;
             } else {
                 ESP_LOGI(TAG, "Credential reader recovered; resuming polling");
-                m_caps.has_reader = true;
+                m_has_reader = true;
                 health_event.id   = EVENT_CREDENTIAL_READER_RECOVERED;
             }
             event_bus_publish(&health_event);
