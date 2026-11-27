@@ -1,0 +1,23 @@
+# Hardware tier Kconfig: the production menu (pins, polarity, timing), plus
+# the loopback jumpers the tests use to measure the board's own pins.
+rsource "../../../main/Kconfig.projbuild"
+
+menu "Portunus hardware tests"
+
+    config PORTUNUS_HW_SENSE_PIN
+        int "Strike sense input (jumpered to the strike pin)"
+        default 15
+        help
+            Input wired to CONFIG_PORTUNUS_DOOR_STRIKE_PIN. The tests read
+            the strike level here, through a separate pad, and count its
+            edges with the pulse counter to catch glitches.
+
+    config PORTUNUS_HW_REED_DRIVE_PIN
+        int "Reed drive output (jumpered to the reed switch pin)"
+        default 18
+        help
+            Open-drain output wired to CONFIG_PORTUNUS_REED_SWITCH_PIN. It
+            only pulls low; the reed pin's pull-up gives the high level, so
+            it cannot fight a reed switch that is closed.
+
+endmenu

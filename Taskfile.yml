@@ -492,6 +492,20 @@ tasks:
       - task: test:firmware:_variant
         vars: { VARIANT: real, DEFAULTS: "sdkconfig.defaults", EXTRA: "-DPORTUNUS_TEST_REAL_BUS=ON" }
 
+  # Not part of test:firmware or ci:all: it needs the bench board and its
+  # loopback jumpers (access_module/test/hardware/README.md). It replaces the
+  # board's app (NVS is kept) and clicks the strike relay.
+  test:firmware:hardware:
+    desc: "Firmware hardware tier on a bench ESP32-S3 (PORT=/dev/ttyACM0, VARIANT=all|active_high|active_low)"
+    requires:
+      vars: [PORT]
+    env:
+      IDF_PATH: "{{.IDF_PATH}}"
+    cmds:
+      - |
+        eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
+        {{.IDF_PYTHON}} scripts/hw_test.py --port "{{.PORT}}" --variant "{{.VARIANT | default "all"}}"
+
   # ─── Deploy ────────────────────────────────────────────────────────────────
   # Requires SSH key-based auth to the Pi. Configure target in .env:
   #   DEPLOY_HOST=pi@192.168.1.100

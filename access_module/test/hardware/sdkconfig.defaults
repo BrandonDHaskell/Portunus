@@ -1,0 +1,15 @@
+# Hardware tier, build A: active-high strike, normally-open reed switch.
+# Build B layers sdkconfig.defaults.active_low on top.
+CONFIG_IDF_TARGET="esp32s3"
+
+# Same table as the firmware, so flashing never moves the nvs partition
+# (the bench board's WiFi and HMAC secrets stay where they are, unread).
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../../partitions.csv"
+
+# The runner talks to the app over the built-in USB port: it needs console
+# input (a "go" byte), which the default secondary USB console lacks.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+CONFIG_PORTUNUS_DOOR_STRIKE_ACTIVE_LOW=n
+CONFIG_PORTUNUS_REED_SWITCH_NC=n
