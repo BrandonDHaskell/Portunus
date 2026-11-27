@@ -181,6 +181,18 @@ jobs:
               -D "SDKCONFIG_DEFAULTS=$D" build
           done
 
+      # The network app pins a CA at build time; the runner makes a throwaway
+      # one. CI compiles against a throwaway of its own (the key is discarded).
+      - name: Hardware tier network app (compile only)
+        run: |
+          . $IDF_PATH/export.sh
+          APP=$PWD/access_module/test/hardware/net
+          mkdir -p $APP/certs
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+            -keyout /tmp/ci-compile-ca.key -out $APP/certs/ca_cert.pem -days 1 \
+            -subj "/CN=ci-compile-only" 2>/dev/null
+          idf.py -C $APP -B $APP/build/net -D SDKCONFIG=$APP/build/net/sdkconfig build
+
       - name: Integration tier (real event bus)
         run: |
           . $IDF_PATH/export.sh

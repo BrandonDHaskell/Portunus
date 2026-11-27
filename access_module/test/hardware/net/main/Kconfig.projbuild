@@ -1,0 +1,3 @@
+# The production menu plus the phase 5a test pins (the strike sense jumper
+# is how HW-08 sees a grant reach the strike).
+rsource "../../main/Kconfig.projbuild"

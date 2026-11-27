@@ -86,17 +86,57 @@ What this tier does not cover: the FSM's grant, hold and re-lock sequence
 (the component tier covers it against fakes), 10-byte and two-card
 collisions, and anything that needs the network.
 
-## Deferred to phase 5b
+## Phase 5b: network (`net/`)
 
-Not yet automated:
+A second app, `net/`, runs the production composition (`wifi_mgr`, event
+bus, drivers, `SystemFSM`, `server_comm`, heartbeat) against a throwaway
+server that the runner starts on this host:
 
-- **HW-06 / WIFI-HW**: AP power cycle and reconnect backoff;
-  `wifi_mgr_stop()` makes no reconnect attempt and a later
-  `wifi_mgr_start()` connects; `wifi_mgr_deinit()` then `wifi_mgr_init()`
-  works. The component tier (`wifi` variant) tests only the reconnect task.
-- **HW-07**: TLS with the pinned CA; a wrong CA fails and backs off.
-- **HW-08**: end-to-end grant and deny against a real server with HMAC on.
-- **HW-09**: stack high-water marks for the full firmware under load.
+```bash
+task test:firmware:hardware:net PORT=/dev/ttyACM0            # SERVER_IP=auto
+```
+
+- **Server.** The real Portunus server in the `ci` profile, on a temporary
+  database that is deleted afterwards. gRPC listens on the LAN address the
+  board uses (auto-detected, or `SERVER_IP=`); the admin API listens on
+  127.0.0.1 only. Both exist only for the length of a run.
+- **Certificates.** Two throwaway CAs in `net/certs/` (gitignored): CA-A is
+  compiled into the app as its pinned CA; CA-B is the "wrong" one for HW-07.
+  The repo's real CA and `certs/ca.key` are never used.
+- **Secrets.** The HMAC and credential-hash secrets are random for each run
+  and held in memory: passed to the server's environment and, for HMAC, to
+  the board over serial. Neither is written to disk or printed.
+- **Board config.** WiFi credentials come from the board's NVS, opened
+  read-only. The server address, module ID (`hw-test-01`) and HMAC secret
+  come from the runner and are kept in RAM.
+- **Enrollment.** The runner logs in as the bootstrap admin and creates a
+  door, the module, a member, the member's credential hash and the module
+  authorization through the admin REST API, as an operator would. The hash
+  follows the canonical scheme (HMAC-SHA256 over the raw UID bytes).
+- **Card taps** are injected as `EVENT_CREDENTIAL_READ`, exactly what the
+  poll task publishes for a real read (HW-04 covers the RF side). A grant is
+  seen at the strike sense pin.
+
+| ID | Test | Checks |
+|---|---|---|
+| HW-08 | `test_heartbeat_accepted` | the first heartbeat is accepted over gRPC, TLS (pinned CA) and HMAC, and syncs the clock |
+| HW-08 | `test_enrolled_card_unlocks` | the enrolled card, formatted by the firmware, matches the enrolled hash (hazard #1 seam); the signed grant opens the strike for the hold time and it re-locks; prints the start-to-first-grant time (F6) |
+| HW-08 | `test_unknown_card_denied` | an unknown card is denied and the strike does not move |
+| HW-07 | `test_wrong_ca_fails_closed_then_recovers` | with the server on a CA-B cert every request is denied and the strike does not move; with CA-A back the card is granted again |
+| HW-06 | `test_link_drop_denies_then_reconnects` | after a forced `esp_wifi_disconnect()` a tap is denied `no_network`; the reconnect task restores the link and grants resume. The router cannot be power-cycled (not ours), so the drop is made on the board |
+| WIFI-HW | `test_wifi_stop_start_deinit_init` | after `wifi_mgr_stop()` no reconnect is attempted (no `Reconnect: connecting` log line, no connect event); `start()` connects; `deinit()`, `init()` and `start()` work and grants resume |
+| HW-09 | `test_stack_margins` | after all of the above, every firmware task has at least 512 bytes of stack free; prints them all |
+
+A run takes about 2 to 3 minutes. CI compiles `net/` against a throwaway
+CA of its own.
+
+### Future: server environments in Docker
+
+Run the throwaway server in Docker across the platforms it may be deployed
+on (arm64 on Raspberry Pi 5 and 4 class hardware, Debian server, Ubuntu
+server), so the bench board is shown to work against each, not only against
+the host's native build. `TestServer` in `scripts/hw_test.py` is the place to
+add a container backend.
 
 ## Results
 
@@ -104,3 +144,4 @@ Not yet automated:
 |---|---|---|---|---|---|
 | HW-01/02, 03, 04, 05, 10 | 2026-11-27 | 85c3714 | active_high | pass (7 pass, 1 ignored) | HW-04 card check ignored: no card resting on the reader. Free heap unchanged (374,256 bytes). |
 | HW-01/02, 03, 04, 05, 10 | 2026-11-27 | 85c3714 | active_low | pass (7 pass, 1 ignored) | As above. Powered-down reader returned 0x3002 (timeout) on every poll. |
+| HW-06, 07, 08, 09, WIFI-HW | 2026-11-27 | 943d2eb | net | pass (7 pass), 5 runs | First heartbeat 3.3 to 4.7 s after startup, first grant about 0.5 s later. Hold 5,091 ms (5,000 configured). wifi_reconn stack: 560 bytes free (244 on the connect-failure path, seen under a mutation). |
