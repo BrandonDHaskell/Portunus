@@ -142,6 +142,25 @@ portunus_err_t event_bus_publish_from_isr(const portunus_event_t *event,
     return PORTUNUS_OK;
 }
 
+#ifdef CONFIG_PORTUNUS_TEST_HOOKS
+void event_bus_reset_for_test(void)
+{
+    if (s_dispatch_task != NULL) {
+        vTaskDelete(s_dispatch_task);
+        s_dispatch_task = NULL;
+    }
+    if (s_event_queue != NULL) {
+        vQueueDelete(s_event_queue);
+        s_event_queue = NULL;
+    }
+    if (s_subscriber_mutex != NULL) {
+        vSemaphoreDelete(s_subscriber_mutex);
+        s_subscriber_mutex = NULL;
+    }
+    bus_core_init(s_subscribers, s_subscriber_storage, MAX_EVENT_SUBSCRIBERS);
+}
+#endif
+
 portunus_err_t event_bus_subscribe(portunus_event_id_t event_id,
                                    event_bus_handler_t handler,
                                    void *ctx)

@@ -21,6 +21,7 @@
 #include "event_types.hpp"
 #include "portunus_types.hpp"
 #include "freertos/FreeRTOS.h"
+#include "sdkconfig.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -80,6 +81,19 @@ portunus_err_t event_bus_publish_from_isr(const portunus_event_t *event,
 portunus_err_t event_bus_subscribe(portunus_event_id_t event_id,
                                    event_bus_handler_t handler,
                                    void *ctx);
+
+#ifdef CONFIG_PORTUNUS_TEST_HOOKS
+/**
+ * @brief Test only: return the bus to its pre-init state.
+ *
+ * Deletes the dispatcher task, queue and mutex and forgets every subscriber,
+ * so the next event_bus_init() starts clean. Call only while the bus is idle
+ * (no handler running, no publisher mid-call). CONFIG_PORTUNUS_TEST_HOOKS is
+ * defined only by the component tier's Kconfig, never by firmware builds
+ * (decision D-T2).
+ */
+void event_bus_reset_for_test(void);
+#endif
 
 #ifdef __cplusplus
 }

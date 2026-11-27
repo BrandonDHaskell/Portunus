@@ -27,10 +27,13 @@
 #endif
 
 #include <string.h>
+#include <vector>
 #include "freertos/semphr.h"
 
 void setUp(void) {
-#ifndef PORTUNUS_TEST_REAL_BUS
+#ifdef PORTUNUS_TEST_REAL_BUS
+    event_bus_reset_for_test();   /* every real-bus test starts from a fresh bus */
+#else
     event_bus_fake_reset();
 #endif
     event_bus_init();
@@ -638,8 +641,8 @@ void test_fake_bus_fail_next(void) {
 #ifdef PORTUNUS_TEST_REAL_BUS
 
 void test_real_bus_publish_reaches_subscriber(void) {
-    /* The real bus has no unsubscribe, so the subscriber outlives this test:
-     * its context must have static storage (see decision D-T2). */
+    /* setUp's reset drops this subscriber before the next test, but the
+     * semaphore is created once and reused. */
     static SemaphoreHandle_t s_rx = xSemaphoreCreateBinary();
     TEST_ASSERT_NOT_NULL(s_rx);
     TEST_ASSERT_EQUAL(PORTUNUS_OK, event_bus_subscribe(EVENT_ACCESS_GRANTED,
@@ -652,6 +655,144 @@ void test_real_bus_publish_reaches_subscriber(void) {
 
     /* Bounded wait on a real handoff instead of a fixed sleep on a volatile. */
     TEST_ASSERT_EQUAL(pdTRUE, xSemaphoreTake(s_rx, pdMS_TO_TICKS(1000)));
+}
+
+/* ── Event bus on the real dispatcher (BUS-01, 03, 05, 07, 08) ────────────── */
+
+namespace {
+
+static constexpr TickType_t WAIT = pdMS_TO_TICKS(1000);
+
+/* Records heartbeat sequence numbers as the dispatcher delivers them. */
+std::vector<uint32_t> g_seen;
+SemaphoreHandle_t     g_delivered = nullptr;   /* counting: one give per delivery */
+
+void recorder(const portunus_event_t *e, void *) {
+    g_seen.push_back(e->payload.heartbeat.sequence);
+    xSemaphoreGive(g_delivered);
+}
+
+void reset_recorder() {
+    g_seen.clear();
+    if (g_delivered == nullptr) g_delivered = xSemaphoreCreateCounting(64, 0);
+    while (xSemaphoreTake(g_delivered, 0) == pdTRUE) {}
+}
+
+bool wait_deliveries(int n) {
+    for (int i = 0; i < n; ++i) {
+        if (xSemaphoreTake(g_delivered, WAIT) != pdTRUE) return false;
+    }
+    return true;
+}
+
+portunus_err_t publish_heartbeat(uint32_t seq) {
+    portunus_event_t e;
+    memset(&e, 0, sizeof(e));
+    e.id = EVENT_HEARTBEAT;
+    e.payload.heartbeat.sequence = seq;
+    return event_bus_publish(&e);
+}
+
+}  // namespace
+
+/* BUS-01: a second init is refused and leaves the running bus intact. */
+void test_real_bus_second_init_refused(void) {
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_ALREADY_INIT, event_bus_init());
+    reset_recorder();
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, event_bus_subscribe(EVENT_HEARTBEAT, recorder, nullptr));
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, publish_heartbeat(7));
+    TEST_ASSERT_TRUE(wait_deliveries(1));
+}
+
+/* BUS-03 (F12): subscribing before init is refused with NOT_INIT instead of
+ * taking the not-yet-created mutex; publishing is refused too. */
+void test_real_bus_subscribe_before_init(void) {
+    TEST_IGNORE_MESSAGE("F12: subscribe before init takes a NULL mutex; un-ignored by the fix");
+    event_bus_reset_for_test();
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_NOT_INIT,
+                      event_bus_subscribe(EVENT_HEARTBEAT, recorder, nullptr));
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_NOT_INIT, publish_heartbeat(0));
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, event_bus_init());
+}
+
+/* BUS-05: the dispatcher delivers events in publish order. */
+void test_real_bus_delivers_in_publish_order(void) {
+    reset_recorder();
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, event_bus_subscribe(EVENT_HEARTBEAT, recorder, nullptr));
+    for (uint32_t i = 0; i < 10; ++i) TEST_ASSERT_EQUAL(PORTUNUS_OK, publish_heartbeat(i));
+    TEST_ASSERT_TRUE(wait_deliveries(10));
+    for (uint32_t i = 0; i < 10; ++i) TEST_ASSERT_EQUAL_UINT32(i, g_seen[i]);
+}
+
+namespace {
+SemaphoreHandle_t g_entered = nullptr;
+SemaphoreHandle_t g_release = nullptr;
+bool              g_block_once = false;
+
+/* Holds the dispatcher inside the first delivery until released. */
+void blocking_recorder(const portunus_event_t *e, void *ctx) {
+    if (g_block_once) {
+        g_block_once = false;
+        xSemaphoreGive(g_entered);
+        xSemaphoreTake(g_release, portMAX_DELAY);
+    }
+    recorder(e, ctx);
+}
+}  // namespace
+
+/* BUS-07: with the dispatcher held in a handler, EVENT_QUEUE_LENGTH more
+ * publishes queue up, and the next returns QUEUE_FULL only after waiting at
+ * least EVENT_QUEUE_TIMEOUT_MS. Released, the dispatcher delivers them all. */
+void test_real_bus_queue_full_after_timeout(void) {
+    if (g_entered == nullptr) g_entered = xSemaphoreCreateBinary();
+    if (g_release == nullptr) g_release = xSemaphoreCreateBinary();
+    reset_recorder();
+    g_block_once = true;
+    TEST_ASSERT_EQUAL(PORTUNUS_OK,
+                      event_bus_subscribe(EVENT_HEARTBEAT, blocking_recorder, nullptr));
+
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, publish_heartbeat(0));
+    TEST_ASSERT_EQUAL(pdTRUE, xSemaphoreTake(g_entered, WAIT));   /* dispatcher held */
+
+    for (uint32_t i = 1; i <= EVENT_QUEUE_LENGTH; ++i) {
+        TEST_ASSERT_EQUAL(PORTUNUS_OK, publish_heartbeat(i));
+    }
+    const TickType_t t0 = xTaskGetTickCount();
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_QUEUE_FULL, publish_heartbeat(999));
+    const uint32_t waited_ms = (xTaskGetTickCount() - t0) * portTICK_PERIOD_MS;
+    TEST_ASSERT_GREATER_OR_EQUAL_UINT32(EVENT_QUEUE_TIMEOUT_MS, waited_ms);
+
+    xSemaphoreGive(g_release);
+    TEST_ASSERT_TRUE(wait_deliveries(EVENT_QUEUE_LENGTH + 1));
+    for (uint32_t i = 0; i <= EVENT_QUEUE_LENGTH; ++i) TEST_ASSERT_EQUAL_UINT32(i, g_seen[i]);
+}
+
+namespace {
+int  g_late_calls = 0;
+void late_recorder(const portunus_event_t *e, void *ctx) { ++g_late_calls; recorder(e, ctx); }
+void subscribing_recorder(const portunus_event_t *e, void *ctx) {
+    if (e->payload.heartbeat.sequence == 0) {
+        event_bus_subscribe(EVENT_HEARTBEAT, late_recorder, nullptr);
+    }
+    recorder(e, ctx);
+}
+}  // namespace
+
+/* BUS-08: a handler subscribing from the dispatcher does not deadlock on the
+ * subscriber mutex; the new handler misses the event in flight and gets the
+ * next. */
+void test_real_bus_subscribe_from_handler(void) {
+    reset_recorder();
+    g_late_calls = 0;
+    TEST_ASSERT_EQUAL(PORTUNUS_OK,
+                      event_bus_subscribe(EVENT_HEARTBEAT, subscribing_recorder, nullptr));
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, publish_heartbeat(0));
+    TEST_ASSERT_TRUE(wait_deliveries(1));
+    TEST_ASSERT_EQUAL_INT(0, g_late_calls);
+
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, publish_heartbeat(1));
+    TEST_ASSERT_TRUE(wait_deliveries(2));                         /* both handlers */
+    TEST_ASSERT_EQUAL_INT(1, g_late_calls);
 }
 
 #endif /* PORTUNUS_TEST_REAL_BUS */
@@ -700,6 +841,11 @@ extern "C" void app_main(void) {
 #ifdef PORTUNUS_TEST_REAL_BUS
     /* Concurrency suite — only meaningful with real async bus */
     RUN_TEST(test_real_bus_publish_reaches_subscriber);
+    RUN_TEST(test_real_bus_second_init_refused);
+    RUN_TEST(test_real_bus_subscribe_before_init);
+    RUN_TEST(test_real_bus_delivers_in_publish_order);
+    RUN_TEST(test_real_bus_queue_full_after_timeout);
+    RUN_TEST(test_real_bus_subscribe_from_handler);
 #endif
 
     int failures = UNITY_END();
