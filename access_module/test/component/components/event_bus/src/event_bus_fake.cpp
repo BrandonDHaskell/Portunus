@@ -18,6 +18,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
+#include <atomic>
 #include <vector>
 
 namespace {
@@ -26,6 +27,7 @@ bus_core_t                    g_subs      = {g_storage, MAX_EVENT_SUBSCRIBERS, 0
 std::vector<portunus_event_t> g_published;
 bool                          g_inited    = false;
 uint32_t                      g_dropped   = 0;
+std::atomic<uint32_t>         g_subscriber_drops{0};   /* lock-free: handlers call it */
 size_t                        g_fail_left = 0;
 portunus_err_t                g_fail_err  = PORTUNUS_OK;
 
@@ -111,6 +113,15 @@ uint32_t event_bus_dropped_events(void) {
     return g_dropped;
 }
 
+void event_bus_note_subscriber_drop(void) {
+    g_subscriber_drops++;
+}
+
+uint32_t event_bus_lost_events(void) {
+    Guard g;
+    return g_dropped + g_subscriber_drops.load();
+}
+
 portunus_err_t event_bus_subscribe(portunus_event_id_t event_id,
                                    event_bus_handler_t handler, void *ctx) {
     if (handler == nullptr) return PORTUNUS_ERR_INVALID_ARG;   /* same order as the real bus */
@@ -129,6 +140,7 @@ void event_bus_fake_reset(void) {
     g_fail_left = 0;
     g_fail_err  = PORTUNUS_OK;
     g_dropped   = 0;
+    g_subscriber_drops = 0;
 }
 
 void event_bus_fake_fail_next(size_t n, portunus_err_t err) {

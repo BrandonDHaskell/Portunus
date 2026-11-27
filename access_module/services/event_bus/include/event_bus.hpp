@@ -110,6 +110,19 @@ portunus_err_t event_bus_unsubscribe(portunus_event_id_t event_id,
  */
 uint32_t event_bus_dropped_events(void);
 
+/**
+ * @brief Count an event a subscriber lost after the bus delivered it, because
+ * the subscriber's own queue was full. Safe from any task, including a
+ * handler running on the dispatcher.
+ */
+void event_bus_note_subscriber_drop(void);
+
+/**
+ * @brief Every event lost since init: publishes the bus refused plus drops
+ * subscribers reported. Each loss is counted once. Reported in heartbeats.
+ */
+uint32_t event_bus_lost_events(void);
+
 #ifdef CONFIG_PORTUNUS_TEST_HOOKS
 /**
  * @brief Test only: return the bus to its pre-init state.

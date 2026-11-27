@@ -220,6 +220,10 @@ void test_subscriptions(void) {
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
     TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_subscribers_for(EVENT_CREDENTIAL_READ));
     TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_subscribers_for(EVENT_PROVISION_REQUEST));
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_subscribers_for(EVENT_STRIKE_FAULT));
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_subscribers_for(EVENT_STRIKE_RECOVERED));
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_subscribers_for(EVENT_DOOR_OPENED));
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_subscribers_for(EVENT_DOOR_CLOSED));
 #else
     TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_subscribers_for(EVENT_PROVISION_REQUEST));
     TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_subscribers_for(EVENT_CREDENTIAL_READ));
@@ -261,6 +265,72 @@ void test_heartbeat_syncs_clock(void) {
     TEST_ASSERT_EQUAL_INT64(want.tv_sec, g_set_time_last.tv_sec);
     TEST_ASSERT_GREATER_OR_EQUAL_INT64(want.tv_usec, g_set_time_last.tv_usec);  /* + RTT/2 */
     TEST_ASSERT_LESS_THAN_INT64(want.tv_usec + 500000, g_set_time_last.tv_usec);
+}
+
+static void publish_id(portunus_event_id_t id) {
+    portunus_event_t e;
+    memset(&e, 0, sizeof e);
+    e.id = id;
+    event_bus_publish(&e);
+}
+
+/* Publish heartbeat `seq` and decode the HeartbeatRequest it sends. */
+static portunus_v1_HeartbeatRequest sent_heartbeat(uint32_t seq) {
+    const size_t before = calls_to(HEARTBEAT_RPC).size();
+    publish_heartbeat(seq);
+    TEST_ASSERT_TRUE(wait_for([before] { return calls_to(HEARTBEAT_RPC).size() > before; }));
+    const grpc_fake_call call = calls_to(HEARTBEAT_RPC).back();
+    portunus_v1_HeartbeatRequest req = portunus_v1_HeartbeatRequest_init_zero;
+    pb_istream_t is = pb_istream_from_buffer(call.request.data(), call.request.size());
+    TEST_ASSERT_TRUE(pb_decode(&is, portunus_v1_HeartbeatRequest_fields, &req));
+    TEST_ASSERT_EQUAL_UINT32(seq, req.sequence);
+    return req;
+}
+
+/* SC-19: the heartbeat carries module health. dropped_events is the bus's
+ * lost-event total in every variant. Access points report reader and strike
+ * health (healthy until told otherwise) and the door once it is known; other
+ * modules omit all three. */
+void test_heartbeat_reports_health(void) {
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, start());
+
+    portunus_v1_HeartbeatRequest hb = sent_heartbeat(1);
+    TEST_ASSERT_EQUAL_UINT32(0, hb.dropped_events);
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
+    TEST_ASSERT_TRUE(hb.has_reader_ok);
+    TEST_ASSERT_TRUE(hb.reader_ok);
+    TEST_ASSERT_TRUE(hb.has_strike_ok);
+    TEST_ASSERT_TRUE(hb.strike_ok);
+    TEST_ASSERT_FALSE(hb.has_door_closed);       /* no door event yet */
+
+    publish_id(EVENT_CREDENTIAL_READ_ERROR);
+    publish_id(EVENT_STRIKE_FAULT);
+    publish_id(EVENT_DOOR_OPENED);
+    event_bus_note_subscriber_drop();
+    event_bus_note_subscriber_drop();
+    hb = sent_heartbeat(2);
+    TEST_ASSERT_FALSE(hb.reader_ok);
+    TEST_ASSERT_FALSE(hb.strike_ok);
+    TEST_ASSERT_TRUE(hb.has_door_closed);
+    TEST_ASSERT_FALSE(hb.door_closed);
+    TEST_ASSERT_EQUAL_UINT32(2, hb.dropped_events);
+
+    publish_id(EVENT_CREDENTIAL_READER_RECOVERED);
+    publish_id(EVENT_STRIKE_RECOVERED);
+    publish_id(EVENT_DOOR_CLOSED);
+    hb = sent_heartbeat(3);
+    TEST_ASSERT_TRUE(hb.reader_ok);
+    TEST_ASSERT_TRUE(hb.strike_ok);
+    TEST_ASSERT_TRUE(hb.door_closed);
+#else
+    TEST_ASSERT_FALSE(hb.has_reader_ok);
+    TEST_ASSERT_FALSE(hb.has_strike_ok);
+    TEST_ASSERT_FALSE(hb.has_door_closed);
+    event_bus_note_subscriber_drop();
+    hb = sent_heartbeat(2);
+    TEST_ASSERT_FALSE(hb.has_reader_ok);
+    TEST_ASSERT_EQUAL_UINT32(1, hb.dropped_events);
+#endif
 }
 
 /* SC-18: RPC paths are /{package}.{service}/{rpc} from portunus.proto. */
@@ -387,6 +457,7 @@ void test_full_queue_denies_card(void) {
     }
     TEST_ASSERT_EQUAL_STRING("comm_busy", e.payload.access_decision.reason);
     TEST_ASSERT_EQUAL_UINT32(1, server_comm_dropped_events());
+    TEST_ASSERT_EQUAL_UINT32(1, event_bus_lost_events());   /* reported to the bus once */
 
     grpc_fake_release();                          /* drain before teardown */
     TEST_ASSERT_TRUE(wait_for([] {
@@ -654,6 +725,7 @@ void test_full_queue_fails_provision_fast(void) {
     TEST_ASSERT_EQUAL(PROVISION_RESULT_COMM_ERROR, e.payload.provision_result.reason);
     TEST_ASSERT_EQUAL_STRING("comm_busy", e.payload.provision_result.detail);
     TEST_ASSERT_EQUAL_UINT32(1, server_comm_dropped_events());
+    TEST_ASSERT_EQUAL_UINT32(1, event_bus_lost_events());   /* reported to the bus once */
 
     grpc_fake_release();
     TEST_ASSERT_TRUE(wait_for([] {
@@ -724,6 +796,7 @@ extern "C" void app_main(void) {
     RUN_TEST(test_subscriptions);
     RUN_TEST(test_offline_heartbeat_is_dropped);
     RUN_TEST(test_heartbeat_syncs_clock);
+    RUN_TEST(test_heartbeat_reports_health);
     RUN_TEST(test_rpc_paths_match_proto);
     RUN_TEST(test_deinit_releases_everything);
     RUN_TEST(test_deinit_timeout_leaves_task);

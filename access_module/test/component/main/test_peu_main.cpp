@@ -360,6 +360,7 @@ void test_dropped_event_during_capture_shows_error(void) {
     to_capture_send(r);
     for (int i = 0; i < 9; ++i) r.fix.bridge(make_arm());   /* 8 fit, 1 lost */
     TEST_ASSERT_EQUAL_UINT32(1, r.fix.dropped());
+    TEST_ASSERT_EQUAL_UINT32(1, event_bus_lost_events());   /* reported for the heartbeat */
     r.fix.check_dropped();
     TEST_ASSERT_EQUAL(PEU_STATE_RESULT, r.fsm.state());
     TEST_ASSERT_EQUAL(feedback_type_t::PEU_RESULT_ERROR, r.feedback.last());

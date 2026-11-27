@@ -251,6 +251,9 @@ void test_relock_failure_retries_on_next_tick(void) {
     fix.tick_unlock_timer();
     TEST_ASSERT_EQUAL(feedback_type_t::STRIKE_FAULT, fb.last());   /* shown once */
     TEST_ASSERT_EQUAL(1, fb.count_of(feedback_type_t::STRIKE_FAULT));
+#ifndef PORTUNUS_TEST_REAL_BUS
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_STRIKE_FAULT));  /* for the heartbeat */
+#endif
 
     /* A card tapped during the fault gets its one-shot, but nothing tells the
      * LED the door is fine: the one-shot ends on STRIKE_FAULT (DRV-07c). */
@@ -266,6 +269,10 @@ void test_relock_failure_retries_on_next_tick(void) {
     TEST_ASSERT_FALSE(fix.lock_fault());
     TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_READY, fb.last());
     TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_READY, last_baseline(fb));
+#ifndef PORTUNUS_TEST_REAL_BUS
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_STRIKE_FAULT));
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_STRIKE_RECOVERED));
+#endif
 }
 
 /* A grant with no pending card read (late or unsolicited) never unlocks. */
@@ -504,6 +511,8 @@ void test_early_relock_failure_retries_every_poll(void) {
         TEST_ASSERT_TRUE(fix.strike_energized());
     }
     TEST_ASSERT_EQUAL(1, fb.count_of(feedback_type_t::STRIKE_FAULT));
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_STRIKE_FAULT));
+    TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_count_of(EVENT_STRIKE_RECOVERED));
 
     access.lock_result = PORTUNUS_OK;
     clk.advance(100);                             /* well inside the hold */
@@ -513,6 +522,7 @@ void test_early_relock_failure_retries_every_poll(void) {
     TEST_ASSERT_FALSE(fix.relock_retry());
     TEST_ASSERT_FALSE(fix.lock_fault());
     TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_READY, fb.last());
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_STRIKE_RECOVERED));
 
     clk.advance(UNLOCK_HOLD_MS);
     fix.tick_unlock_timer();
@@ -612,6 +622,7 @@ void test_dropped_event_shows_comm_error(void) {
     const portunus_event_t e = make_credential_read();
     for (int i = 0; i < 9; ++i) fix.bridge(e);     /* 8 fit, the 9th is lost */
     TEST_ASSERT_EQUAL_UINT32(1, fix.dropped());
+    TEST_ASSERT_EQUAL_UINT32(1, event_bus_lost_events());   /* reported for the heartbeat */
     fix.check_dropped();
     TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_ERROR, fb.last());
     TEST_ASSERT_EQUAL(1, fb.count_of(feedback_type_t::SYSTEM_ERROR));
@@ -736,7 +747,27 @@ void test_start_subscribes_and_reports_ready(void) {
     TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_SYSTEM_BOOT_COMPLETE));
     TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_READY, r.fb.last());
     TEST_ASSERT_EQUAL(SYSTEM_STATE_OPERATIONAL, r.fsm.state());
+    /* Initial health for the heartbeat: the door state (reed fitted in this
+     * build); no READ_ERROR, since the reader came up. */
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_DOOR_CLOSED));
+    TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_count_of(EVENT_DOOR_OPENED));
+    TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_count_of(EVENT_CREDENTIAL_READ_ERROR));
     TEST_ASSERT_EQUAL(PORTUNUS_ERR_ALREADY_INIT, r.fsm.start());
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.stop());
+}
+
+/* A reader that failed init never enters degraded mode through the poll
+ * loop, so start() reports it once (reader_ok=false in heartbeats), and an
+ * open door is reported as open. */
+void test_start_reports_dead_reader_and_open_door(void) {
+    LiveRig r;
+    r.reader.init_result = PORTUNUS_ERR_SPI_INIT;
+    r.access.door_open   = true;
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.init());
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.start());
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_CREDENTIAL_READ_ERROR));
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_DOOR_OPENED));
+    TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_count_of(EVENT_DOOR_CLOSED));
     TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.stop());
 }
 
@@ -809,12 +840,14 @@ void test_stop_reports_lock_failure(void) {
     TEST_ASSERT_EQUAL(PORTUNUS_ERR_LOCK_FAILED, r.fsm.stop());
     TEST_ASSERT_EQUAL(feedback_type_t::STRIKE_FAULT, r.fb.last());
     TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_subscriber_count());
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_STRIKE_FAULT));
 
     TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.start());
     TEST_ASSERT_EQUAL(feedback_type_t::STRIKE_FAULT, r.fb.last());
 
     r.access.lock_result = PORTUNUS_OK;
     TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.stop());
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_STRIKE_RECOVERED));
     TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.start());
     TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_READY, r.fb.last());
     TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.stop());
@@ -1160,6 +1193,7 @@ extern "C" void app_main(void) {
     RUN_TEST(test_unlock_timeout_only_after_lock_succeeds);
     /* Lifecycle (FSM-22, D-T9) */
     RUN_TEST(test_start_subscribes_and_reports_ready);
+    RUN_TEST(test_start_reports_dead_reader_and_open_door);
     RUN_TEST(test_stop_locks_and_allows_restart);
     RUN_TEST(test_stop_during_hold_locks_strike);
     RUN_TEST(test_stop_reports_lock_failure);

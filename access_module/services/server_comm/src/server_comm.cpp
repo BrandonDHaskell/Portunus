@@ -156,7 +156,15 @@ static bool           s_initialized   = false;
  * exits at the top of its loop and signals s_exited. */
 static std::atomic<bool> s_stop_requested{false};
 static SemaphoreHandle_t s_exited = NULL;
-static bool           s_reader_degraded = false; /* set by EVENT_CREDENTIAL_READ_ERROR, cleared by RECOVERED */
+/* Module health for the heartbeat, set by bus handlers straight from the
+ * event (not through the comm queue, where a full queue could lose the one
+ * event that changes it). Read by the comm task: atomic. */
+static std::atomic<bool>   s_reader_degraded{false}; /* EVENT_CREDENTIAL_READ_ERROR / _RECOVERED */
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
+static std::atomic<bool>   s_strike_fault{false};    /* EVENT_STRIKE_FAULT / _RECOVERED */
+static constexpr int8_t    DOOR_UNKNOWN = -1;
+static std::atomic<int8_t> s_door_closed{DOOR_UNKNOWN}; /* EVENT_DOOR_CLOSED (1) / _OPENED (0) */
+#endif
 /* true after the first successful clock sync. Written by the comm task, read
  * from any task via server_comm_clock_synced(): atomic (F15). */
 static std::atomic<bool> s_clock_synced{false};
@@ -373,6 +381,7 @@ static void on_heartbeat_event(const portunus_event_t *event, void *ctx)
      * Not a request, so nothing to answer; counted for the pressure log. */
     if (xQueueSend(s_comm_queue, event, 0) != pdTRUE) {
         s_dropped++;
+        event_bus_note_subscriber_drop();
         ESP_LOGW(TAG, "Comm queue full: heartbeat #%" PRIu32 " dropped",
                  event->payload.heartbeat.sequence);
     }
@@ -381,12 +390,29 @@ static void on_heartbeat_event(const portunus_event_t *event, void *ctx)
 static void on_reader_fault_event(const portunus_event_t *event, void *ctx)
 {
     (void)ctx;
-    if (s_comm_queue == NULL) { return; }
-    if (xQueueSend(s_comm_queue, event, 0) != pdTRUE) {
-        s_dropped++;
-        ESP_LOGW(TAG, "Comm queue full: reader status event 0x%04x dropped", (unsigned)event->id);
+    const bool degraded = event->id == EVENT_CREDENTIAL_READ_ERROR;
+    if (s_reader_degraded.exchange(degraded) != degraded) {
+        if (degraded) {
+            ESP_LOGW(TAG, "Credential reader degraded (reported in heartbeats)");
+        } else {
+            ESP_LOGI(TAG, "Credential reader recovered");
+        }
     }
 }
+
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
+static void on_strike_event(const portunus_event_t *event, void *ctx)
+{
+    (void)ctx;
+    s_strike_fault = event->id == EVENT_STRIKE_FAULT;
+}
+
+static void on_door_event(const portunus_event_t *event, void *ctx)
+{
+    (void)ctx;
+    s_door_closed = event->id == EVENT_DOOR_CLOSED ? 1 : 0;
+}
+#endif
 
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
 static void publish_access_denied(const char *credential_id, const char *reason);
@@ -403,6 +429,7 @@ static void on_credential_event(const portunus_event_t *event, void *ctx)
                                  log_id, sizeof(log_id));
         ESP_LOGW(TAG, "Comm queue full: denying credential %s", log_id);
         s_dropped++;
+        event_bus_note_subscriber_drop();
         publish_access_denied(log_id, "comm_busy");
     }
 }
@@ -421,6 +448,7 @@ static void on_provision_event(const portunus_event_t *event, void *ctx)
          * out the capture timeout (SC-15, D-T5). */
         ESP_LOGW(TAG, "Comm queue full: failing provision request");
         s_dropped++;
+        event_bus_note_subscriber_drop();
         publish_provision_result(PROVISION_RESULT_COMM_ERROR, NULL, "comm_busy");
     }
 }
@@ -461,6 +489,19 @@ static void handle_heartbeat(const event_heartbeat_t *hb)
     req.uptime_s        = hb->uptime_sec;
     req.free_heap_bytes = hb->free_heap_bytes;
     req.sequence        = hb->sequence;
+    req.dropped_events  = event_bus_lost_events();
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
+    /* Only access points track reader and strike health; others omit them. */
+    req.has_reader_ok = true;
+    req.reader_ok     = !s_reader_degraded;
+    req.has_strike_ok = true;
+    req.strike_ok     = !s_strike_fault;
+    const int8_t door = s_door_closed;
+    if (door != DOOR_UNKNOWN) {      /* no reed switch, or not yet reported */
+        req.has_door_closed = true;
+        req.door_closed     = door == 1;
+    }
+#endif
 
     if (net_info_sta_ip(req.ip, sizeof(req.ip))) {
         /* ip populated */
@@ -868,14 +909,6 @@ static void comm_task(void *arg)
             handle_provision(&event.payload.provision_request);
             break;
 #endif
-        case EVENT_CREDENTIAL_READ_ERROR:
-            s_reader_degraded = true;
-            ESP_LOGW(TAG, "Credential reader degraded (logged locally only; not reported to the server)");
-            break;
-        case EVENT_CREDENTIAL_READER_RECOVERED:
-            s_reader_degraded = false;
-            ESP_LOGI(TAG, "Credential reader recovered");
-            break;
         default:
             ESP_LOGW(TAG, "Unexpected event 0x%04x in comm queue",
                      (unsigned)event.id);
@@ -909,6 +942,10 @@ static const struct {
     { EVENT_CREDENTIAL_READER_RECOVERED, on_reader_fault_event },
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
     { EVENT_CREDENTIAL_READ,             on_credential_event },
+    { EVENT_STRIKE_FAULT,                on_strike_event },
+    { EVENT_STRIKE_RECOVERED,            on_strike_event },
+    { EVENT_DOOR_OPENED,                 on_door_event },
+    { EVENT_DOOR_CLOSED,                 on_door_event },
 #endif
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
     { EVENT_PROVISION_REQUEST,           on_provision_event },
@@ -1017,6 +1054,10 @@ static void clear_state(void)
 {
     s_initialized     = false;
     s_reader_degraded = false;
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
+    s_strike_fault    = false;
+    s_door_closed     = DOOR_UNKNOWN;
+#endif
     s_clock_synced    = false;
     s_last_sync_us    = 0;
     s_last_heartbeat  = {};

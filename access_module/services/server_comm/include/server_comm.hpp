@@ -46,12 +46,17 @@ extern "C" {
 #endif
 
 /**
- * @brief Event bus subscriptions server_comm_init() makes, in either variant:
- * heartbeat, reader fault, reader recovery, and the variant's request event
- * (credential read or provision request). main.cpp checks the subscriber
- * budget against it (COMP-01); server_comm.cpp asserts it matches its list.
+ * @brief Event bus subscriptions server_comm_init() makes: heartbeat, reader
+ * fault, reader recovery, and the variant's request event (credential read
+ * or provision request); access points add strike fault/recovered and door
+ * opened/closed for heartbeat health. main.cpp checks the subscriber budget
+ * against it (COMP-01); server_comm.cpp asserts it matches its list.
  */
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
+#define SERVER_COMM_SUBSCRIPTION_COUNT 8
+#else
 #define SERVER_COMM_SUBSCRIPTION_COUNT 4
+#endif
 
 /**
  * @brief Initialise and start the server communication component.
@@ -86,8 +91,9 @@ bool server_comm_clock_synced(void);
 /**
  * @brief Events lost since boot: requests or heartbeats dropped because the
  * comm queue was full, and decisions the event bus refused. Dropped
- * requests are answered (deny or COMM_ERROR); this counts them for logs and
- * future telemetry (D-T5).
+ * requests are answered (deny or COMM_ERROR); this counts them for logs
+ * (D-T5). Heartbeats report event_bus_lost_events(), which includes the
+ * queue drops counted here.
  */
 uint32_t server_comm_dropped_events(void);
 

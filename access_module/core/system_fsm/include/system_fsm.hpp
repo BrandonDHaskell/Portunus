@@ -191,6 +191,7 @@ private:
     bool receive_and_process(TickType_t timeout); /**< run() steps 1-2 */
     void check_dropped_events();
     void publish_credential_read(const credential_t &cred);
+    void publish_status(portunus_event_id_t id);
     void poll_credential();                      /**< Credential polling loop */
     void process_event(const portunus_event_t &event);
     void poll_reed_switch();
