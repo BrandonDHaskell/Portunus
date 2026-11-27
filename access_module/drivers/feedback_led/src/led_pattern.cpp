@@ -13,7 +13,7 @@ static constexpr uint32_t DENIED_ON = 2, DENIED_CYCLE = 4, DENIED_COUNT = 3;
 /* SYSTEM_READY: 50 ms blink every 3 s. */
 static constexpr uint32_t READY_ON = 1, READY_CYCLE = 60;
 
-/* SYSTEM_ERROR and PEU_RESULT_ERROR: 200 ms on / 200 ms off. */
+/* SYSTEM_ERROR, STRIKE_FAULT and PEU_RESULT_ERROR: 200 ms on / 200 ms off. */
 static constexpr uint32_t ERROR_HALF = 4;
 
 /* Double pulse: on, 150 ms gap, on, long off. */
@@ -61,6 +61,7 @@ led_pattern_kind_t led_pattern_kind(feedback_type_t type)
         return led_pattern_kind_t::ONE_SHOT;
     case ft::SYSTEM_READY:
     case ft::SYSTEM_ERROR:
+    case ft::STRIKE_FAULT:
     case ft::PROVISIONING_IDLE:
     case ft::PROVISIONING_AWAITING:
     case ft::PEU_IDLE:
@@ -90,6 +91,7 @@ uint32_t led_pattern_length(feedback_type_t type)
     case ft::PEU_RESULT_PENDING:        return PENDING_CYCLE * PENDING_COUNT;
     case ft::SYSTEM_READY:              return READY_CYCLE;
     case ft::SYSTEM_ERROR:
+    case ft::STRIKE_FAULT:
     case ft::PEU_RESULT_ERROR:          return ERROR_HALF * 2;
     case ft::PROVISIONING_IDLE:         return PROV_IDLE_CYCLE;
     case ft::PROVISIONING_AWAITING:     return PROV_AWAIT_HALF * 2;
@@ -126,6 +128,7 @@ bool led_pattern_level(feedback_type_t type, uint32_t tick)
         return (tick - UNAUTH_RAPID_START) % UNAUTH_RAPID_CYCLE < UNAUTH_RAPID_ON;
     case ft::SYSTEM_READY:              return pos < READY_ON;
     case ft::SYSTEM_ERROR:
+    case ft::STRIKE_FAULT:
     case ft::PEU_RESULT_ERROR:          return pos < ERROR_HALF;
     case ft::PROVISIONING_IDLE:
     case ft::PEU_IDLE:                  return double_pulse(pos);
@@ -138,7 +141,7 @@ bool led_pattern_level(feedback_type_t type, uint32_t tick)
 
 bool led_pattern_is_baseline(feedback_type_t type)
 {
-    return type == ft::SYSTEM_READY;
+    return type == ft::SYSTEM_READY || type == ft::STRIKE_FAULT;
 }
 
 /* ── Engine ────────────────────────────────────────────────────────────────── */

@@ -67,6 +67,17 @@ static portunus_event_t make_credential_read(void) {
 
 /* The FSM only acts on a decision that answers a pending card read, so the
  * decision tests first inject the read that the server is answering. */
+/* The pattern a one-shot would return to on the LED: the most recent
+ * baseline indication (see led_pattern_is_baseline), or NONE. */
+static feedback_type_t last_baseline(const FakeFeedback &fb) {
+    for (auto it = fb.indications.rbegin(); it != fb.indications.rend(); ++it) {
+        if (*it == feedback_type_t::SYSTEM_READY || *it == feedback_type_t::STRIKE_FAULT) {
+            return *it;
+        }
+    }
+    return feedback_type_t::NONE;
+}
+
 static void inject_decision(SystemFSMTestFixture &fix, const portunus_event_t &decision) {
     fix.inject(make_credential_read());
     fix.inject(decision);
@@ -238,8 +249,15 @@ void test_relock_failure_retries_on_next_tick(void) {
     fix.tick_unlock_timer();
     TEST_ASSERT_TRUE(fix.strike_energized());  /* still armed, retry next tick */
     fix.tick_unlock_timer();
-    TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_ERROR, fb.last());   /* shown once */
-    TEST_ASSERT_EQUAL(1, fb.count_of(feedback_type_t::SYSTEM_ERROR));
+    TEST_ASSERT_EQUAL(feedback_type_t::STRIKE_FAULT, fb.last());   /* shown once */
+    TEST_ASSERT_EQUAL(1, fb.count_of(feedback_type_t::STRIKE_FAULT));
+
+    /* A card tapped during the fault gets its one-shot, but nothing tells the
+     * LED the door is fine: the one-shot ends on STRIKE_FAULT (DRV-07c). */
+    inject_decision(fix, make_deny());
+    TEST_ASSERT_EQUAL(feedback_type_t::ACCESS_DENIED, fb.last());
+    TEST_ASSERT_EQUAL(feedback_type_t::STRIKE_FAULT, last_baseline(fb));
+    TEST_ASSERT_TRUE(fix.lock_fault());
 
     access.lock_result = PORTUNUS_OK;
     fix.tick_unlock_timer();
@@ -247,6 +265,7 @@ void test_relock_failure_retries_on_next_tick(void) {
     TEST_ASSERT_TRUE(access.locked);
     TEST_ASSERT_FALSE(fix.lock_fault());
     TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_READY, fb.last());
+    TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_READY, last_baseline(fb));
 }
 
 /* A grant with no pending card read (late or unsolicited) never unlocks. */
@@ -458,7 +477,7 @@ void test_close_during_hold_relocks_early(void) {
 
 /* FSM-15: if the early re-lock fails, the FSM retries on every poll until
  * lock() succeeds, without waiting for the hold to expire. While it fails
- * the LED shows SYSTEM_ERROR (the door may be stuck unlocked); once locked
+ * the LED shows STRIKE_FAULT (the door may be stuck unlocked); once locked
  * it returns to SYSTEM_READY. The hold was cut short, so no UNLOCK_TIMEOUT. */
 void test_early_relock_failure_retries_every_poll(void) {
     FakeAccessPoint access;
@@ -476,7 +495,7 @@ void test_early_relock_failure_retries_every_poll(void) {
     TEST_ASSERT_TRUE(fix.strike_energized());
     TEST_ASSERT_TRUE(fix.relock_retry());
     TEST_ASSERT_TRUE(fix.lock_fault());
-    TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_ERROR, fb.last());
+    TEST_ASSERT_EQUAL(feedback_type_t::STRIKE_FAULT, fb.last());
     TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_DOOR_CLOSED));
 
     for (int i = 0; i < 3; ++i) {                 /* still failing: no repeat error */
@@ -484,7 +503,7 @@ void test_early_relock_failure_retries_every_poll(void) {
         fix.tick_relock_retry();
         TEST_ASSERT_TRUE(fix.strike_energized());
     }
-    TEST_ASSERT_EQUAL(1, fb.count_of(feedback_type_t::SYSTEM_ERROR));
+    TEST_ASSERT_EQUAL(1, fb.count_of(feedback_type_t::STRIKE_FAULT));
 
     access.lock_result = PORTUNUS_OK;
     clk.advance(100);                             /* well inside the hold */
@@ -780,15 +799,25 @@ void test_stop_waits_for_poll_task(void) {
 }
 
 /* D-T9 decision 1: a lock that fails on stop is reported, not hidden: the
- * error code says so and the LED shows SYSTEM_ERROR. */
+ * error code says so and the LED shows STRIKE_FAULT, also after a restart,
+ * until a lock succeeds. */
 void test_stop_reports_lock_failure(void) {
     LiveRig r;
     TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.init());
     TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.start());
     r.access.lock_result = PORTUNUS_ERR_GPIO_INIT;
     TEST_ASSERT_EQUAL(PORTUNUS_ERR_LOCK_FAILED, r.fsm.stop());
-    TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_ERROR, r.fb.last());
+    TEST_ASSERT_EQUAL(feedback_type_t::STRIKE_FAULT, r.fb.last());
     TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_subscriber_count());
+
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.start());
+    TEST_ASSERT_EQUAL(feedback_type_t::STRIKE_FAULT, r.fb.last());
+
+    r.access.lock_result = PORTUNUS_OK;
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.stop());
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.start());
+    TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_READY, r.fb.last());
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.stop());
 }
 
 #endif /* !PORTUNUS_TEST_REAL_BUS */
