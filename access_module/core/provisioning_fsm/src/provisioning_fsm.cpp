@@ -369,7 +369,7 @@ void ProvisioningFSM::handle_arm_requested()
 void ProvisioningFSM::handle_credential_read(const event_credential_read_t *cred)
 {
     if (m_state != PEU_STATE_ARMED) {
-        ESP_LOGD(TAG, "Credential read ignored in state %d", (int)m_state);
+        ESP_LOGD(TAG, "Credential read ignored in state %d", (int)m_state.load());
         return;
     }
 

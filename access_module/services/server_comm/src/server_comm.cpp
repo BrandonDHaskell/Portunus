@@ -147,7 +147,9 @@ static QueueHandle_t  s_comm_queue    = NULL;
 static TaskHandle_t   s_comm_task     = NULL;
 static bool           s_initialized   = false;
 static bool           s_reader_degraded = false; /* set by EVENT_CREDENTIAL_READ_ERROR, cleared by RECOVERED */
-static bool           s_clock_synced    = false; /* true after first successful settimeofday() from heartbeat */
+/* true after the first successful clock sync. Written by the comm task, read
+ * from any task via server_comm_clock_synced(): atomic (F15). */
+static std::atomic<bool> s_clock_synced{false};
 static int64_t        s_last_sync_us    = 0;     /* esp_timer time of the last successful clock sync */
 static event_heartbeat_t s_last_heartbeat = {};  /* most recent heartbeat payload, reused for on-demand syncs */
 /* Events lost to a full comm queue or a failed publish (D-T5). Bumped by the
@@ -511,10 +513,10 @@ static void handle_heartbeat(const event_heartbeat_t *hb)
 
     if (s_reader_degraded) {
         ESP_LOGW(TAG, "Heartbeat OK — known=%d clock_synced=%d [READER DEGRADED]",
-                 resp.known, s_clock_synced);
+                 resp.known, (int)s_clock_synced.load());
     } else {
         ESP_LOGI(TAG, "Heartbeat OK — known=%d clock_synced=%d",
-                 resp.known, s_clock_synced);
+                 resp.known, (int)s_clock_synced.load());
     }
 }
 

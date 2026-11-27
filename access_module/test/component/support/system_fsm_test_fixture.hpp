@@ -31,7 +31,7 @@ public:
     bool     queue_pressure_warned() const { return m_fsm.m_queue_pressure.warned; }
 
     /* One reed-switch poll (run() step 3). */
-    void poll_reed() { if (m_fsm.m_caps.has_access_point) m_fsm.poll_reed_switch(); }
+    void poll_reed() { if (m_fsm.m_has_access_point) m_fsm.poll_reed_switch(); }
 
     /* One hold-timer check (run() step 4); call after advancing FakeClock. */
     void tick_unlock_timer() { if (m_fsm.m_strike_energized) m_fsm.check_unlock_timer(); }
@@ -44,7 +44,7 @@ public:
 
     /* Network capability seam: tests set it explicitly instead of inheriting
      * whatever CONFIG_PORTUNUS_ENABLE_WIFI happens to be in sdkconfig. */
-    void set_network(bool online) { m_fsm.m_caps.has_network = online; }
+    void set_network(bool online) { m_fsm.m_has_network = online; }
 
     bool    strike_energized() const { return m_fsm.m_strike_energized; }
     int64_t unlock_deadline()  const { return m_fsm.m_unlock_deadline_ms; }
