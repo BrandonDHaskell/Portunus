@@ -109,5 +109,7 @@ add_executable(test_access_protocol
 target_include_directories(test_access_protocol PRIVATE
     ${AM}/services/server_comm/include
     ${AM}/components/portunus_types/include)
+target_compile_definitions(test_access_protocol PRIVATE
+    PORTUNUS_HMAC_VECTORS="${AM}/../proto/testdata/hmac_vectors.txt")
 target_link_libraries(test_access_protocol PRIVATE unity)
 add_test(NAME access_protocol COMMAND test_access_protocol)

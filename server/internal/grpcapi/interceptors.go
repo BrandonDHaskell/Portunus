@@ -26,7 +26,9 @@ const hmacHeaderKey = "x-portunus-sig"
 
 // hmacProjection builds the canonical byte string that the firmware signs.
 //
-// Projection formats (must match grpc_post_proto() in services/server_comm):
+// Projection formats (must match proto_*_projection() in the firmware's
+// services/server_comm/src/access_protocol.cpp; both sides test
+// proto/testdata/hmac_vectors.txt):
 //
 //	Heartbeat:  "heartbeat|{module_id}|{sequence}"
 //	Access:     "access|{module_id}|{credential_id}|{nonce_hex}|{requested_at}"

@@ -7,15 +7,12 @@ import (
 	"testing"
 
 	"github.com/BrandonDHaskell/Portunus/server/internal/devicesig"
+	"github.com/BrandonDHaskell/Portunus/server/internal/hmacvectors"
 )
 
-// Golden vector shared with access_module/test/unit/test_access_projection.cpp.
-// Change one, change both (CLAUDE.md hazard #5).
 const (
 	goldenModule = "door-001"
 	goldenCred   = "04:A3:2B:1C"
-	goldenGrant  = "access_resp|door-001|04:A3:2B:1C|000102030405060708090a0b0c0d0e0f|1"
-	goldenDeny   = "access_resp|door-001|04:A3:2B:1C|000102030405060708090a0b0c0d0e0f|0"
 	testSecret   = "test-secret-not-a-deployment-value"
 )
 
@@ -27,27 +24,42 @@ func hmacHex(s string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// PROTO-20 (D1): the response projection carries the request nonce and the
-// decision, under a prefix distinct from the request projection.
-func TestAccessResponseProjection_GoldenVector(t *testing.T) {
-	tests := []struct {
-		granted bool
-		want    string
-	}{
-		{true, goldenGrant},
-		{false, goldenDeny},
+// PROTO-18 / PROTO-20 (D1): the access-decision projection and signature are
+// byte-identical to the shared golden vectors (proto/testdata/hmac_vectors.txt)
+// that the firmware's test_access_protocol also reads.
+func TestAccessResponse_SharedGoldenVectors(t *testing.T) {
+	key, vectors, err := hmacvectors.Load()
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range tests {
-		got := string(devicesig.AccessResponseProjection(goldenModule, goldenCred, goldenNonce, tc.granted))
-		if got != tc.want {
-			t.Errorf("granted=%v: projection = %q, want %q", tc.granted, got, tc.want)
+	checked := 0
+	for _, v := range vectors {
+		if v.Kind != "access_resp" {
+			continue
 		}
+		nonce, err := hex.DecodeString(v.Fields[2])
+		if err != nil {
+			t.Fatalf("%s: %v", v.Projection, err)
+		}
+		granted := v.Fields[3] == "1"
+		got := string(devicesig.AccessResponseProjection(v.Fields[0], v.Fields[1], nonce, granted))
+		if got != v.Projection {
+			t.Errorf("projection = %q, want %q", got, v.Projection)
+		}
+		if sig := devicesig.AccessResponseSig(key, v.Fields[0], v.Fields[1], nonce, granted); sig != v.HMAC {
+			t.Errorf("%s: sig = %s, want %s", v.Projection, sig, v.HMAC)
+		}
+		checked++
+	}
+	if checked == 0 {
+		t.Fatal("no access_resp vectors checked")
 	}
 }
 
 func TestAccessResponseSig_IsHMACOfProjection(t *testing.T) {
 	got := devicesig.AccessResponseSig(testSecret, goldenModule, goldenCred, goldenNonce, true)
-	if want := hmacHex(goldenGrant); got != want {
+	proj := string(devicesig.AccessResponseProjection(goldenModule, goldenCred, goldenNonce, true))
+	if want := hmacHex(proj); got != want {
 		t.Fatalf("sig = %s, want HMAC of the golden projection %s", got, want)
 	}
 }

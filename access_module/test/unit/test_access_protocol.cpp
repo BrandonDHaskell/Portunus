@@ -1,9 +1,10 @@
 /* Unit tier: server_comm's device-protocol logic (access_protocol).
  * No ESP-IDF, no mbedTLS, no Nanopb, no sdkconfig. Bare host compiler.
  *
- * The response-projection golden vector is shared with
- * server/internal/devicesig/devicesig_test.go. Change one, change both
- * (CLAUDE.md hazard #5). */
+ * Every projection is checked against proto/testdata/hmac_vectors.txt,
+ * which the Go tests in server/internal/grpcapi and server/internal/devicesig
+ * also read (CLAUDE.md hazard #5). The HMAC column is checked on the Go
+ * side; the firmware's mbedTLS HMAC needs the component tier (PROTO-19). */
 #include "unity.h"
 #include "access_protocol.hpp"
 #include "error_codes.hpp"
@@ -13,6 +14,7 @@
 #include <string.h>
 #include <time.h>
 #include <string>
+#include <vector>
 
 /* Production sets TZ=UTC0 in server_comm_init; tests start from the same. */
 void setUp(void) {
@@ -24,8 +26,7 @@ void tearDown(void) {}
 static const char *MODULE = "door-001";
 static const char *CRED   = "04:A3:2B:1C";
 static const char *NONCE  = "000102030405060708090a0b0c0d0e0f";
-static const char *GOLDEN_GRANT = "access_resp|door-001|04:A3:2B:1C|000102030405060708090a0b0c0d0e0f|1";
-static const char *GOLDEN_DENY  = "access_resp|door-001|04:A3:2B:1C|000102030405060708090a0b0c0d0e0f|0";
+static const char *GRANT_PROJ = "access_resp|door-001|04:A3:2B:1C|000102030405060708090a0b0c0d0e0f|1";
 
 /* ── A stand-in HMAC: keyed, input-sensitive, 64 lowercase hex chars ──────── */
 
@@ -118,7 +119,7 @@ void test_projections_refuse_null_and_truncation(void) {
     TEST_ASSERT_FALSE(proto_heartbeat_projection(tiny, sizeof tiny, MODULE, 42));
     TEST_ASSERT_EQUAL_CHAR('\0', tiny[0]);
 
-    const size_t len = strlen(GOLDEN_GRANT);
+    const size_t len = strlen(GRANT_PROJ);
     std::string exact(len + 1, 'x');
     TEST_ASSERT_TRUE(access_response_projection(&exact[0], len + 1, MODULE, CRED, NONCE, true));
     std::string shy(len, 'x');
@@ -128,23 +129,84 @@ void test_projections_refuse_null_and_truncation(void) {
 
 /* ── Response projection and signature check ─────────────────────────────── */
 
-/* PROTO-04 / PROTO-20 (D1): golden vector, bound to the nonce. */
-void test_response_projection_golden(void) {
-    char buf[PROTO_RESPONSE_PROJECTION_CAP];
-    TEST_ASSERT_TRUE(access_response_projection(buf, sizeof buf, MODULE, CRED, NONCE, true));
-    TEST_ASSERT_EQUAL_STRING(GOLDEN_GRANT, buf);
-    TEST_ASSERT_TRUE(access_response_projection(buf, sizeof buf, MODULE, CRED, NONCE, false));
-    TEST_ASSERT_EQUAL_STRING(GOLDEN_DENY, buf);
+/* ── Shared golden vectors (PROTO-18) ────────────────────────────────────── */
 
-    char other[PROTO_RESPONSE_PROJECTION_CAP];
-    TEST_ASSERT_TRUE(access_response_projection(other, sizeof other, MODULE, CRED,
-                                                "ffffffffffffffffffffffffffffffff", false));
-    TEST_ASSERT_NOT_EQUAL(0, strcmp(buf, other));
+struct Vector {
+    std::string kind;
+    std::vector<std::string> fields;   /* "" where the file has "-" */
+    std::string projection;
+};
 
-    /* The longest inputs Nanopb allows fit PROTO_RESPONSE_PROJECTION_CAP. */
-    const std::string module(32, 'm');
-    TEST_ASSERT_TRUE(access_response_projection(buf, sizeof buf, module.c_str(),
-                                                "00:11:22:33:44:55:66:77:88:99", NONCE, true));
+static std::vector<Vector> load_vectors(void) {
+    std::vector<Vector> out;
+    FILE *f = fopen(PORTUNUS_HMAC_VECTORS, "r");
+    TEST_ASSERT_NOT_NULL_MESSAGE(f, PORTUNUS_HMAC_VECTORS);
+    char line[512];
+    while (fgets(line, sizeof line, f) != nullptr) {
+        std::vector<std::string> parts;
+        for (char *tok = strtok(line, " \t\r\n"); tok != nullptr; tok = strtok(nullptr, " \t\r\n")) {
+            parts.emplace_back(tok);
+        }
+        if (parts.empty() || parts[0][0] == '#' || parts[0] == "key") continue;
+        TEST_ASSERT_TRUE(parts.size() >= 3);
+        Vector v;
+        v.kind = parts[0];
+        for (size_t i = 1; i + 2 < parts.size(); ++i) v.fields.push_back(parts[i] == "-" ? "" : parts[i]);
+        v.projection = parts[parts.size() - 2];
+        out.push_back(v);
+    }
+    fclose(f);
+    return out;
+}
+
+static std::vector<uint8_t> unhex(const std::string &h) {
+    std::vector<uint8_t> b;
+    for (size_t i = 0; i + 1 < h.size(); i += 2) b.push_back(static_cast<uint8_t>(strtoul(h.substr(i, 2).c_str(), nullptr, 16)));
+    return b;
+}
+
+/* PROTO-18 (and PROTO-01..04, 20): every projection kind matches the file
+ * the Go server's tests read, byte for byte. */
+void test_shared_golden_vectors(void) {
+    const std::vector<Vector> vectors = load_vectors();
+    int seen[4] = {};
+    for (const Vector &v : vectors) {
+        char buf[256];
+        bool ok;
+        if (v.kind == "heartbeat") {
+            ok = proto_heartbeat_projection(buf, sizeof buf, v.fields[0].c_str(),
+                                            static_cast<uint32_t>(strtoul(v.fields[1].c_str(), nullptr, 10)));
+            ++seen[0];
+        } else if (v.kind == "access") {
+            ok = proto_access_projection(buf, sizeof buf, v.fields[0].c_str(), v.fields[1].c_str(),
+                                         v.fields[2].c_str(), v.fields[3].c_str());
+            ++seen[1];
+        } else if (v.kind == "provision") {
+            const std::vector<uint8_t> uid = unhex(v.fields[1]);
+            ok = proto_provision_projection(buf, sizeof buf, v.fields[0].c_str(), uid.data(), uid.size());
+            ++seen[2];
+        } else if (v.kind == "access_resp") {
+            ok = access_response_projection(buf, PROTO_RESPONSE_PROJECTION_CAP, v.fields[0].c_str(),
+                                            v.fields[1].c_str(), v.fields[2].c_str(), v.fields[3] == "1");
+            ++seen[3];
+        } else {
+            TEST_FAIL_MESSAGE(v.kind.c_str());
+            continue;
+        }
+        TEST_ASSERT_TRUE_MESSAGE(ok, v.projection.c_str());
+        TEST_ASSERT_EQUAL_STRING(v.projection.c_str(), buf);
+    }
+    for (int k = 0; k < 4; ++k) TEST_ASSERT_GREATER_THAN_INT(0, seen[k]);
+}
+
+/* PROTO-20 (D1): the decision projection is bound to the nonce. */
+void test_response_projection_bound_to_nonce(void) {
+    char a[PROTO_RESPONSE_PROJECTION_CAP], b[PROTO_RESPONSE_PROJECTION_CAP];
+    TEST_ASSERT_TRUE(access_response_projection(a, sizeof a, MODULE, CRED, NONCE, true));
+    TEST_ASSERT_EQUAL_STRING(GRANT_PROJ, a);
+    TEST_ASSERT_TRUE(access_response_projection(b, sizeof b, MODULE, CRED,
+                                                "ffffffffffffffffffffffffffffffff", true));
+    TEST_ASSERT_NOT_EQUAL(0, strcmp(a, b));
 }
 
 /* PROTO-05 / 06: a correct signature verifies for a grant and for a deny. */
@@ -361,7 +423,8 @@ int main(void) {
     RUN_TEST(test_access_projection);
     RUN_TEST(test_provision_projection);
     RUN_TEST(test_projections_refuse_null_and_truncation);
-    RUN_TEST(test_response_projection_golden);
+    RUN_TEST(test_shared_golden_vectors);
+    RUN_TEST(test_response_projection_bound_to_nonce);
     RUN_TEST(test_valid_signature_verifies);
     RUN_TEST(test_missing_signature);
     RUN_TEST(test_signature_for_deny_cannot_grant);

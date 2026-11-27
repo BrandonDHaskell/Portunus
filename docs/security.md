@@ -194,7 +194,7 @@ The server also signs every access decision, and the firmware verifies the signa
 access_resp|{module_id}|{credential_id}|{nonce_hex}|{1 or 0}
 ```
 
-`nonce_hex` is the request's 16-byte nonce, so a signed grant verifies only for the request that asked for it: a captured response cannot be replayed to open the door for a later read of the same card. The `access_resp` prefix keeps a response signature from ever matching a request projection. Both transports compute it in `server/internal/devicesig`; the firmware builds it in `access_module/services/server_comm/src/access_projection.cpp`, and the two share a golden-vector test. A response with a missing or wrong signature is treated as a deny.
+`nonce_hex` is the request's 16-byte nonce, so a signed grant verifies only for the request that asked for it: a captured response cannot be replayed to open the door for a later read of the same card. The `access_resp` prefix keeps a response signature from ever matching a request projection. Both transports compute it in `server/internal/devicesig`; the firmware builds it in `access_module/services/server_comm/src/access_protocol.cpp`. Every projection in this section, request and response, is checked on both sides against the shared golden vectors in `proto/testdata/hmac_vectors.txt`. A response with a missing or wrong signature is treated as a deny.
 
 ### Enforcement is configuration-dependent
 
