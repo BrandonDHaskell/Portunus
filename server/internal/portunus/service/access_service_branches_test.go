@@ -149,9 +149,9 @@ func TestDecide_StoreErrors_NeverGrant(t *testing.T) {
 		devices     store.DeviceStore
 		ma          store.MemberAccessStore
 		mo          store.ModuleAuthorizationStore
-		wantEventRs string // "" = no event expected
+		wantEventRs string
 	}{
-		{"device registry error", errDeviceStore{}, nil, nil, ""},
+		{"device registry error", errDeviceStore{}, nil, nil, "module_lookup_error"},
 		{"member lookup error", nil, errMemberStore{f.ma}, nil, "member_lookup_error"},
 		{"authorization lookup error", nil, nil, errAuthStore{f.mo}, "member_lookup_error"},
 	}
@@ -166,12 +166,6 @@ func TestDecide_StoreErrors_NeverGrant(t *testing.T) {
 				t.Fatal("granted despite a store error")
 			}
 			got := events.Events()
-			if tc.wantEventRs == "" {
-				if len(got) != 0 {
-					t.Fatalf("unexpected events %+v", got)
-				}
-				return
-			}
 			if len(got) != 1 || got[0].Granted || got[0].Reason != tc.wantEventRs {
 				t.Fatalf("events = %+v, want one %s deny", got, tc.wantEventRs)
 			}

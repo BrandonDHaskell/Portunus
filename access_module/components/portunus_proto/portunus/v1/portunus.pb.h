@@ -124,7 +124,8 @@ typedef struct _portunus_v1_AccessResponse {
         | "authorization_revoked" | "authorization_expired"
  Longest value: "invalid_credential_format" | "credential_not_authorized" (25 chars).
  Nanopb max_size:33 (32 chars + NUL) — never add a reason longer than 32.
- Note: "member_lookup_error" and "service_misconfigured" appear in the
+ Note: "module_lookup_error", "member_lookup_error" and
+ "service_misconfigured" appear in the
  audit log only; the service returns an error to the transport in those
  cases and does not populate this field. */
     char reason[33];

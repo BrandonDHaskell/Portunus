@@ -125,6 +125,7 @@ func (s *AccessService) Decide(ctx context.Context, req types.AccessRequest) (ty
 
 	known, err := s.registry.IsKnown(ctx, moduleID)
 	if err != nil {
+		s.recordEvent(ctx, req, false, "module_lookup_error", now)
 		return types.AccessResponse{}, err
 	}
 	_ = s.registry.NoteSeen(ctx, moduleID, known)
