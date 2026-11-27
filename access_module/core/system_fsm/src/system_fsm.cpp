@@ -238,8 +238,23 @@ portunus_err_t SystemFSM::start()
     boot_event.id = EVENT_SYSTEM_BOOT_COMPLETE;
     event_bus_publish(&boot_event);
 
+    /* Health that changes only on transitions, published once so listeners
+     * (server_comm's heartbeat) start from the real state: a reader that
+     * never came up never publishes READ_ERROR, and the reed switch only
+     * publishes changes. */
+    if (!m_has_reader) {
+        publish_status(EVENT_CREDENTIAL_READ_ERROR);
+    }
+#ifdef CONFIG_PORTUNUS_ENABLE_REED_SWITCH
+    if (m_has_access_point) {
+        publish_status(m_last_door_open ? EVENT_DOOR_OPENED : EVENT_DOOR_CLOSED);
+    }
+#endif
+
+    /* A lock that failed on a previous stop() is not known to have cleared. */
     if (m_has_feedback) {
-        m_feedback->indicate(feedback_type_t::SYSTEM_READY);
+        m_feedback->indicate(m_lock_fault ? feedback_type_t::STRIKE_FAULT
+                                          : feedback_type_t::SYSTEM_READY);
     }
 
     ESP_LOGI(TAG, "System FSM running — state=OPERATIONAL");
@@ -304,13 +319,17 @@ portunus_err_t SystemFSM::stop()
         if (lock_err != PORTUNUS_OK) {
             ESP_LOGE(TAG, "Strike did not lock on stop (0x%" PRIx32 "): door may be unlocked",
                      (uint32_t)lock_err);
-            m_lock_fault = true;
+            if (!m_lock_fault) {
+                m_lock_fault = true;
+                publish_status(EVENT_STRIKE_FAULT);
+            }
             if (m_has_feedback) {
-                m_feedback->indicate(feedback_type_t::SYSTEM_ERROR);
+                m_feedback->indicate(feedback_type_t::STRIKE_FAULT);
             }
             result = PORTUNUS_ERR_LOCK_FAILED;
-        } else {
+        } else if (m_lock_fault) {
             m_lock_fault = false;
+            publish_status(EVENT_STRIKE_RECOVERED);
         }
     }
 
@@ -397,6 +416,22 @@ void SystemFSM::publish_credential_read(const credential_t &cred)
     }
 }
 
+/* A status event with no payload beyond a timestamp. A refused publish is
+ * counted like any lost event (D-T5); the bus counts it for telemetry. */
+void SystemFSM::publish_status(portunus_event_id_t id)
+{
+    portunus_event_t event;
+    memset(&event, 0, sizeof(event));
+    event.id = id;
+    if (id == EVENT_DOOR_OPENED || id == EVENT_DOOR_CLOSED) {
+        event.payload.door_opened.timestamp_ms = m_clock->now_ms();
+    }
+    if (event_bus_publish(&event) != PORTUNUS_OK) {
+        ESP_LOGE(TAG, "Status event 0x%04x not published (event bus full)", (unsigned)id);
+        m_dropped++;
+    }
+}
+
 void SystemFSM::on_event_bus_event(const portunus_event_t *event, void *ctx)
 {
     auto *fsm = static_cast<SystemFSM *>(ctx);
@@ -413,6 +448,7 @@ void SystemFSM::on_event_bus_event(const portunus_event_t *event, void *ctx)
     if (xQueueSend(fsm->m_event_queue, event, pdMS_TO_TICKS(10)) != pdTRUE) {
         ESP_LOGW(TAG, "FSM event queue full: dropped event 0x%04x", event->id);
         fsm->m_dropped++;
+        event_bus_note_subscriber_drop();
     }
 }
 
@@ -679,12 +715,14 @@ void SystemFSM::note_lock_result(bool locked)
     if (!locked && !m_lock_fault) {
         m_lock_fault = true;
         ESP_LOGE(TAG, "Strike did not lock; retrying, door may be unlocked");
+        publish_status(EVENT_STRIKE_FAULT);
         if (m_has_feedback) {
-            m_feedback->indicate(feedback_type_t::SYSTEM_ERROR);
+            m_feedback->indicate(feedback_type_t::STRIKE_FAULT);
         }
     } else if (locked && m_lock_fault) {
         m_lock_fault = false;
         ESP_LOGI(TAG, "Strike locked after retrying");
+        publish_status(EVENT_STRIKE_RECOVERED);
         if (m_has_feedback) {
             m_feedback->indicate(feedback_type_t::SYSTEM_READY);
         }

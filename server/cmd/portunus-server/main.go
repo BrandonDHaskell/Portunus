@@ -75,6 +75,7 @@ func main() {
 	// Services
 	registry := service.NewDeviceRegistry(deviceStore)
 	heartbeatSvc := service.NewHeartbeatService(heartbeatStore, registry)
+	heartbeatSvc.SetLogger(logger)
 
 	// Heartbeat pruner (background goroutine)
 	pruner := service.NewHeartbeatPruner(heartbeatStore, service.PrunerConfig{

@@ -100,7 +100,7 @@ public:
      *
      * @return PORTUNUS_OK once stopped and locked (or if not running);
      *         PORTUNUS_ERR_LOCK_FAILED if the lock did not take (logged and
-     *         shown as SYSTEM_ERROR: the door may be unlocked and nothing is
+     *         shown as STRIKE_FAULT: the door may be unlocked and nothing is
      *         left to retry); PORTUNUS_ERR_TIMEOUT if a task did not stop in
      *         time. The strike is then not touched: the still-running FSM
      *         task keeps enforcing the hold timer. Call stop() again.
@@ -149,7 +149,7 @@ private:
      *  poll until lock() succeeds, without waiting for the hold to expire. */
     bool    m_relock_retry = false;
     /** lock() has failed and not yet succeeded since: the door may be stuck
-     *  unlocked, so SYSTEM_ERROR is shown until it locks. */
+     *  unlocked, so STRIKE_FAULT is shown until it locks. */
     bool    m_lock_fault = false;
 
     /* ── Reed switch tracking ─────────────────────────────────────────────── */
@@ -191,6 +191,7 @@ private:
     bool receive_and_process(TickType_t timeout); /**< run() steps 1-2 */
     void check_dropped_events();
     void publish_credential_read(const credential_t &cred);
+    void publish_status(portunus_event_id_t id);
     void poll_credential();                      /**< Credential polling loop */
     void process_event(const portunus_event_t &event);
     void poll_reed_switch();

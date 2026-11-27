@@ -66,6 +66,13 @@ func (s *HeartbeatStore) UpsertHeartbeat(ctx context.Context, moduleID string, r
 		freeHeap = rec.Request.FreeHeapBytes
 	}
 
+	// Health: NULL when not reported. dropped_events is always reported by
+	// firmware that knows the field; 0 from older firmware also reads as 0.
+	doorClosed := nullableBool(rec.Request.DoorClosed)
+	readerOK := nullableBool(rec.Request.ReaderOK)
+	strikeOK := nullableBool(rec.Request.StrikeOK)
+	dropped := rec.Request.DroppedEvents
+
 	return s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		if err := ensureModule(ctx, tx, moduleID, recvMs); err != nil {
 			return err
@@ -74,9 +81,11 @@ func (s *HeartbeatStore) UpsertHeartbeat(ctx context.Context, moduleID string, r
 		// Insert heartbeat event (append-only)
 		if _, err := tx.ExecContext(ctx, `
 INSERT INTO module_heartbeats(
-  module_id, received_at_ms, seq, uptime_ms, fw_version, wifi_rssi, ip, free_heap_bytes
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-`, moduleID, recvMs, seq, uptimeMs, fw, rssi, ip, freeHeap); err != nil {
+  module_id, received_at_ms, seq, uptime_ms, fw_version, wifi_rssi, ip, free_heap_bytes,
+  door_closed, reader_ok, strike_ok, dropped_events
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+`, moduleID, recvMs, seq, uptimeMs, fw, rssi, ip, freeHeap,
+			doorClosed, readerOK, strikeOK, dropped); err != nil {
 			return fmt.Errorf("UpsertHeartbeat insert heartbeat: %w", err)
 		}
 
@@ -117,4 +126,15 @@ WHERE received_at_ms < ?;
 		return nil
 	})
 	return deleted, err
+}
+
+// nullableBool maps an optional bool to an SQLite 0/1 INTEGER, or NULL.
+func nullableBool(b *bool) any {
+	if b == nil {
+		return nil
+	}
+	if *b {
+		return 1
+	}
+	return 0
 }

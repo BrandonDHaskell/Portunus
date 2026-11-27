@@ -9,6 +9,12 @@ type HeartbeatRequest struct {
 	IP              string `json:"ip,omitempty"`
 	FreeHeapBytes   uint32 `json:"free_heap_bytes,omitempty"`
 	Sequence        uint32 `json:"sequence,omitempty"`
+
+	// Module health. ReaderOK and StrikeOK are nil when the module does not
+	// report them (no reader or strike, or older firmware).
+	ReaderOK      *bool  `json:"reader_ok,omitempty"`
+	StrikeOK      *bool  `json:"strike_ok,omitempty"`
+	DroppedEvents uint32 `json:"dropped_events,omitempty"`
 }
 
 type HeartbeatResponse struct {

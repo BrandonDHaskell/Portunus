@@ -290,6 +290,62 @@ func TestHeartbeatStore_UpsertHeartbeat_NilRSSI(t *testing.T) {
 	}
 }
 
+// Health fields are stored as 0/1, an unreported optional flag as NULL
+// (unknown, not false), and dropped_events as given.
+func TestHeartbeatStore_UpsertHeartbeat_Health(t *testing.T) {
+	f, tr := false, true
+	tests := []struct {
+		name                             string
+		door, reader, strike             *bool
+		dropped                          uint32
+		wantDoor, wantReader, wantStrike sql.NullInt64
+	}{
+		// reader and strike always differ, so a swapped column is caught.
+		{"reader down", &tr, &f, &tr, 5,
+			sql.NullInt64{Int64: 1, Valid: true}, sql.NullInt64{Int64: 0, Valid: true}, sql.NullInt64{Int64: 1, Valid: true}},
+		{"strike down", &f, &tr, &f, 0,
+			sql.NullInt64{Int64: 0, Valid: true}, sql.NullInt64{Int64: 1, Valid: true}, sql.NullInt64{Int64: 0, Valid: true}},
+		{"unreported", nil, nil, nil, 0, sql.NullInt64{}, sql.NullInt64{}, sql.NullInt64{}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			conn := openTestDB(t)
+			w := newTestWriter(t, conn)
+			hs := sqlitestore.NewHeartbeatStore(conn, w)
+
+			err := hs.UpsertHeartbeat(context.Background(), "door-001", store.HeartbeatRecord{
+				ReceivedAt: time.Now().UTC(),
+				Request: types.HeartbeatRequest{
+					ModuleID:      "door-001",
+					DoorClosed:    tc.door,
+					ReaderOK:      tc.reader,
+					StrikeOK:      tc.strike,
+					DroppedEvents: tc.dropped,
+				},
+			})
+			if err != nil {
+				t.Fatalf("UpsertHeartbeat: %v", err)
+			}
+
+			var door, reader, strike, dropped sql.NullInt64
+			err = conn.QueryRowContext(context.Background(),
+				`SELECT door_closed, reader_ok, strike_ok, dropped_events
+				   FROM module_heartbeats WHERE module_id = ?`, "door-001",
+			).Scan(&door, &reader, &strike, &dropped)
+			if err != nil {
+				t.Fatalf("query: %v", err)
+			}
+			if door != tc.wantDoor || reader != tc.wantReader || strike != tc.wantStrike {
+				t.Errorf("door=%v reader=%v strike=%v, want %v %v %v",
+					door, reader, strike, tc.wantDoor, tc.wantReader, tc.wantStrike)
+			}
+			if !dropped.Valid || dropped.Int64 != int64(tc.dropped) {
+				t.Errorf("dropped_events = %v, want %d", dropped, tc.dropped)
+			}
+		})
+	}
+}
+
 func TestHeartbeatStore_UpsertHeartbeat_EmptyModuleID_NoOp(t *testing.T) {
 	conn := openTestDB(t)
 	w := newTestWriter(t, conn)

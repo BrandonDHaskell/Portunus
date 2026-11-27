@@ -71,6 +71,24 @@ message HeartbeatRequest {
 
   // Monotonically increasing heartbeat counter (resets on reboot).
   uint32 sequence = 8;
+
+  // ── Module health ──────────────────────────────────────────────────────
+  // Not covered by the HMAC projection (heartbeat|{module_id}|{sequence}).
+
+  // false while the card reader is in degraded mode (hardware fault, or it
+  // never came up). Sent by access-point modules; omitted by others.
+  optional bool reader_ok = 9;
+
+  // false after the strike failed to lock and before a lock has succeeded:
+  // the door may be stuck unlocked. Sent by access-point modules; omitted by
+  // others.
+  optional bool strike_ok = 10;
+
+  // Events lost since boot: publishes the event bus refused, plus events a
+  // subscriber (FSM or comm task) dropped because its queue was full. Each
+  // lost request was answered on the device; a rising count means a slow
+  // server, network, or task.
+  uint32 dropped_events = 11;
 }
 
 // Returned by the server to acknowledge the heartbeat.

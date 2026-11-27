@@ -67,23 +67,8 @@ func NewServer(d Dependencies) *Server {
 // ─── Heartbeat ──────────────────────────────────────────────────────────────
 
 func (s *Server) SendHeartbeat(ctx context.Context, req *pb.HeartbeatRequest) (*pb.HeartbeatResponse, error) {
-	// Convert protobuf request → domain type.
-	domainReq := types.HeartbeatRequest{
-		ModuleID:        req.GetModuleId(),
-		FirmwareVersion: req.GetFirmwareVersion(),
-		UptimeSeconds:   req.GetUptimeS(),
-		IP:              req.GetIp(),
-		FreeHeapBytes:   req.GetFreeHeapBytes(),
-		Sequence:        req.GetSequence(),
-	}
-	if req.DoorClosed != nil {
-		dc := req.GetDoorClosed()
-		domainReq.DoorClosed = &dc
-	}
-	if req.RssiDbm != nil {
-		rssi := int(req.GetRssiDbm())
-		domainReq.RSSIDbm = &rssi
-	}
+	// Convert protobuf request → domain type (shared with HTTP).
+	domainReq := pbconvert.HeartbeatRequestFromProto(req)
 
 	// Delegate to the service layer (same code path as HTTP).
 	resp, err := s.heartbeatService.Record(ctx, domainReq)

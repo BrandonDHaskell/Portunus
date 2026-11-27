@@ -9,25 +9,7 @@ import (
 // ── Heartbeat ────────────────────────────────────────────────────────────────
 
 func heartbeatRequestFromProto(p *pb.HeartbeatRequest) types.HeartbeatRequest {
-	req := types.HeartbeatRequest{
-		ModuleID:        p.GetModuleId(),
-		FirmwareVersion: p.GetFirmwareVersion(),
-		UptimeSeconds:   p.GetUptimeS(),
-		IP:              p.GetIp(),
-		FreeHeapBytes:   p.GetFreeHeapBytes(),
-		Sequence:        p.GetSequence(),
-	}
-
-	if p.DoorClosed != nil {
-		v := p.GetDoorClosed()
-		req.DoorClosed = &v
-	}
-	if p.RssiDbm != nil {
-		v := int(p.GetRssiDbm())
-		req.RSSIDbm = &v
-	}
-
-	return req
+	return pbconvert.HeartbeatRequestFromProto(p)
 }
 
 func heartbeatResponseToProto(r types.HeartbeatResponse) *pb.HeartbeatResponse {

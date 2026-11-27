@@ -51,6 +51,20 @@ typedef struct _portunus_v1_HeartbeatRequest {
     uint32_t free_heap_bytes;
     /* Monotonically increasing heartbeat counter (resets on reboot). */
     uint32_t sequence;
+    /* false while the card reader is in degraded mode (hardware fault, or it
+ never came up). Sent by access-point modules; omitted by others. */
+    bool has_reader_ok;
+    bool reader_ok;
+    /* false after the strike failed to lock and before a lock has succeeded:
+ the door may be stuck unlocked. Sent by access-point modules; omitted by
+ others. */
+    bool has_strike_ok;
+    bool strike_ok;
+    /* Events lost since boot: publishes the event bus refused, plus events a
+ subscriber (FSM or comm task) dropped because its queue was full. Each
+ lost request was answered on the device; a rising count means a slow
+ server, network, or task. */
+    uint32_t dropped_events;
 } portunus_v1_HeartbeatRequest;
 
 /* Returned by the server to acknowledge the heartbeat.
@@ -164,13 +178,13 @@ extern "C" {
 
 
 /* Initializer values for message structs */
-#define portunus_v1_HeartbeatRequest_init_default {"", "", 0, false, 0, false, 0, "", 0, 0}
+#define portunus_v1_HeartbeatRequest_init_default {"", "", 0, false, 0, false, 0, "", 0, 0, false, 0, false, 0, 0}
 #define portunus_v1_HeartbeatResponse_init_default {0, 0, "", ""}
 #define portunus_v1_AccessRequest_init_default   {"", "", false, 0, "", {0, {0}}}
 #define portunus_v1_AccessResponse_init_default  {0, 0, 0, "", "", ""}
 #define portunus_v1_ProvisionCredentialRequest_init_default {"", {0, {0}}}
 #define portunus_v1_ProvisionCredentialResponse_init_default {"", _portunus_v1_ProvisionStatus_MIN, ""}
-#define portunus_v1_HeartbeatRequest_init_zero   {"", "", 0, false, 0, false, 0, "", 0, 0}
+#define portunus_v1_HeartbeatRequest_init_zero   {"", "", 0, false, 0, false, 0, "", 0, 0, false, 0, false, 0, 0}
 #define portunus_v1_HeartbeatResponse_init_zero  {0, 0, "", ""}
 #define portunus_v1_AccessRequest_init_zero      {"", "", false, 0, "", {0, {0}}}
 #define portunus_v1_AccessResponse_init_zero     {0, 0, 0, "", "", ""}
@@ -186,6 +200,9 @@ extern "C" {
 #define portunus_v1_HeartbeatRequest_ip_tag      6
 #define portunus_v1_HeartbeatRequest_free_heap_bytes_tag 7
 #define portunus_v1_HeartbeatRequest_sequence_tag 8
+#define portunus_v1_HeartbeatRequest_reader_ok_tag 9
+#define portunus_v1_HeartbeatRequest_strike_ok_tag 10
+#define portunus_v1_HeartbeatRequest_dropped_events_tag 11
 #define portunus_v1_HeartbeatResponse_ok_tag     1
 #define portunus_v1_HeartbeatResponse_known_tag  2
 #define portunus_v1_HeartbeatResponse_module_id_tag 3
@@ -216,7 +233,10 @@ X(a, STATIC,   OPTIONAL, BOOL,     door_closed,       4) \
 X(a, STATIC,   OPTIONAL, INT32,    rssi_dbm,          5) \
 X(a, STATIC,   SINGULAR, STRING,   ip,                6) \
 X(a, STATIC,   SINGULAR, UINT32,   free_heap_bytes,   7) \
-X(a, STATIC,   SINGULAR, UINT32,   sequence,          8)
+X(a, STATIC,   SINGULAR, UINT32,   sequence,          8) \
+X(a, STATIC,   OPTIONAL, BOOL,     reader_ok,         9) \
+X(a, STATIC,   OPTIONAL, BOOL,     strike_ok,        10) \
+X(a, STATIC,   SINGULAR, UINT32,   dropped_events,   11)
 #define portunus_v1_HeartbeatRequest_CALLBACK NULL
 #define portunus_v1_HeartbeatRequest_DEFAULT NULL
 
@@ -279,7 +299,7 @@ extern const pb_msgdesc_t portunus_v1_ProvisionCredentialResponse_msg;
 #define PORTUNUS_V1_PORTUNUS_V1_PORTUNUS_PB_H_MAX_SIZE portunus_v1_HeartbeatRequest_size
 #define portunus_v1_AccessRequest_size           126
 #define portunus_v1_AccessResponse_size          115
-#define portunus_v1_HeartbeatRequest_size        142
+#define portunus_v1_HeartbeatRequest_size        152
 #define portunus_v1_HeartbeatResponse_size       79
 #define portunus_v1_ProvisionCredentialRequest_size 46
 #define portunus_v1_ProvisionCredentialResponse_size 105

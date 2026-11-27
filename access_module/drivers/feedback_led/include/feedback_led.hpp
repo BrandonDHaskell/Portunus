@@ -8,9 +8,10 @@
  *
  * Pattern types:
  *   - One-shot (ACCESS_GRANTED, ACCESS_DENIED, results): run to
- *     completion, then return to the SYSTEM_READY blink if it was the
- *     last baseline indicated, otherwise LED off.
- *   - Continuous (SYSTEM_READY, SYSTEM_ERROR): loop until replaced.
+ *     completion, then return to the last baseline indicated
+ *     (SYSTEM_READY or STRIKE_FAULT), otherwise LED off.
+ *   - Continuous (SYSTEM_READY, SYSTEM_ERROR, STRIKE_FAULT): loop until
+ *     replaced.
  *   - Held (CARD_READ): LED stays on until replaced.
  *   - NONE: cancel current pattern, LED off immediately.
  *

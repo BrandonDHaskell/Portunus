@@ -44,7 +44,10 @@ typedef enum {
 
     /* Door state events: 0x04xx */
     EVENT_DOOR_OPENED   = 0x0400,     /**< Reed switch: door transitioned to open */
-    EVENT_DOOR_CLOSED,                /**< Reed switch: door transitioned to closed */
+    EVENT_DOOR_CLOSED,                /**< Reed switch: door transitioned to closed (or the
+                                           initial state, published once by the FSM's start()) */
+    EVENT_STRIKE_FAULT,               /**< Strike failed to lock: door may be unlocked */
+    EVENT_STRIKE_RECOVERED,           /**< Strike locked again after a fault */
 
     /* FSM command events: 0x05xx */
     EVENT_FSM_UNLOCK_TIMEOUT = 0x0500,/**< FSM unlock hold timer expired */

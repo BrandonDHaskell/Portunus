@@ -264,6 +264,7 @@ void ProvisioningFSM::on_event_bus_event(const portunus_event_t *event, void *ct
     if (xQueueSend(fsm->m_event_queue, event, pdMS_TO_TICKS(10)) != pdTRUE) {
         ESP_LOGW(TAG, "FSM queue full: dropped event 0x%04x", event->id);
         fsm->m_dropped++;
+        event_bus_note_subscriber_drop();
     }
 }
 

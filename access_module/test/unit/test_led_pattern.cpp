@@ -35,7 +35,7 @@ static const ft ALL[] = {
     ft::PROVISIONING_SUCCESS, ft::PROVISIONING_DUPLICATE, ft::PROVISIONING_UNAUTHORIZED,
     ft::PEU_IDLE, ft::PEU_ARMED_CAPTURE, ft::PEU_ARMED_ENROLL, ft::PEU_RESULT_PENDING,
     ft::PEU_RESULT_SUCCESS, ft::PEU_RESULT_DUPLICATE, ft::PEU_RESULT_UNAUTHORIZED,
-    ft::PEU_RESULT_ERROR,
+    ft::PEU_RESULT_ERROR, ft::STRIKE_FAULT,
 };
 
 /* DRV-06: expected trace for every pattern. One-shots are shown through their
@@ -76,6 +76,8 @@ void test_every_pattern_trace(void) {
                              trace(ft::PEU_RESULT_UNAUTHORIZED, 30).c_str());
     TEST_ASSERT_EQUAL_STRING(trace(ft::SYSTEM_ERROR, 16).c_str(),
                              trace(ft::PEU_RESULT_ERROR, 16).c_str());
+    TEST_ASSERT_EQUAL_STRING(trace(ft::SYSTEM_ERROR, 16).c_str(),
+                             trace(ft::STRIKE_FAULT, 16).c_str());
 }
 
 /* DRV-06b: the unauthorised pattern shows three rapid blinks, as documented.
@@ -134,6 +136,32 @@ void test_error_is_not_sticky_and_none_clears_baseline(void) {
     TEST_ASSERT_EQUAL_STRING("....", run(e, 4).c_str());
 }
 
+/* DRV-07c: a strike that failed to lock may leave the door unlocked, so its
+ * blink is a baseline: a card tapped during the fault (CARD_READ, then the
+ * grant or deny one-shot) returns to STRIKE_FAULT, not to the READY blink.
+ * SYSTEM_READY, indicated when the strike locks again, clears it. */
+void test_strike_fault_outlasts_one_shots(void) {
+    const ft one_shots[] = {ft::ACCESS_DENIED, ft::ACCESS_GRANTED};
+    for (const ft shot : one_shots) {
+        led_engine_t e;
+        led_engine_indicate(e, ft::SYSTEM_READY);
+        led_engine_indicate(e, ft::STRIKE_FAULT);
+        run(e, 5);
+        led_engine_indicate(e, ft::CARD_READ);
+        run(e, 3);
+        led_engine_indicate(e, shot);
+        run(e, led_pattern_length(shot) + 1);
+        TEST_ASSERT_EQUAL(ft::STRIKE_FAULT, e.current);
+        /* Resumed one tick into its cycle, like any baseline. */
+        TEST_ASSERT_EQUAL_STRING(("###...." + rep("####....", 2)).c_str(), run(e, 23).c_str());
+
+        led_engine_indicate(e, ft::SYSTEM_READY);
+        led_engine_indicate(e, ft::ACCESS_DENIED);
+        run(e, led_pattern_length(ft::ACCESS_DENIED) + 1);
+        TEST_ASSERT_EQUAL(ft::SYSTEM_READY, e.current);
+    }
+}
+
 /* DRV-08: a new indication preempts mid-pattern and restarts at tick 0. */
 void test_preemption_resets_tick(void) {
     led_engine_t e;
@@ -186,7 +214,7 @@ void test_every_type_has_a_pattern(void) {
         const bool sized = k == led_pattern_kind_t::ONE_SHOT || k == led_pattern_kind_t::CONTINUOUS;
         TEST_ASSERT_EQUAL(sized, led_pattern_length(type) > 0);
     }
-    TEST_ASSERT_EQUAL_INT(static_cast<int>(ft::PEU_RESULT_ERROR) + 1,
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ft::STRIKE_FAULT) + 1,
                           static_cast<int>(sizeof ALL / sizeof ALL[0]));
 }
 
@@ -196,6 +224,7 @@ int main(void) {
     RUN_TEST(test_unauthorized_has_three_rapid_blinks);
     RUN_TEST(test_one_shot_returns_to_ready_baseline);
     RUN_TEST(test_error_is_not_sticky_and_none_clears_baseline);
+    RUN_TEST(test_strike_fault_outlasts_one_shots);
     RUN_TEST(test_preemption_resets_tick);
     RUN_TEST(test_continuous_tick_stays_bounded);
     RUN_TEST(test_out_of_range_value_is_inert);

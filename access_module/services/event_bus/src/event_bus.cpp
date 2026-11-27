@@ -40,6 +40,7 @@ static QueueHandle_t s_event_queue  = NULL;
 /* QUEUE_FULL refusals (any publishing task: atomic) and the dispatcher's
  * view of how full the queue stays (dispatcher only). D-T5. */
 static std::atomic<uint32_t> s_dropped{0};
+static std::atomic<uint32_t> s_subscriber_drops{0};   /* reported by subscribers */
 static queue_pressure_t      s_queue_pressure = {};
 static TaskHandle_t  s_dispatch_task = NULL;
 
@@ -193,8 +194,9 @@ void event_bus_reset_for_test(void)
         s_dispatch_mutex = NULL;
     }
     bus_core_init(s_subscribers, s_subscriber_storage, MAX_EVENT_SUBSCRIBERS);
-    s_dropped        = 0;
-    s_queue_pressure = {};
+    s_dropped          = 0;
+    s_subscriber_drops = 0;
+    s_queue_pressure   = {};
 }
 #endif
 
@@ -230,6 +232,16 @@ portunus_err_t event_bus_unsubscribe(portunus_event_id_t event_id,
 uint32_t event_bus_dropped_events(void)
 {
     return s_dropped.load();
+}
+
+void event_bus_note_subscriber_drop(void)
+{
+    s_subscriber_drops++;
+}
+
+uint32_t event_bus_lost_events(void)
+{
+    return s_dropped.load() + s_subscriber_drops.load();
 }
 
 portunus_err_t event_bus_subscribe(portunus_event_id_t event_id,
