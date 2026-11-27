@@ -108,6 +108,34 @@ void test_subscribe_during_dispatch_affects_next_event(void) {
     TEST_ASSERT_TRUE((g_calls == std::vector<int>{0, 9}));
 }
 
+/* D-T9: unsubscribe removes exactly the first (id, handler, ctx) match, keeps
+ * the rest in registration order, and frees the slot. */
+void test_unsubscribe(void) {
+    bus_core_sub_t storage[CAP];
+    bus_core_t core;
+    bus_core_init(core, storage, CAP);
+    bus_core_subscribe(core, EVENT_ACCESS_GRANTED, tagger, tag(1));
+    bus_core_subscribe(core, EVENT_ACCESS_GRANTED, tagger, tag(2));
+    bus_core_subscribe(core, EVENT_ACCESS_GRANTED, tagger, tag(1));
+    bus_core_subscribe(core, EVENT_ACCESS_GRANTED, tagger, tag(3));
+
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, bus_core_unsubscribe(core, EVENT_ACCESS_GRANTED, tagger, tag(1)));
+    g_calls.clear();
+    publish(core, EVENT_ACCESS_GRANTED);
+    TEST_ASSERT_TRUE((g_calls == std::vector<int>{2, 1, 3}));
+
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_NOT_SUBSCRIBED,
+                      bus_core_unsubscribe(core, EVENT_ACCESS_DENIED, tagger, tag(2)));   /* wrong id */
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_NOT_SUBSCRIBED,
+                      bus_core_unsubscribe(core, EVENT_ACCESS_GRANTED, tagger, tag(9)));  /* wrong ctx */
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_INVALID_ARG,
+                      bus_core_unsubscribe(core, EVENT_ACCESS_GRANTED, nullptr, nullptr));
+    TEST_ASSERT_EQUAL_size_t(3, core.count);
+
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, bus_core_subscribe(core, EVENT_HEARTBEAT, tagger, tag(4)));  /* slot freed */
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_MAX_SUBSCRIBERS, bus_core_subscribe(core, EVENT_HEARTBEAT, tagger, tag(5)));
+}
+
 /* Re-initialising empties the table over the same storage. */
 void test_init_clears(void) {
     bus_core_sub_t storage[CAP];
@@ -128,5 +156,6 @@ int main(void) {
     RUN_TEST(test_registration_order_and_filter);
     RUN_TEST(test_subscribe_during_dispatch_affects_next_event);
     RUN_TEST(test_init_clears);
+    RUN_TEST(test_unsubscribe);
     return UNITY_END();
 }

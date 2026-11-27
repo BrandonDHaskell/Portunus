@@ -91,6 +91,20 @@ bool server_comm_clock_synced(void);
  */
 uint32_t server_comm_dropped_events(void);
 
+/**
+ * @brief Stop server_comm and release everything init created (D-T9).
+ *
+ * Removes its event bus subscriptions, asks the comm task to stop and waits
+ * for it to finish the request in hand (up to the RPC timeouts), answers any
+ * request still queued (deny or COMM_ERROR, reason "shutdown"), destroys the
+ * gRPC client and clears its state. server_comm_init() may then run again.
+ *
+ * @return PORTUNUS_OK once stopped (or if not initialised), or
+ *         PORTUNUS_ERR_TIMEOUT if the task did not finish in time; it is then
+ *         left running, unsubscribed, and deinit may be called again.
+ */
+portunus_err_t server_comm_deinit(void);
+
 #ifdef CONFIG_PORTUNUS_TEST_HOOKS
 /* Test-only entry points. CONFIG_PORTUNUS_TEST_HOOKS is defined only by the
  * component tier's Kconfig, so no firmware build contains these. */
@@ -101,6 +115,9 @@ uint32_t server_comm_dropped_events(void);
  * component is idle. Event bus subscriptions are not removed; reset the bus
  * as well.
  */
+/* How long server_comm_deinit() waits for the comm task; <= 0 restores the
+ * default. Reset by server_comm_reset_for_test(). */
+void server_comm_set_stop_timeout_for_test(int ms);
 void server_comm_reset_for_test(void);
 
 /**

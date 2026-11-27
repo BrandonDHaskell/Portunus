@@ -35,6 +35,13 @@ void bus_core_init(bus_core_t &core, bus_core_sub_t *storage, size_t capacity);
 portunus_err_t bus_core_subscribe(bus_core_t &core, portunus_event_id_t id,
                                   bus_core_handler_t handler, void *ctx);
 
+/** Remove the first subscription matching (id, handler, ctx), keeping the
+ *  rest in registration order.
+ *  @return PORTUNUS_OK, PORTUNUS_ERR_INVALID_ARG (NULL handler) or
+ *          PORTUNUS_ERR_NOT_SUBSCRIBED (no match). */
+portunus_err_t bus_core_unsubscribe(bus_core_t &core, portunus_event_id_t id,
+                                    bus_core_handler_t handler, void *ctx);
+
 /** Copy the table into `out` (at least `capacity` entries) and return the
  *  count. Take it under the caller's lock, then dispatch without the lock:
  *  a handler may subscribe, and the new subscriber gets the next event. */

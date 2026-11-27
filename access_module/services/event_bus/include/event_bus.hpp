@@ -87,6 +87,23 @@ portunus_err_t event_bus_subscribe(portunus_event_id_t event_id,
                                    void *ctx);
 
 /**
+ * @brief Remove a subscription made with event_bus_subscribe() (same id,
+ * handler and ctx; the first match if subscribed more than once).
+ *
+ * When it returns, the handler is not running and will not run again, so the
+ * caller may free ctx: it waits for a dispatch already delivering to it.
+ * Called from inside a handler (the dispatcher task) it cannot wait for the
+ * delivery it is part of; the handler is then only guaranteed not to run for
+ * later events.
+ *
+ * @return PORTUNUS_OK, PORTUNUS_ERR_INVALID_ARG (NULL handler),
+ *         PORTUNUS_ERR_NOT_INIT, or PORTUNUS_ERR_NOT_SUBSCRIBED.
+ */
+portunus_err_t event_bus_unsubscribe(portunus_event_id_t event_id,
+                                     event_bus_handler_t handler,
+                                     void *ctx);
+
+/**
  * @brief Publishes refused with PORTUNUS_ERR_QUEUE_FULL since init (D-T5).
  * Each refusal is also reported to its publisher, which answers it; this
  * count is for logs and telemetry.

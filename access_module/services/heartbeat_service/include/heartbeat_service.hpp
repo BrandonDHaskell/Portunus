@@ -29,9 +29,15 @@ portunus_err_t heartbeat_service_start(void);
 /**
  * @brief Stop the heartbeat service.
  *
- * Deletes the heartbeat task. Safe to call if the service is not running.
+ * Asks the task to stop and waits for it to finish its current heartbeat
+ * and exit; it is never deleted mid-publish. A later start begins again at
+ * sequence 0. Safe to call when not running.
+ *
+ * @return PORTUNUS_OK once stopped (or if not running), or
+ *         PORTUNUS_ERR_TIMEOUT if the task did not exit in time; it is then
+ *         left running and stop may be called again.
  */
-void heartbeat_service_stop(void);
+portunus_err_t heartbeat_service_stop(void);
 
 #ifdef __cplusplus
 }
