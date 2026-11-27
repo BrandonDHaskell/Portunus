@@ -1,0 +1,4 @@
+# server_comm access point without HMAC (SC-12). Production refuses this
+# outside dev builds (server_comm.cpp #error), so it is a dev build.
+CONFIG_PORTUNUS_ENV_DEV=y
+# CONFIG_PORTUNUS_HMAC_ENABLED is not set

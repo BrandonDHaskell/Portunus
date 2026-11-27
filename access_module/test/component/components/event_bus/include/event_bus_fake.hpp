@@ -16,6 +16,7 @@ void event_bus_fake_fail_next(size_t n, portunus_err_t err);
 size_t event_bus_fake_count(void);
 size_t event_bus_fake_count_of(portunus_event_id_t id);
 size_t event_bus_fake_subscriber_count(void);
+size_t event_bus_fake_subscribers_for(portunus_event_id_t id);
 
 /** Pointer into the record. Only safe while no other task publishes;
  *  with a live publisher task use event_bus_fake_copy. */

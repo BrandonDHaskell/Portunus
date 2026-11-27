@@ -139,6 +139,19 @@ jobs:
             -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.hb" set-target linux build
           $APP/build/hb/portunus_host_tests.elf
 
+      - name: Component tier, server_comm (access point, no-HMAC dev, PEU)
+        run: |
+          . $IDF_PATH/export.sh
+          APP=$PWD/access_module/test/component
+          for V in "sc:sdkconfig.defaults;sdkconfig.defaults.sc" \
+                   "sc-nohmac:sdkconfig.defaults;sdkconfig.defaults.sc;sdkconfig.defaults.sc_nohmac" \
+                   "sc-peu:sdkconfig.defaults;sdkconfig.defaults.sc;sdkconfig.defaults.peu"; do
+            N=${V%%:*}; D=${V#*:}
+            idf.py --preview -C $APP -B $APP/build/$N -D SDKCONFIG=$APP/build/$N/sdkconfig \
+              -D "SDKCONFIG_DEFAULTS=$D" -DPORTUNUS_TEST_SERVER_COMM=ON set-target linux build
+            $APP/build/$N/portunus_host_tests.elf
+          done
+
       - name: Component tier, portunus_nvs (emulated flash)
         run: |
           . $IDF_PATH/export.sh

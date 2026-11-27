@@ -131,3 +131,10 @@ size_t event_bus_fake_subscriber_count(void) {
     Guard g;
     return g_subs.count;
 }
+
+size_t event_bus_fake_subscribers_for(portunus_event_id_t id) {
+    Guard g;
+    size_t n = 0;
+    for (size_t i = 0; i < g_subs.count; ++i) if (g_subs.subs[i].id == id) ++n;
+    return n;
+}

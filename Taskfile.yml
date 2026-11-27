@@ -450,7 +450,7 @@ tasks:
         "${BUILD}/portunus_host_tests.elf"
 
   test:firmware:component:
-    desc: "Firmware component tier: IDF linux target, POSIX FreeRTOS, fake event bus (access point, PEU, heartbeat, NVS)"
+    desc: "Firmware component tier: IDF linux target, POSIX FreeRTOS, fake event bus (access point, PEU, heartbeat, NVS, server_comm x3)"
     cmds:
       - "{{.FIRMWARE_DIR}}/test/component/check_kconfig_overrides.sh"   # COMP-05
       - task: test:firmware:_variant
@@ -461,6 +461,12 @@ tasks:
         vars: { VARIANT: hb, DEFAULTS: "sdkconfig.defaults;sdkconfig.defaults.hb", EXTRA: "-DPORTUNUS_TEST_NVS=OFF" }
       - task: test:firmware:_variant
         vars: { VARIANT: nvs, DEFAULTS: "sdkconfig.defaults", EXTRA: "-DPORTUNUS_TEST_NVS=ON" }
+      - task: test:firmware:_variant
+        vars: { VARIANT: sc, DEFAULTS: "sdkconfig.defaults;sdkconfig.defaults.sc", EXTRA: "-DPORTUNUS_TEST_SERVER_COMM=ON" }
+      - task: test:firmware:_variant
+        vars: { VARIANT: sc-nohmac, DEFAULTS: "sdkconfig.defaults;sdkconfig.defaults.sc;sdkconfig.defaults.sc_nohmac", EXTRA: "-DPORTUNUS_TEST_SERVER_COMM=ON" }
+      - task: test:firmware:_variant
+        vars: { VARIANT: sc-peu, DEFAULTS: "sdkconfig.defaults;sdkconfig.defaults.sc;sdkconfig.defaults.peu", EXTRA: "-DPORTUNUS_TEST_SERVER_COMM=ON" }
 
   test:firmware:integration:
     desc: "Firmware integration tier: IDF linux target, real event bus and dispatcher task"
