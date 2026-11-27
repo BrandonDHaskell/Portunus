@@ -168,6 +168,19 @@ jobs:
             -DPORTUNUS_TEST_NVS=ON set-target linux build
           $APP/build/nvs/portunus_host_tests.elf
 
+      # The hardware tier runs on a bench board (task test:firmware:hardware);
+      # CI only compiles it so it cannot rot.
+      - name: Hardware tier app (compile only, both variants)
+        run: |
+          . $IDF_PATH/export.sh
+          APP=$PWD/access_module/test/hardware
+          for V in "active_high:sdkconfig.defaults" \
+                   "active_low:sdkconfig.defaults;sdkconfig.defaults.active_low"; do
+            N=${V%%:*}; D=${V#*:}
+            idf.py -C $APP -B $APP/build/$N -D SDKCONFIG=$APP/build/$N/sdkconfig \
+              -D "SDKCONFIG_DEFAULTS=$D" build
+          done
+
       - name: Integration tier (real event bus)
         run: |
           . $IDF_PATH/export.sh

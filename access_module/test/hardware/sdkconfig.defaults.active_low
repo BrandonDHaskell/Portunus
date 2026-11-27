@@ -1,0 +1,3 @@
+# Hardware tier, build B: active-low strike, normally-closed reed switch.
+CONFIG_PORTUNUS_DOOR_STRIKE_ACTIVE_LOW=y
+CONFIG_PORTUNUS_REED_SWITCH_NC=y
