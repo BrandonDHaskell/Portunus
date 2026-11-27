@@ -33,6 +33,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 
 /**
  * @brief System FSM — coordinates modules and manages system state.
@@ -88,6 +89,29 @@ public:
      * @return PORTUNUS_OK on success.
      */
     portunus_err_t start();
+
+    /**
+     * @brief Stop the FSM and leave the door locked (D-T9).
+     *
+     * Removes the event bus subscriptions, asks both tasks to stop and waits
+     * for each to finish what it is doing, then, with nothing else driving
+     * the strike, locks it (always: locking a locked strike is harmless).
+     * The FSM can be started again. A no-op if not running.
+     *
+     * @return PORTUNUS_OK once stopped and locked (or if not running);
+     *         PORTUNUS_ERR_LOCK_FAILED if the lock did not take (logged and
+     *         shown as SYSTEM_ERROR: the door may be unlocked and nothing is
+     *         left to retry); PORTUNUS_ERR_TIMEOUT if a task did not stop in
+     *         time. The strike is then not touched: the still-running FSM
+     *         task keeps enforcing the hold timer. Call stop() again.
+     */
+    portunus_err_t stop();
+
+    /** Stops the FSM (see stop()) and frees its queue. */
+    ~SystemFSM();
+
+    SystemFSM(const SystemFSM &)            = delete;
+    SystemFSM &operator=(const SystemFSM &) = delete;
 
     /** @brief Get the current system state. */
     system_state_t state() const { return m_state; }
@@ -149,6 +173,14 @@ private:
     TaskHandle_t  m_fsm_task_handle  = nullptr;
     TaskHandle_t  m_poll_task_handle = nullptr;
     QueueHandle_t m_event_queue      = nullptr;  /**< Internal event queue */
+
+    /* ── Cooperative shutdown (D-T9) ──────────────────────────────────────── */
+    /* stop() sets the flag and wakes both tasks; each exits at the top of its
+     * loop and gives its semaphore. */
+    std::atomic<bool> m_stop_requested{false};
+    SemaphoreHandle_t m_fsm_exited  = nullptr;
+    SemaphoreHandle_t m_poll_exited = nullptr;
+    bool              m_subscribed  = false;
 
     /* ── Task entry points ────────────────────────────────────────────────── */
     static void fsm_task_entry(void *arg);

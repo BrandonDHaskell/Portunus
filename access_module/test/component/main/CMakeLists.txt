@@ -32,6 +32,7 @@ idf_component_register(
         provisioning_fsm
         heartbeat_service
         linux_time_shim
+        wifi_mgr            # the stub, for wifi_mgr_fake_set_connected
         event_bus
         portunus_types
         portunus_config
