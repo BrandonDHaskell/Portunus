@@ -21,6 +21,7 @@ if(PORTUNUS_TEST_REAL_BUS)
 else()
     idf_component_register(
         SRCS "src/event_bus_fake.cpp"
+             "${AM}/services/event_bus/src/event_bus_core.cpp"
         INCLUDE_DIRS "${AM}/services/event_bus/include" "include"
         REQUIRES portunus_types portunus_config
         PRIV_REQUIRES freertos)
