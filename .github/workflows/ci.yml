@@ -98,7 +98,7 @@ jobs:
       - name: Unit tier (ASan + UBSan)
         run: task test:firmware:unit PRESET=host-asan
 
-      - name: Unit tier (32-bit size_t, ESP32 width)
+      - name: Unit tier (ESP32-S3 data model, 32-bit)
         run: task test:firmware:unit:m32
 
   firmware-component:

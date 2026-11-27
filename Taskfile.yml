@@ -411,7 +411,7 @@ tasks:
       - ctest --preset {{.PRESET}}
 
   test:firmware:unit:m32:
-    desc: "Firmware unit tier with 32-bit size_t, the ESP32 width (needs gcc-multilib)"
+    desc: "Firmware unit tier on the ESP32-S3 data model: ILP32, 64-bit time_t, unsigned char (needs gcc-multilib, g++-multilib)"
     cmds:
       - task: test:firmware:unit
         vars: { PRESET: host-m32 }

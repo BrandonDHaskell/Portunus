@@ -34,11 +34,11 @@
     {
       "name": "host-m32",
       "inherits": "host",
-      "displayName": "Unit tests, 32-bit size_t (ESP32 width)",
-      "description": "Requires gcc-multilib/g++-multilib. Catches size_t wrap bugs that 64-bit hosts hide.",
+      "displayName": "Unit tests, ESP32-S3 data model (ILP32, 64-bit time_t, unsigned char)",
+      "description": "Requires gcc-multilib and g++-multilib. Matches the Xtensa ESP32-S3 types that 64-bit hosts hide: 4-byte pointers, size_t and long; 8-byte time_t (glibc _TIME_BITS=64, as ESP-IDF 5); unsigned char. test_target_abi checks the preset still does.",
       "cacheVariables": {
-        "CMAKE_C_FLAGS": "-m32",
-        "CMAKE_CXX_FLAGS": "-m32",
+        "CMAKE_C_FLAGS": "-m32 -D_TIME_BITS=64 -D_FILE_OFFSET_BITS=64 -funsigned-char -DPORTUNUS_ESP32_DATA_MODEL=1",
+        "CMAKE_CXX_FLAGS": "-m32 -D_TIME_BITS=64 -D_FILE_OFFSET_BITS=64 -funsigned-char -DPORTUNUS_ESP32_DATA_MODEL=1",
         "CMAKE_EXE_LINKER_FLAGS": "-m32"
       }
     },
