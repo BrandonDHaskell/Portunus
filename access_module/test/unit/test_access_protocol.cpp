@@ -268,7 +268,6 @@ void test_parse_server_time(void) {
 /* PROTO-14 (F7): anything but a valid UTC timestamp is rejected instead of
  * being normalised or read as UTC. */
 void test_parse_rejects_malformed(void) {
-    TEST_IGNORE_MESSAGE("F7: parse_server_time normalises out-of-range fields and ignores offsets; un-ignored by the fix");
     struct timeval tv;
     const char *bad[] = {
         "2026-13-45T99:99:99Z",            /* out-of-range fields */
@@ -285,15 +284,34 @@ void test_parse_rejects_malformed(void) {
         "2026-01-02T03:04:05.1234567890Z", /* ten digits */
         "2026-1-02T03:04:05Z",             /* not zero-padded */
         "2026-01-02 03:04:05Z",
+        "2100-02-29T00:00:00Z",            /* century, not a leap year */
+        "1969-12-31T23:59:59Z",            /* before the epoch */
     };
     for (const char *s : bad) {
         TEST_ASSERT_FALSE_MESSAGE(proto_parse_server_time(s, &tv), s);
     }
 }
 
+/* The date arithmetic agrees with libc's timegm on every day from 1970 to
+ * 2100 (leap years and century rules included), and 2000-02-29 parses. */
+void test_parse_matches_timegm_every_day(void) {
+    struct timeval tv;
+    TEST_ASSERT_TRUE(proto_parse_server_time("2000-02-29T00:00:00Z", &tv));
+    char s[32];
+    /* 32-bit time_t (the host-m32 preset) stops at 2037. */
+    const int last_year = sizeof(time_t) >= 8 ? 2100 : 2037;
+    for (time_t day = utc(1970, 1, 1, 12, 34, 56); day <= utc(last_year, 12, 31, 12, 34, 56);
+         day += 86400) {
+        struct tm tm;
+        gmtime_r(&day, &tm);
+        strftime(s, sizeof s, "%Y-%m-%dT%H:%M:%SZ", &tm);
+        TEST_ASSERT_TRUE_MESSAGE(proto_parse_server_time(s, &tv), s);
+        TEST_ASSERT_EQUAL_INT64_MESSAGE(day, tv.tv_sec, s);
+    }
+}
+
 /* PROTO-15 (F7): the result does not depend on the process time zone. */
 void test_parse_independent_of_tz(void) {
-    TEST_IGNORE_MESSAGE("F7: parse_server_time depends on the process TZ; un-ignored by the fix");
     struct timeval in_utc, in_la;
     TEST_ASSERT_TRUE(proto_parse_server_time("2026-07-04T12:00:00.5Z", &in_utc));
     setenv("TZ", "America/Los_Angeles", 1);
@@ -354,6 +372,7 @@ int main(void) {
     RUN_TEST(test_provision_status_mapping);
     RUN_TEST(test_parse_server_time);
     RUN_TEST(test_parse_rejects_malformed);
+    RUN_TEST(test_parse_matches_timegm_every_day);
     RUN_TEST(test_parse_independent_of_tz);
     RUN_TEST(test_add_half_rtt);
     RUN_TEST(test_requested_at_round_trip);

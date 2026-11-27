@@ -863,7 +863,8 @@ portunus_err_t server_comm_init(const portunus_device_config_t *cfg)
                  s_server_host, (int)s_grpc_port);
     }
 
-    /* Clock: operate in UTC so mktime() in proto_parse_server_time() is correct. */
+    /* Clock: keep local time equal to UTC for anything that formats local
+     * time. proto_parse_server_time() no longer depends on TZ (F7). */
     setenv("TZ", "UTC0", 1);
     tzset();
 

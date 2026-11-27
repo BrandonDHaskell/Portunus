@@ -1,7 +1,6 @@
 #include "access_protocol.hpp"
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -157,45 +156,100 @@ provision_result_reason_t proto_provision_reason(int status)
 
 /* ── Wire timestamps ──────────────────────────────────────────────────────── */
 
+/* Exactly n ASCII digits at s; stops at the first non-digit, so it never
+ * reads past a NUL. */
+static bool read_digits(const char *s, int n, int *out)
+{
+    int v = 0;
+    for (int i = 0; i < n; ++i) {
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        if (c < '0' || c > '9') {
+            return false;
+        }
+        v = v * 10 + (c - '0');
+    }
+    *out = v;
+    return true;
+}
+
+static bool is_leap(int y)
+{
+    return (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+}
+
+static int days_in_month(int y, int m)
+{
+    static const int days[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    return (m == 2 && is_leap(y)) ? 29 : days[m - 1];
+}
+
+/* Days from 1970-01-01 to y-m-d in the proleptic Gregorian calendar
+ * (H. Hinnant, "chrono-Compatible Low-Level Date Algorithms"). */
+static int64_t days_from_civil(int y, int m, int d)
+{
+    y -= m <= 2;
+    const int64_t era = (y >= 0 ? y : y - 399) / 400;
+    const int64_t yoe = y - era * 400;
+    const int64_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 719468;
+}
+
 bool proto_parse_server_time(const char *s, struct timeval *out)
 {
-    if (s == nullptr || s[0] == '\0' || out == nullptr) {
+    /* Exactly "YYYY-MM-DDTHH:MM:SS", an optional fraction of 1 to 9 digits,
+     * then "Z" and the end of the string: what the server's
+     * time.Now().UTC().Format(time.RFC3339Nano) produces. Anything else
+     * (offsets, out-of-range fields, trailing bytes) is rejected rather than
+     * normalised, and UTC is computed from the fields directly, so the
+     * result does not depend on the process TZ. */
+    if (s == nullptr || out == nullptr) {
         return false;
     }
-
     int year, mon, mday, hour, min, sec;
-    if (sscanf(s, "%4d-%2d-%2dT%2d:%2d:%2d", &year, &mon, &mday, &hour, &min, &sec) < 6) {
+    if (!read_digits(s, 4, &year) || s[4] != '-' ||
+        !read_digits(s + 5, 2, &mon) || s[7] != '-' ||
+        !read_digits(s + 8, 2, &mday) || s[10] != 'T' ||
+        !read_digits(s + 11, 2, &hour) || s[13] != ':' ||
+        !read_digits(s + 14, 2, &min) || s[16] != ':' ||
+        !read_digits(s + 17, 2, &sec)) {
+        return false;
+    }
+    if (year < 1970 || mon < 1 || mon > 12 || mday < 1 || mday > days_in_month(year, mon) ||
+        hour > 23 || min > 59 || sec > 59) {
+        return false;
+    }
+    /* A 32-bit time_t (not ESP-IDF 5, but a 32-bit host) would wrap after
+     * 2038-01-19: refuse rather than return a wrong time. */
+    if (sizeof(time_t) < 8 && year > 2037) {
         return false;
     }
 
-    struct tm tm = {};
-    tm.tm_year  = year - 1900;
-    tm.tm_mon   = mon - 1;
-    tm.tm_mday  = mday;
-    tm.tm_hour  = hour;
-    tm.tm_min   = min;
-    tm.tm_sec   = sec;
-    tm.tm_isdst = 0;
-
-    /* Relies on the process TZ being UTC0 (set in server_comm_init). */
-    const time_t t = mktime(&tm);
-    if (t == (time_t)-1) {
-        return false;
-    }
-
+    const char *p = s + 19;
     long usec = 0;
-    const char *dot = strchr(s, '.');
-    if (dot != nullptr) {
-        char frac[10] = {'0', '0', '0', '0', '0', '0', '0', '0', '0', '\0'};
-        int i = 0;
-        const char *p = dot + 1;
-        while (i < 9 && *p >= '0' && *p <= '9') {
-            frac[i++] = *p++;
+    if (*p == '.') {
+        ++p;
+        long ns = 0;
+        int n = 0;
+        while (n < 9 && *p >= '0' && *p <= '9') {
+            ns = ns * 10 + (*p - '0');
+            ++p;
+            ++n;
         }
-        usec = strtol(frac, nullptr, 10) / 1000;  /* ns to us */
+        if (n == 0 || (*p >= '0' && *p <= '9')) {
+            return false;                  /* empty fraction, or more than 9 digits */
+        }
+        for (; n < 9; ++n) {
+            ns *= 10;
+        }
+        usec = ns / 1000;
+    }
+    if (p[0] != 'Z' || p[1] != '\0') {
+        return false;
     }
 
-    out->tv_sec  = t;
+    out->tv_sec  = static_cast<time_t>(days_from_civil(year, mon, mday) * 86400 +
+                                       hour * 3600 + min * 60 + sec);
     out->tv_usec = static_cast<suseconds_t>(usec);
     return true;
 }

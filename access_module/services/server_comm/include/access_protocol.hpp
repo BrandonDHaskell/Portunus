@@ -105,7 +105,9 @@ provision_result_reason_t proto_provision_reason(int status);
 /* ── Wire timestamps ─────────────────────────────────────────────────────── */
 
 /** Parse the server's RFC 3339 UTC time ("2026-01-02T03:04:05.123456789Z",
- *  fraction optional) into seconds since the epoch and microseconds. */
+ *  fraction of 1 to 9 digits optional) into seconds since the epoch and
+ *  microseconds. Strict: rejects offsets, a missing "Z", out-of-range
+ *  fields and trailing bytes. Independent of the process TZ. */
 bool proto_parse_server_time(const char *s, struct timeval *out);
 
 /** Add half the round-trip to a server timestamp, carrying microseconds. */
