@@ -74,8 +74,7 @@
 /* ESP-IDF */
 #include "grpc_client.hpp"
 #include "grpc_wire.hpp"
-#include "esp_wifi.h"
-#include "esp_netif.h"
+#include "net_info.hpp"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_system.h"
@@ -230,36 +229,6 @@ static void handle_credential(const event_credential_read_t *cred);
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
 static void handle_provision(const event_provision_request_t *req);
 #endif
-
-/* ── Helpers ───────────────────────────────────────────────────────────────── */
-
-/**
- * @brief Get the station IP as a dotted-quad string.
- *        Returns false if the interface is down or has no IP.
- */
-static bool get_sta_ip_str(char *buf, size_t len)
-{
-    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if (netif == NULL) { return false; }
-
-    esp_netif_ip_info_t info;
-    if (esp_netif_get_ip_info(netif, &info) != ESP_OK) { return false; }
-    if (info.ip.addr == 0) { return false; }
-
-    snprintf(buf, len, IPSTR, IP2STR(&info.ip));
-    return true;
-}
-
-/**
- * @brief Get WiFi RSSI.  Returns false if unavailable.
- */
-static bool get_rssi(int32_t *out)
-{
-    wifi_ap_record_t ap;
-    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) { return false; }
-    *out = ap.rssi;
-    return true;
-}
 
 /* ── Clock sync helpers ────────────────────────────────────────────────────── */
 
@@ -441,12 +410,12 @@ static void handle_heartbeat(const event_heartbeat_t *hb)
     req.free_heap_bytes = hb->free_heap_bytes;
     req.sequence        = hb->sequence;
 
-    if (get_sta_ip_str(req.ip, sizeof(req.ip))) {
+    if (net_info_sta_ip(req.ip, sizeof(req.ip))) {
         /* ip populated */
     }
 
     int32_t rssi;
-    if (get_rssi(&rssi)) {
+    if (net_info_rssi(&rssi)) {
         req.has_rssi_dbm = true;
         req.rssi_dbm     = rssi;
     }

@@ -8,7 +8,7 @@
 # Depends on: event_bus (subscribe/publish), wifi_mgr (connection check),
 # portunus_proto (nanopb messages), grpc_client (HTTP/2+TLS transport),
 # mbedtls (provides esp_crt_bundle.h and the HMAC-SHA256 mbedtls/md.h API),
-# esp_wifi and esp_netif (for RSSI and IP in heartbeat requests), plus common
+# net_info (station IP and RSSI for heartbeat requests), plus common
 # portunus_types and portunus_config for error codes and network parameters.
 #
 # ── Component naming rules learned the hard way ─────────────────────────────
@@ -36,8 +36,7 @@ idf_component_register(
     REQUIRES
         freertos
         mbedtls
-        esp_wifi
-        esp_netif
+        net_info
         esp_timer
         event_bus
         wifi_mgr
