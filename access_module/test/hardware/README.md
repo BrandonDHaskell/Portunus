@@ -144,3 +144,4 @@ add a container backend.
 |---|---|---|---|---|---|
 | HW-01/02, 03, 04, 05, 10 | 2026-11-27 | 85c3714 | active_high | pass (7 pass, 1 ignored) | HW-04 card check ignored: no card resting on the reader. Free heap unchanged (374,256 bytes). |
 | HW-01/02, 03, 04, 05, 10 | 2026-11-27 | 85c3714 | active_low | pass (7 pass, 1 ignored) | As above. Powered-down reader returned 0x3002 (timeout) on every poll. |
+| HW-06, 07, 08, 09, WIFI-HW | 2026-11-27 | 943d2eb | net | pass (7 pass), 5 runs | First heartbeat 3.3 to 4.7 s after startup, first grant about 0.5 s later. Hold 5,091 ms (5,000 configured). wifi_reconn stack: 560 bytes free (244 on the connect-failure path, seen under a mutation). |
