@@ -61,6 +61,13 @@ typedef enum {
  */
 class ProvisioningFSM {
 public:
+    /** Event ids start() subscribes to. Public so main.cpp can check the
+     *  event bus subscriber budget at compile time (COMP-01). */
+    static constexpr portunus_event_id_t kSubscribedEvents[] = {
+        EVENT_PROVISION_SUCCESS, EVENT_PROVISION_FAILED,
+        EVENT_CREDENTIAL_READ,   EVENT_ARM_REQUESTED,
+    };
+
     /**
      * @param reader    Credential reader (must not be nullptr).
      * @param feedback  Feedback LED (nullptr disables indication).

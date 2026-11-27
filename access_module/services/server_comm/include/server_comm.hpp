@@ -42,6 +42,14 @@ extern "C" {
 #endif
 
 /**
+ * @brief Event bus subscriptions server_comm_init() makes, in either variant:
+ * heartbeat, reader fault, reader recovery, and the variant's request event
+ * (credential read or provision request). main.cpp checks the subscriber
+ * budget against it (COMP-01); server_comm.cpp asserts it matches its list.
+ */
+#define SERVER_COMM_SUBSCRIPTION_COUNT 4
+
+/**
  * @brief Initialise and start the server communication component.
  *
  * Creates the internal queue, registers event bus subscribers for

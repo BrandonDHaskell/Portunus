@@ -128,11 +128,7 @@ portunus_err_t ProvisioningFSM::start()
 
     /* A missing subscription would leave the FSM deaf to card reads or
      * results, so treat any failure as fatal. */
-    static const portunus_event_id_t kEvents[] = {
-        EVENT_PROVISION_SUCCESS, EVENT_PROVISION_FAILED,
-        EVENT_CREDENTIAL_READ,   EVENT_ARM_REQUESTED,
-    };
-    for (portunus_event_id_t id : kEvents) {
+    for (portunus_event_id_t id : kSubscribedEvents) {
         portunus_err_t err = event_bus_subscribe(id, on_event_bus_event, this);
         if (err != PORTUNUS_OK) {
             ESP_LOGE(TAG, "Subscribe to event 0x%04x failed (0x%" PRIx32 ")",
