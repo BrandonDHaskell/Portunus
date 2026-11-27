@@ -41,6 +41,7 @@ extern "C" {
 /* ── Module errors (credential reader, access point, feedback) ─────────────── */
 #define PORTUNUS_ERR_INVALID_ARG     (PORTUNUS_ERR_BASE_MODULE + 0x01)  /**< NULL pointer or out-of-range argument */
 #define PORTUNUS_ERR_TIMEOUT         (PORTUNUS_ERR_BASE_MODULE + 0x02)  /**< Operation timed out */
+#define PORTUNUS_ERR_LOCK_FAILED     (PORTUNUS_ERR_BASE_MODULE + 0x03)  /**< Strike did not lock; door may be unlocked */
 
 /* ── Network errors (WiFi, HTTP, protobuf) ─────────────────────────────────── */
 #define PORTUNUS_ERR_BASE_NETWORK    0x4000

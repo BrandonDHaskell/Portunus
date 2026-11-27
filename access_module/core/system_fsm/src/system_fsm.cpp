@@ -35,11 +35,17 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 
 #include <string.h>
 #include <inttypes.h>
 
 static const char *TAG = "fsm";
+
+/* stop() waits this long for each task: the FSM task wakes at once from its
+ * queue wait, and neither task blocks for longer than one event bus publish
+ * or one reader transaction. */
+#define FSM_STOP_TIMEOUT_MS  2000
 
 /* ── Task configuration ───────────────────────────────────────────────────── */
 
@@ -151,6 +157,21 @@ portunus_err_t SystemFSM::start()
 {
     ESP_LOGI(TAG, "Starting system FSM");
 
+    if (m_fsm_task_handle != nullptr || m_poll_task_handle != nullptr) {
+        return PORTUNUS_ERR_ALREADY_INIT;
+    }
+    if (m_fsm_exited == nullptr) {
+        m_fsm_exited = xSemaphoreCreateBinary();
+    }
+    if (m_poll_exited == nullptr) {
+        m_poll_exited = xSemaphoreCreateBinary();
+    }
+    if (m_event_queue == nullptr || m_fsm_exited == nullptr || m_poll_exited == nullptr) {
+        m_state = SYSTEM_STATE_ERROR;
+        return m_event_queue == nullptr ? PORTUNUS_ERR_NOT_INIT : PORTUNUS_ERR_TASK_CREATE;
+    }
+    m_stop_requested = false;
+
     /* ── Subscribe to event bus events ──────────────────────────────────── */
     /* A missing subscription would silently stop grants or card reads from
      * reaching the FSM, so treat any failure as fatal. */
@@ -159,10 +180,17 @@ portunus_err_t SystemFSM::start()
         if (err != PORTUNUS_OK) {
             ESP_LOGE(TAG, "Subscribe to event 0x%04x failed (0x%" PRIx32 ")",
                      (unsigned)id, (uint32_t)err);
+            for (portunus_event_id_t done : kSubscribedEvents) {
+                if (done == id) {
+                    break;
+                }
+                (void)event_bus_unsubscribe(done, on_event_bus_event, this);
+            }
             m_state = SYSTEM_STATE_ERROR;
             return PORTUNUS_ERR_SUBSCRIBE;
         }
     }
+    m_subscribed = true;
 
     /* ── Start FSM task ─────────────────────────────────────────────────── */
     BaseType_t ret = xTaskCreate(
@@ -175,6 +203,8 @@ portunus_err_t SystemFSM::start()
     );
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create FSM task");
+        m_fsm_task_handle = nullptr;
+        (void)stop();
         m_state = SYSTEM_STATE_ERROR;
         return PORTUNUS_ERR_TASK_CREATE;
     }
@@ -191,6 +221,7 @@ portunus_err_t SystemFSM::start()
         );
         if (ret != pdPASS) {
             ESP_LOGE(TAG, "Failed to create credential polling task");
+            m_poll_task_handle = nullptr;
             m_has_reader = false;
         } else {
             ESP_LOGI(TAG, "Credential polling task started (interval=%d ms)",
@@ -228,6 +259,88 @@ system_capabilities_t SystemFSM::caps() const
 system_capabilities_t SystemFSM::capabilities() const
 {
     return caps();
+}
+
+/* ── stop() ───────────────────────────────────────────────────────────────── */
+
+portunus_err_t SystemFSM::stop()
+{
+    if (m_fsm_task_handle == nullptr && m_poll_task_handle == nullptr && !m_subscribed) {
+        return PORTUNUS_OK;
+    }
+
+    /* No new events once these return (unsubscribe waits out a delivery). */
+    if (m_subscribed) {
+        for (portunus_event_id_t id : kSubscribedEvents) {
+            (void)event_bus_unsubscribe(id, on_event_bus_event, this);
+        }
+        m_subscribed = false;
+    }
+
+    m_stop_requested = true;
+    if (m_poll_task_handle != nullptr) {
+        xTaskNotifyGive(m_poll_task_handle);
+        if (xSemaphoreTake(m_poll_exited, pdMS_TO_TICKS(FSM_STOP_TIMEOUT_MS)) != pdTRUE) {
+            ESP_LOGE(TAG, "Credential poll task did not stop within %d ms", FSM_STOP_TIMEOUT_MS);
+            return PORTUNUS_ERR_TIMEOUT;
+        }
+        m_poll_task_handle = nullptr;
+    }
+    if (m_fsm_task_handle != nullptr) {
+        const portunus_event_t wake = {};          /* EVENT_NONE: cut the queue wait short */
+        (void)xQueueSendToFront(m_event_queue, &wake, 0);
+        if (xSemaphoreTake(m_fsm_exited, pdMS_TO_TICKS(FSM_STOP_TIMEOUT_MS)) != pdTRUE) {
+            /* The FSM task still owns the strike and its hold timer: leave it. */
+            ESP_LOGE(TAG, "FSM task did not stop within %d ms", FSM_STOP_TIMEOUT_MS);
+            return PORTUNUS_ERR_TIMEOUT;
+        }
+        m_fsm_task_handle = nullptr;
+    }
+
+    /* Nothing else drives the strike now. Fail secure: lock it. */
+    portunus_err_t result = PORTUNUS_OK;
+    if (m_has_access_point) {
+        const portunus_err_t lock_err = m_access->lock();
+        if (lock_err != PORTUNUS_OK) {
+            ESP_LOGE(TAG, "Strike did not lock on stop (0x%" PRIx32 "): door may be unlocked",
+                     (uint32_t)lock_err);
+            m_lock_fault = true;
+            if (m_has_feedback) {
+                m_feedback->indicate(feedback_type_t::SYSTEM_ERROR);
+            }
+            result = PORTUNUS_ERR_LOCK_FAILED;
+        } else {
+            m_lock_fault = false;
+        }
+    }
+
+    /* Ready for start(): nothing pending, no hold running. */
+    (void)xQueueReset(m_event_queue);
+    cancel_unlock_timer();
+    m_pending_decisions    = 0;
+    m_decision_deadline_ms = 0;
+    m_state                = SYSTEM_STATE_INITIALIZING;
+
+    ESP_LOGI(TAG, "System FSM stopped");
+    return result;
+}
+
+SystemFSM::~SystemFSM()
+{
+    if (stop() == PORTUNUS_ERR_TIMEOUT) {
+        /* A task still uses this object: freeing its queue would be worse. */
+        ESP_LOGE(TAG, "SystemFSM destroyed while a task is still running");
+        return;
+    }
+    if (m_event_queue != nullptr) {
+        vQueueDelete(m_event_queue);
+    }
+    if (m_fsm_exited != nullptr) {
+        vSemaphoreDelete(m_fsm_exited);
+    }
+    if (m_poll_exited != nullptr) {
+        vSemaphoreDelete(m_poll_exited);
+    }
 }
 
 /* ── Event bus bridge ─────────────────────────────────────────────────────── */
@@ -325,7 +438,7 @@ void SystemFSM::run()
 
     ESP_LOGD(TAG, "FSM task running (poll_interval=%d ms)", FSM_POLL_INTERVAL_MS);
 
-    for (;;) {
+    while (!m_stop_requested) {
         /* 1-2. Wait for an event or timeout, and process it. */
         (void)receive_and_process(poll_timeout);
 
@@ -355,6 +468,9 @@ void SystemFSM::run()
         m_has_network = wifi_mgr_is_connected();
 #endif
     }
+
+    xSemaphoreGive(m_fsm_exited);
+    vTaskDelete(nullptr);
 }
 
 /* ── Event processing ─────────────────────────────────────────────────────── */
@@ -612,7 +728,7 @@ void SystemFSM::poll_credential()
     };
     reader_health_t health;
 
-    for (;;) {
+    while (!m_stop_requested) {
         reader_step_t  step;
         credential_t   cred;
         portunus_err_t err = PORTUNUS_OK;
@@ -659,7 +775,11 @@ void SystemFSM::poll_credential()
         }
 
         if (step.delay_ms > 0) {
-            vTaskDelay(pdMS_TO_TICKS(step.delay_ms));
+            /* A delay stop() can cut short (the recovery probe waits 5 s). */
+            (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(step.delay_ms));
         }
     }
+
+    xSemaphoreGive(m_poll_exited);
+    vTaskDelete(nullptr);
 }

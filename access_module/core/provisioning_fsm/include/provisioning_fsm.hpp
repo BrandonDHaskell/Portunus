@@ -44,6 +44,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 
 /** @brief PEU FSM state. */
 typedef enum {
@@ -86,6 +87,23 @@ public:
     /** @brief Start FSM task and poll task.  Call after init() and event_bus_init(). */
     portunus_err_t start();
 
+    /**
+     * @brief Stop the FSM (D-T9): remove its event bus subscriptions, stop
+     *        both tasks after what each is doing, and turn the LED off.
+     *        The FSM can be started again. A no-op if not running.
+     *
+     * @return PORTUNUS_OK once stopped (or if not running), or
+     *         PORTUNUS_ERR_TIMEOUT if a task did not stop in time; call
+     *         stop() again.
+     */
+    portunus_err_t stop();
+
+    /** Stops the FSM (see stop()) and frees its queue. */
+    ~ProvisioningFSM();
+
+    ProvisioningFSM(const ProvisioningFSM &)            = delete;
+    ProvisioningFSM &operator=(const ProvisioningFSM &) = delete;
+
     /** @brief Current FSM state (for diagnostics / tests). */
     peu_state_t state() const { return m_state; }
 
@@ -117,6 +135,12 @@ private:
     TaskHandle_t  m_fsm_task_handle  = nullptr;
     TaskHandle_t  m_poll_task_handle = nullptr;
     QueueHandle_t m_event_queue      = nullptr;
+
+    /* ── Cooperative shutdown (D-T9) ──────────────────────────────────────── */
+    std::atomic<bool> m_stop_requested{false};
+    SemaphoreHandle_t m_fsm_exited  = nullptr;
+    SemaphoreHandle_t m_poll_exited = nullptr;
+    bool              m_subscribed  = false;
 
     /* ── Task entry points ────────────────────────────────────────────────── */
     static void fsm_task_entry(void *arg);

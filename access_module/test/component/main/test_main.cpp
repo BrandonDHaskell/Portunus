@@ -21,6 +21,7 @@
 #include "../support/fake_credential_reader.hpp"
 #include "../support/fake_feedback.hpp"
 #include "../support/system_fsm_test_fixture.hpp"
+#include "wifi_mgr_fake.hpp"
 
 #ifndef PORTUNUS_TEST_REAL_BUS
 #include "../components/event_bus/include/event_bus_fake.hpp"
@@ -683,6 +684,113 @@ void test_unlock_timeout_only_after_lock_succeeds(void) {
     TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_FSM_UNLOCK_TIMEOUT));
 }
 
+/* ── Lifecycle: start() and stop() with real tasks (FSM-22, D-T9) ─────── */
+
+/* Poll until pred() holds, giving the FSM tasks time to run. */
+template <typename Pred>
+static bool wait_until(Pred pred, int timeout_ms = 2000) {
+    for (int t = 0; t < timeout_ms; t += 10) {
+        if (pred()) return true;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    return pred();
+}
+
+struct LiveRig {
+    FakeCredentialReader reader;
+    FakeAccessPoint      access;
+    FakeFeedback         fb;
+    FakeClock            clk;
+    SystemFSM            fsm{&reader, &access, &fb, &clk};
+};
+
+/* FSM-22: start() subscribes the FSM's three events, publishes BOOT_COMPLETE,
+ * shows SYSTEM_READY and goes OPERATIONAL; a second start() is refused. */
+void test_start_subscribes_and_reports_ready(void) {
+    LiveRig r;
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.init());
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.start());
+    TEST_ASSERT_EQUAL_size_t(3, event_bus_fake_subscriber_count());
+    for (portunus_event_id_t id : SystemFSM::kSubscribedEvents) {
+        TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_subscribers_for(id));
+    }
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_SYSTEM_BOOT_COMPLETE));
+    TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_READY, r.fb.last());
+    TEST_ASSERT_EQUAL(SYSTEM_STATE_OPERATIONAL, r.fsm.state());
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_ALREADY_INIT, r.fsm.start());
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.stop());
+}
+
+/* D-T9: stop() unsubscribes, ends both tasks promptly, locks the strike,
+ * and leaves the FSM ready to start again; a second stop() is a no-op. */
+void test_stop_locks_and_allows_restart(void) {
+    LiveRig r;
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.init());
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.start());
+    vTaskDelay(pdMS_TO_TICKS(100));                /* both tasks inside their loops */
+
+    const TickType_t t0 = xTaskGetTickCount();
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.stop());
+    TEST_ASSERT_LESS_THAN_UINT32(500, (xTaskGetTickCount() - t0) * portTICK_PERIOD_MS);
+    TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_subscriber_count());
+    TEST_ASSERT_EQUAL(1, r.access.locks);
+    TEST_ASSERT_TRUE(r.access.locked);
+
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.stop());
+    TEST_ASSERT_EQUAL(1, r.access.locks);
+
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.start());
+    TEST_ASSERT_EQUAL_size_t(3, event_bus_fake_subscriber_count());
+    TEST_ASSERT_EQUAL_size_t(2, event_bus_fake_count_of(EVENT_SYSTEM_BOOT_COMPLETE));
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.stop());
+}
+
+/* D-T9 decision 1: stopping during an unlock hold locks the strike rather
+ * than leaving the door open with no task left to re-lock it. */
+void test_stop_during_hold_locks_strike(void) {
+    wifi_mgr_fake_set_connected(true);
+    LiveRig r;
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.init());
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.start());
+
+    r.reader.enqueue({{0x04, 0xA3, 0x2B, 0x1C}, 4});      /* the poll task reads it */
+    TEST_ASSERT_TRUE(wait_until([] { return event_bus_fake_count_of(EVENT_CREDENTIAL_READ) == 1; }));
+    portunus_event_t grant = make_grant();
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, event_bus_publish(&grant));
+    TEST_ASSERT_TRUE(wait_until([&] { return r.access.unlocks == 1; }));
+    TEST_ASSERT_FALSE(r.access.locked);                   /* hold running (fake clock) */
+
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.stop());
+    TEST_ASSERT_TRUE(r.access.locked);
+    TEST_ASSERT_EQUAL(1, r.access.locks);
+    wifi_mgr_fake_set_connected(false);
+}
+
+/* D-T9: stop() lets the poll task finish a reader transaction instead of
+ * deleting it mid-read (on hardware: mid SPI transfer, holding the bus). */
+void test_stop_waits_for_poll_task(void) {
+    LiveRig r;
+    r.reader.read_delay_ms = 300;
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.init());
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.start());
+    TEST_ASSERT_TRUE(wait_until([&] { return r.reader.in_read; }));
+
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.stop());
+    TEST_ASSERT_FALSE(r.reader.in_read);                  /* the read finished */
+}
+
+/* D-T9 decision 1: a lock that fails on stop is reported, not hidden: the
+ * error code says so and the LED shows SYSTEM_ERROR. */
+void test_stop_reports_lock_failure(void) {
+    LiveRig r;
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.init());
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.start());
+    r.access.lock_result = PORTUNUS_ERR_GPIO_INIT;
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_LOCK_FAILED, r.fsm.stop());
+    TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_ERROR, r.fb.last());
+    TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_subscriber_count());
+}
+
 #endif /* !PORTUNUS_TEST_REAL_BUS */
 
 /* ── Fake bus conformance (T3): the fake follows the real bus's contract ─── */
@@ -1021,6 +1129,12 @@ extern "C" void app_main(void) {
     RUN_TEST(test_failed_card_publish_shows_comm_error);
     RUN_TEST(test_queue_pressure_warns_when_kept_full);
     RUN_TEST(test_unlock_timeout_only_after_lock_succeeds);
+    /* Lifecycle (FSM-22, D-T9) */
+    RUN_TEST(test_start_subscribes_and_reports_ready);
+    RUN_TEST(test_stop_locks_and_allows_restart);
+    RUN_TEST(test_stop_during_hold_locks_strike);
+    RUN_TEST(test_stop_reports_lock_failure);
+    RUN_TEST(test_stop_waits_for_poll_task);
 #endif
 
 #ifndef PORTUNUS_TEST_REAL_BUS

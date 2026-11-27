@@ -2,6 +2,8 @@
 #include "i_credential_reader.hpp"
 #include "error_codes.hpp"
 #include <queue>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 class FakeCredentialReader : public ICredentialReader {
 public:
@@ -12,9 +14,18 @@ public:
     int halts = 0;
     portunus_err_t init_result = PORTUNUS_OK;  /* what init() returns */
 
+    /* A slow reader transaction, for tests that stop a task mid-read. */
+    int           read_delay_ms = 0;
+    volatile bool in_read       = false;
+
     portunus_err_t init() override { return init_result; }
 
     portunus_err_t read(credential_t *out) override {
+        if (read_delay_ms > 0) {
+            in_read = true;
+            vTaskDelay(pdMS_TO_TICKS(read_delay_ms));
+            in_read = false;
+        }
         if (m_queue.empty()) return PORTUNUS_ERR_NO_CREDENTIAL;
         auto [err, cred] = m_queue.front();
         m_queue.pop();
