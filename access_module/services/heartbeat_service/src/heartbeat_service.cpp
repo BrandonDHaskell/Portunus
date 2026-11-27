@@ -14,12 +14,14 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_system.h"
 
 #include <string.h>
 #include <inttypes.h>
+#include <atomic>
 
 static const char *TAG = "heartbeat";
 
@@ -28,6 +30,14 @@ static const char *TAG = "heartbeat";
 
 static TaskHandle_t s_heartbeat_task = NULL;
 static uint32_t     s_sequence       = 0;
+
+/* Cooperative shutdown (D-T9): stop sets the flag and wakes the task, which
+ * exits at the top of its loop and signals s_exited. */
+static std::atomic<bool> s_stop_requested{false};
+static SemaphoreHandle_t s_exited = NULL;
+
+/* The task blocks at most in one event_bus_publish (EVENT_QUEUE_TIMEOUT_MS). */
+#define HEARTBEAT_STOP_TIMEOUT_MS  1000
 
 static void heartbeat_task(void *arg)
 {
@@ -39,7 +49,7 @@ static void heartbeat_task(void *arg)
 
     /* Publish the first heartbeat immediately rather than one interval after
      * boot: it is what registers the module as alive and syncs its clock. */
-    for (;;) {
+    while (!s_stop_requested) {
         int64_t now_us = esp_timer_get_time();
 
         portunus_event_t event;
@@ -71,8 +81,15 @@ static void heartbeat_task(void *arg)
                  event.payload.heartbeat.free_heap_bytes);
         }
 
-        vTaskDelayUntil(&last_wake, interval);
+        /* Same drift-free period as vTaskDelayUntil, but a notification
+         * (from stop) ends the wait at once. */
+        const TickType_t elapsed = xTaskGetTickCount() - last_wake;
+        ulTaskNotifyTake(pdTRUE, elapsed < interval ? interval - elapsed : 0);
+        last_wake += interval;
     }
+
+    xSemaphoreGive(s_exited);
+    vTaskDelete(NULL);
 }
 
 portunus_err_t heartbeat_service_start(void)
@@ -81,6 +98,13 @@ portunus_err_t heartbeat_service_start(void)
         ESP_LOGW(TAG, "Heartbeat service already running");
         return PORTUNUS_ERR_ALREADY_INIT;
     }
+    if (s_exited == NULL) {
+        s_exited = xSemaphoreCreateBinary();
+        if (s_exited == NULL) {
+            return PORTUNUS_ERR_TASK_CREATE;
+        }
+    }
+    s_stop_requested = false;
 
     BaseType_t ret = xTaskCreate(
         heartbeat_task,
@@ -99,12 +123,19 @@ portunus_err_t heartbeat_service_start(void)
     return PORTUNUS_OK;
 }
 
-void heartbeat_service_stop(void)
+portunus_err_t heartbeat_service_stop(void)
 {
-    if (s_heartbeat_task != NULL) {
-        vTaskDelete(s_heartbeat_task);
-        s_heartbeat_task = NULL;
-        s_sequence = 0;
-        ESP_LOGI(TAG, "Heartbeat service stopped");
+    if (s_heartbeat_task == NULL) {
+        return PORTUNUS_OK;
     }
+    s_stop_requested = true;
+    xTaskNotifyGive(s_heartbeat_task);
+    if (xSemaphoreTake(s_exited, pdMS_TO_TICKS(HEARTBEAT_STOP_TIMEOUT_MS)) != pdTRUE) {
+        ESP_LOGE(TAG, "Heartbeat task did not stop within %d ms", HEARTBEAT_STOP_TIMEOUT_MS);
+        return PORTUNUS_ERR_TIMEOUT;
+    }
+    s_heartbeat_task = NULL;
+    s_sequence       = 0;
+    ESP_LOGI(TAG, "Heartbeat service stopped");
+    return PORTUNUS_OK;
 }

@@ -19,6 +19,7 @@
 #include "freertos/task.h"
 
 #include <stdlib.h>
+#include <string.h>
 #include <vector>
 
 void setUp(void) {
@@ -103,8 +104,8 @@ void test_start_stop_lifecycle(void) {
     wait_ms(INTERVAL_MS * 3 / 2);
     TEST_ASSERT_GREATER_OR_EQUAL_size_t(2, heartbeats().size());
 
-    heartbeat_service_stop();
-    heartbeat_service_stop();                  /* second stop is a no-op */
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, heartbeat_service_stop());
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, heartbeat_service_stop());   /* second stop is a no-op */
     event_bus_fake_reset();
     event_bus_init();
     wait_ms(INTERVAL_MS * 2);
@@ -115,6 +116,46 @@ void test_start_stop_lifecycle(void) {
     const auto hb = heartbeats();
     TEST_ASSERT_EQUAL_size_t(1, hb.size());
     TEST_ASSERT_EQUAL_UINT32(0, hb[0].sequence);
+}
+
+namespace {
+volatile bool g_in_publish   = false;
+volatile bool g_publish_done = false;
+/* On the fake bus this runs inline on the heartbeat task, inside its
+ * event_bus_publish(): a long publish to stop in the middle of. */
+void slow_subscriber(const portunus_event_t *, void *) {
+    g_in_publish = true;
+    vTaskDelay(pdMS_TO_TICKS(300));
+    g_publish_done = true;
+}
+}  // namespace
+
+/* HB-06 (D-T9): stop waits for a heartbeat being published to finish instead
+ * of deleting the task mid-publish (which left the bus's lock held), and
+ * otherwise takes effect at once rather than after the interval. */
+void test_stop_is_cooperative(void) {
+    g_in_publish   = false;
+    g_publish_done = false;
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, event_bus_subscribe(EVENT_HEARTBEAT, slow_subscriber, nullptr));
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, heartbeat_service_start());
+    while (!g_in_publish) wait_ms(10);                    /* first heartbeat is publishing */
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, heartbeat_service_stop());
+    TEST_ASSERT_TRUE(g_publish_done);                     /* it finished, not killed */
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, event_bus_unsubscribe(EVENT_HEARTBEAT, slow_subscriber, nullptr));
+
+    /* The bus is still usable (its lock was released). */
+    portunus_event_t e;
+    memset(&e, 0, sizeof e);
+    e.id = EVENT_HEARTBEAT;
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, event_bus_publish(&e));
+
+    /* Stopping between heartbeats does not wait out the interval. */
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, heartbeat_service_start());
+    wait_ms(INTERVAL_MS / 4);
+    const TickType_t t0 = xTaskGetTickCount();
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, heartbeat_service_stop());
+    TEST_ASSERT_LESS_THAN_UINT32(INTERVAL_MS / 4,
+                                 (xTaskGetTickCount() - t0) * portTICK_PERIOD_MS);
 }
 
 /* HB-05: uptime_sec never goes backwards and advances with real time. */
@@ -136,6 +177,7 @@ extern "C" void app_main(void) {
     RUN_TEST(test_failed_publish_retries_same_sequence);
     RUN_TEST(test_start_stop_lifecycle);
     RUN_TEST(test_uptime_non_decreasing);
+    RUN_TEST(test_stop_is_cooperative);
     int failures = UNITY_END();
     exit(failures);
 }
