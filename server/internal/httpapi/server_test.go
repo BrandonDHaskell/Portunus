@@ -2,6 +2,9 @@ package httpapi_test
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log"
@@ -9,6 +12,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/BrandonDHaskell/Portunus/server/internal/devicesig"
 	"github.com/BrandonDHaskell/Portunus/server/internal/httpapi"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store/memory"
@@ -204,5 +208,54 @@ func TestAccessRequest_MissingCredentialID_400(t *testing.T) {
 
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+// D1: the HTTP path signs the access decision over the request's nonce with
+// the same projection as the gRPC trailer (internal/devicesig).
+func TestAccessRequest_ResponseSigSignsRequestNonce(t *testing.T) {
+	const secret = "test-secret-not-a-deployment-value"
+	registry := service.NewDeviceRegistry(memory.NewDeviceStore([]string{"door-001"}))
+	srv := httpapi.NewServer(httpapi.Dependencies{
+		Logger: log.New(io.Discard, "", 0),
+		Addr:   ":0",
+		AccessService: service.NewAccessService(registry,
+			service.AccessPolicy{AllowAll: true}, memory.NewAccessEventStore()),
+		HMACSecret: secret,
+	})
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	sigFor := func(nonce []byte) string {
+		body, err := json.Marshal(types.AccessRequest{
+			ModuleID: "door-001", CredentialID: "04:A3:2B:1C", Nonce: nonce,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write(body)
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/v1/access_request", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Portunus-Sig", hex.EncodeToString(mac.Sum(nil)))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d", resp.StatusCode)
+		}
+		return resp.Header.Get("X-Portunus-Sig")
+	}
+
+	n1 := bytes.Repeat([]byte{0x11}, 16)
+	n2 := bytes.Repeat([]byte{0x22}, 16)
+	s1, s2 := sigFor(n1), sigFor(n2)
+	if want := devicesig.AccessResponseSig(secret, "door-001", "04:A3:2B:1C", n1, true); s1 != want {
+		t.Errorf("response sig for n1 = %q, want %q", s1, want)
+	}
+	if s1 == s2 {
+		t.Error("requests with different nonces got the same signature")
 	}
 }
