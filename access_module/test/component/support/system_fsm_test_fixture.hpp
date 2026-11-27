@@ -17,6 +17,19 @@ public:
     /* Pending events in the FSM's internal queue (bridge back-pressure). */
     UBaseType_t queued() const { return uxQueueMessagesWaiting(m_fsm.m_event_queue); }
 
+    /* run() steps 1-2 with no wait: receive one queued event, sample the
+     * queue pressure, process it. False if the queue was empty. */
+    bool drain_one() { return m_fsm.receive_and_process(0); }
+
+    /* run() step 2b: react to events lost since the last check. */
+    void check_dropped() { m_fsm.check_dropped_events(); }
+
+    /* The poll task's publish of a card read (fails if the bus is full). */
+    void publish_credential(const credential_t &cred) { m_fsm.publish_credential_read(cred); }
+
+    uint32_t dropped()               const { return m_fsm.m_dropped.load(); }
+    bool     queue_pressure_warned() const { return m_fsm.m_queue_pressure.warned; }
+
     /* One reed-switch poll (run() step 3). */
     void poll_reed() { if (m_fsm.m_caps.has_access_point) m_fsm.poll_reed_switch(); }
 

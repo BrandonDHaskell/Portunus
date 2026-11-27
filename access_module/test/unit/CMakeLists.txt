@@ -122,3 +122,11 @@ add_test(NAME access_protocol COMMAND test_access_protocol)
 add_executable(test_target_abi test_target_abi.c)
 target_link_libraries(test_target_abi PRIVATE unity)
 add_test(NAME target_abi COMMAND test_target_abi)
+
+add_executable(test_queue_pressure
+    test_queue_pressure.cpp
+    ${AM}/components/portunus_types/src/queue_pressure.cpp)
+target_include_directories(test_queue_pressure PRIVATE
+    ${AM}/components/portunus_types/include)
+target_link_libraries(test_queue_pressure PRIVATE unity)
+add_test(NAME queue_pressure COMMAND test_queue_pressure)

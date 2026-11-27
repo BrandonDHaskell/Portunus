@@ -320,6 +320,30 @@ static void assert_denied(const portunus_event_t &e, const char *reason) {
     TEST_ASSERT_FALSE(e.payload.access_decision.granted);
 }
 
+/* SC-15 (D-T5): with the comm task stuck in an RPC and its queue full, a
+ * further card read is denied at once (comm_busy) and counted as dropped. */
+void test_full_queue_denies_card(void) {
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, start());
+    grpc_fake_hold();
+    publish_card();                               /* comm task blocks in its RPC */
+    TEST_ASSERT_TRUE(grpc_fake_wait_held_call(2000));
+    for (int i = 0; i < 8; ++i) publish_card();   /* fills the 8-deep comm queue */
+    TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_count_of(EVENT_ACCESS_DENIED));
+    publish_card();                               /* no room: answered immediately */
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_ACCESS_DENIED));
+    portunus_event_t e;
+    for (size_t i = 0; event_bus_fake_copy(i, &e); ++i) {
+        if (e.id == EVENT_ACCESS_DENIED) break;
+    }
+    TEST_ASSERT_EQUAL_STRING("comm_busy", e.payload.access_decision.reason);
+    TEST_ASSERT_EQUAL_UINT32(1, server_comm_dropped_events());
+
+    grpc_fake_release();                          /* drain before teardown */
+    TEST_ASSERT_TRUE(wait_for([] {
+        return event_bus_fake_count_of(EVENT_ACCESS_DENIED) >= 1 + 9;
+    }, 5000));
+}
+
 /* SC-04: offline, a card read is answered with one deny (no_network) carrying
  * the log fingerprint, and no RPC. */
 void test_offline_card_denied(void) {
@@ -531,6 +555,32 @@ void test_offline_provision_fails_fast(void) {
     TEST_ASSERT_EQUAL_size_t(0, grpc_fake_call_count());
 }
 
+/* SC-15 (D-T5): with the comm task stuck and its queue full, a further
+ * provision request fails at once with COMM_ERROR instead of leaving the
+ * console to wait out its capture timeout. */
+void test_full_queue_fails_provision_fast(void) {
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, start());
+    grpc_fake_hold();
+    publish_provision_request();
+    TEST_ASSERT_TRUE(grpc_fake_wait_held_call(2000));
+    for (int i = 0; i < 8; ++i) publish_provision_request();
+    TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_count_of(EVENT_PROVISION_FAILED));
+    publish_provision_request();
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_PROVISION_FAILED));
+    portunus_event_t e;
+    for (size_t i = 0; event_bus_fake_copy(i, &e); ++i) {
+        if (e.id == EVENT_PROVISION_FAILED) break;
+    }
+    TEST_ASSERT_EQUAL(PROVISION_RESULT_COMM_ERROR, e.payload.provision_result.reason);
+    TEST_ASSERT_EQUAL_STRING("comm_busy", e.payload.provision_result.detail);
+    TEST_ASSERT_EQUAL_UINT32(1, server_comm_dropped_events());
+
+    grpc_fake_release();
+    TEST_ASSERT_TRUE(wait_for([] {
+        return event_bus_fake_count_of(EVENT_PROVISION_FAILED) >= 1 + 9;
+    }, 5000));
+}
+
 /* The provision path end to end: a PENDING_CREATED reply succeeds; a
  * transport failure is a COMM_ERROR. */
 void test_provision_round_trip(void) {
@@ -571,6 +621,7 @@ extern "C" void app_main(void) {
     RUN_TEST(test_rpc_paths_match_proto);
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
     RUN_TEST(test_offline_card_denied);
+    RUN_TEST(test_full_queue_denies_card);
     RUN_TEST(test_transport_failure_denies);
     RUN_TEST(test_bad_status_denies);
     RUN_TEST(test_undecodable_body_denies);
@@ -586,6 +637,7 @@ extern "C" void app_main(void) {
 #endif
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
     RUN_TEST(test_offline_provision_fails_fast);
+    RUN_TEST(test_full_queue_fails_provision_fast);
     RUN_TEST(test_provision_round_trip);
 #endif
     exit(UNITY_END());

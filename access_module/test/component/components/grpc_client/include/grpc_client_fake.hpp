@@ -34,6 +34,12 @@ void grpc_fake_reset(void);
 void grpc_fake_push_reply(const char *method, const grpc_fake_reply &reply);
 void grpc_fake_push_responder(const char *method, grpc_fake_responder responder);
 
+/** Hold: every unary call blocks (after recording itself) until released,
+ *  so the caller's task stays busy and its queue fills. */
+void grpc_fake_hold(void);
+bool grpc_fake_wait_held_call(int timeout_ms);   /* true once a call is blocked */
+void grpc_fake_release(void);
+
 size_t grpc_fake_call_count(void);
 bool   grpc_fake_get_call(size_t i, grpc_fake_call *out);
 int    grpc_fake_live_clients(void);   /* inits minus destroys */

@@ -16,6 +16,10 @@ struct Scripted { grpc_fake_reply reply; grpc_fake_responder responder; };
 std::map<std::string, std::deque<Scripted>>        g_replies;
 std::vector<grpc_fake_call>                        g_calls;
 int                                                g_live = 0;
+volatile bool                                      g_hold = false;
+
+SemaphoreHandle_t entered_sem() { static SemaphoreHandle_t s = xSemaphoreCreateCounting(64, 0); return s; }
+SemaphoreHandle_t release_sem() { static SemaphoreHandle_t s = xSemaphoreCreateBinary(); return s; }
 grpc_client                                        g_instance;
 
 SemaphoreHandle_t lock_handle() {
@@ -33,6 +37,20 @@ void grpc_fake_reset(void) {
     g_replies.clear();
     g_calls.clear();
     g_live = 0;
+    g_hold = false;
+    while (xSemaphoreTake(entered_sem(), 0) == pdTRUE) {}
+    while (xSemaphoreTake(release_sem(), 0) == pdTRUE) {}
+}
+
+void grpc_fake_hold(void) { g_hold = true; }
+
+bool grpc_fake_wait_held_call(int timeout_ms) {
+    return xSemaphoreTake(entered_sem(), pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+}
+
+void grpc_fake_release(void) {
+    g_hold = false;
+    xSemaphoreGive(release_sem());
 }
 
 void grpc_fake_push_reply(const char *method, const grpc_fake_reply &reply) {
@@ -94,15 +112,22 @@ portunus_err_t grpc_client_unary_call(grpc_client_handle_t handle, const char *s
     }
     if (out_sig_hex != nullptr) memset(out_sig_hex, 0, 65);   /* PORTUNUS_HMAC_HEX_LEN */
 
-    Guard g;
     grpc_fake_call call;
     call.method = service_method;
     call.request.assign(req_buf, req_buf + req_len);
     for (size_t i = 0; i < metadata_count; ++i) {
         if (strcmp(metadata[i].key, "x-portunus-sig") == 0) call.sig = metadata[i].value;
     }
-    g_calls.push_back(call);
+    {
+        Guard g;
+        g_calls.push_back(call);
+    }
+    if (g_hold) {                       /* outside the lock: the test keeps working */
+        xSemaphoreGive(entered_sem());
+        xSemaphoreTake(release_sem(), portMAX_DELAY);
+    }
 
+    Guard g;
     auto it = g_replies.find(service_method);
     if (it == g_replies.end() || it->second.empty()) return PORTUNUS_ERR_HTTP_CONNECT;
     const Scripted next = it->second.front();

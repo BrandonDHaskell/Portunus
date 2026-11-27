@@ -169,7 +169,8 @@ void ProvisioningFSM::on_event_bus_event(const portunus_event_t *event, void *ct
     auto *fsm = static_cast<ProvisioningFSM *>(ctx);
     if (fsm->m_event_queue == nullptr) { return; }
     if (xQueueSend(fsm->m_event_queue, event, pdMS_TO_TICKS(10)) != pdTRUE) {
-        ESP_LOGW(TAG, "FSM queue full — dropped event 0x%04x", event->id);
+        ESP_LOGW(TAG, "FSM queue full: dropped event 0x%04x", event->id);
+        fsm->m_dropped++;
     }
 }
 
@@ -198,7 +199,9 @@ void ProvisioningFSM::poll()
             portunus_event_t evt;
             memset(&evt, 0, sizeof(evt));
             evt.id = EVENT_ARM_REQUESTED;
-            event_bus_publish(&evt);
+            if (event_bus_publish(&evt) != PORTUNUS_OK) {
+                m_dropped++;   /* lost arm press: logged, the user presses again */
+            }
         }
 
         // Poll the credential reader only when armed and waiting for a card.
@@ -210,7 +213,9 @@ void ProvisioningFSM::poll()
                 evt.id                               = EVENT_CREDENTIAL_READ;
                 evt.payload.credential_read.credential   = cred;
                 evt.payload.credential_read.timestamp_ms = m_clock->now_ms();
-                event_bus_publish(&evt);
+                if (event_bus_publish(&evt) != PORTUNUS_OK) {
+                    m_dropped++;   /* lost card tap: logged, the user taps again */
+                }
 
                 m_reader->halt();
                 vTaskDelay(reread_delay);
@@ -226,14 +231,11 @@ void ProvisioningFSM::poll()
 
 void ProvisioningFSM::run()
 {
-    portunus_event_t event;
     const TickType_t timeout = pdMS_TO_TICKS(FSM_POLL_INTERVAL_MS);
 
     for (;;) {
-        if (xQueueReceive(m_event_queue, &event, timeout) == pdTRUE) {
-            process_event(event);
-        }
-
+        (void)receive_and_process(timeout);
+        check_dropped_events();
         check_timeout();
 
 #ifdef CONFIG_PORTUNUS_ENABLE_WIFI
@@ -243,6 +245,45 @@ void ProvisioningFSM::run()
 }
 
 /* ── Event processing ─────────────────────────────────────────────────────── */
+
+bool ProvisioningFSM::receive_and_process(TickType_t timeout)
+{
+    portunus_event_t event;
+    if (xQueueReceive(m_event_queue, &event, timeout) != pdTRUE) {
+        return false;
+    }
+    switch (queue_pressure_sample(m_queue_pressure, uxQueueMessagesWaiting(m_event_queue),
+                                  FSM_EVENT_QUEUE_LEN)) {
+    case queue_pressure_event_t::HIGH:
+        ESP_LOGW(TAG, "FSM event queue consistently near full (%d deep)", FSM_EVENT_QUEUE_LEN);
+        break;
+    case queue_pressure_event_t::RECOVERED:
+        ESP_LOGI(TAG, "FSM event queue pressure cleared");
+        break;
+    default:
+        break;
+    }
+    process_event(event);
+    return true;
+}
+
+/* While a capture is in flight the lost event was most likely its result:
+ * show the error now rather than after the capture timeout. In any other
+ * state it was a card tap or an arm press; an error pattern on a sleeping or
+ * idle console would only confuse, and the user simply retries (D-T5). */
+void ProvisioningFSM::check_dropped_events()
+{
+    const uint32_t dropped = m_dropped.load();
+    if (dropped == m_dropped_seen) {
+        return;
+    }
+    ESP_LOGE(TAG, "%" PRIu32 " event(s) lost to a full queue (%" PRIu32 " since boot)",
+             dropped - m_dropped_seen, dropped);
+    m_dropped_seen = dropped;
+    if (m_state == PEU_STATE_CAPTURE_SEND) {
+        enter_result(feedback_type_t::PEU_RESULT_ERROR);
+    }
+}
 
 void ProvisioningFSM::process_event(const portunus_event_t &event)
 {
@@ -334,8 +375,13 @@ void ProvisioningFSM::handle_credential_read(const event_credential_read_t *cred
 
     char log_id[CREDENTIAL_LOG_ID_LEN];
     credential_uid_to_log_id(&cred->credential, log_id, sizeof(log_id));
-    ESP_LOGI(TAG, "Card read — id=%s", log_id);
-    publish_capture_request(cred);
+    ESP_LOGI(TAG, "Card read: id=%s", log_id);
+    if (!publish_capture_request(cred)) {
+        /* The request never left: say so now instead of waiting it out. */
+        ESP_LOGE(TAG, "Capture request not published (event bus full)");
+        enter_result(feedback_type_t::PEU_RESULT_ERROR);
+        return;
+    }
     m_state = PEU_STATE_CAPTURE_SEND;
     /* server_comm may drop the request (WiFi down, queue full) or the reply
      * may never come; without a deadline the PEU would wait until reboot. */
@@ -443,7 +489,7 @@ void ProvisioningFSM::enter_idle_after_result()
 
 /* ── Request helpers ──────────────────────────────────────────────────────── */
 
-void ProvisioningFSM::publish_capture_request(const event_credential_read_t *cred)
+bool ProvisioningFSM::publish_capture_request(const event_credential_read_t *cred)
 {
     portunus_event_t evt;
     memset(&evt, 0, sizeof(evt));
@@ -456,5 +502,5 @@ void ProvisioningFSM::publish_capture_request(const event_credential_read_t *cre
     memcpy(evt.payload.provision_request.credential_uid, cred->credential.uid, uid_n);
     evt.payload.provision_request.credential_uid_len = (uint8_t)uid_n;
 
-    event_bus_publish(&evt);
+    return event_bus_publish(&evt) == PORTUNUS_OK;
 }
