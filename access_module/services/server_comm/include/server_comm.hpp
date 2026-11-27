@@ -36,6 +36,9 @@
 
 #include "portunus_types.hpp"
 #include "portunus_nvs.hpp"
+#include "sdkconfig.h"
+
+#include <sys/time.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -78,6 +81,25 @@ portunus_err_t server_comm_init(const portunus_device_config_t *cfg);
  * to populate AccessRequest.requested_at for replay protection.
  */
 bool server_comm_clock_synced(void);
+
+#ifdef CONFIG_PORTUNUS_TEST_HOOKS
+/* Test-only entry points. CONFIG_PORTUNUS_TEST_HOOKS is defined only by the
+ * component tier's Kconfig, so no firmware build contains these. */
+
+/**
+ * @brief Return server_comm to its pre-init state: delete the task and
+ * queue, destroy the gRPC client and clear all state. Call only while the
+ * component is idle. Event bus subscriptions are not removed; reset the bus
+ * as well.
+ */
+void server_comm_reset_for_test(void);
+
+/**
+ * @brief Replace settimeofday() for clock syncs (NULL restores it), so tests
+ * on the linux target never try to set the host clock.
+ */
+void server_comm_set_clock_setter_for_test(int (*set_time)(const struct timeval *tv));
+#endif
 
 #ifdef __cplusplus
 }

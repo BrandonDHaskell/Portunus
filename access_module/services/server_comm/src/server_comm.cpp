@@ -232,6 +232,20 @@ static void handle_provision(const event_provision_request_t *req);
 
 /* ── Clock sync helpers ────────────────────────────────────────────────────── */
 
+#ifdef CONFIG_PORTUNUS_TEST_HOOKS
+static int (*s_test_set_time)(const struct timeval *tv) = nullptr;
+#endif
+
+static int set_system_time(const struct timeval *tv)
+{
+#ifdef CONFIG_PORTUNUS_TEST_HOOKS
+    if (s_test_set_time != nullptr) {
+        return s_test_set_time(tv);
+    }
+#endif
+    return settimeofday(tv, NULL);
+}
+
 /**
  * @brief Set the system clock from a heartbeat response server_time field.
  *
@@ -254,7 +268,7 @@ static void sync_clock_from_response(const char *server_time, int64_t rtt_us)
     }
     proto_add_half_rtt(&tv, rtt_us);
 
-    if (settimeofday(&tv, NULL) != 0) {
+    if (set_system_time(&tv) != 0) {
         ESP_LOGW(TAG, "Clock sync failed — settimeofday error");
         return;
     }
@@ -890,3 +904,36 @@ portunus_err_t server_comm_init(const portunus_device_config_t *cfg)
     ESP_LOGI(TAG, "Server comm initialised");
     return PORTUNUS_OK;
 }
+
+#ifdef CONFIG_PORTUNUS_TEST_HOOKS
+void server_comm_reset_for_test(void)
+{
+    if (s_comm_task != NULL) {
+        vTaskDelete(s_comm_task);
+        s_comm_task = NULL;
+    }
+    if (s_comm_queue != NULL) {
+        vQueueDelete(s_comm_queue);
+        s_comm_queue = NULL;
+    }
+    if (s_grpc_handle != NULL) {
+        grpc_client_destroy(s_grpc_handle);
+        s_grpc_handle = NULL;
+    }
+    s_initialized     = false;
+    s_reader_degraded = false;
+    s_clock_synced    = false;
+    s_last_sync_us    = 0;
+    s_last_heartbeat  = {};
+    s_idle_ticks      = 0;
+#if PORTUNUS_HMAC_ENABLED
+    memset(s_hmac_secret, 0, sizeof(s_hmac_secret));
+    s_hmac_secret_len = 0;
+#endif
+}
+
+void server_comm_set_clock_setter_for_test(int (*set_time)(const struct timeval *tv))
+{
+    s_test_set_time = set_time;
+}
+#endif
