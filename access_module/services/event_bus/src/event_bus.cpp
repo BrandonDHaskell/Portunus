@@ -7,6 +7,7 @@
  */
 
 #include "event_bus.hpp"
+#include "event_bus_core.hpp"
 #include "error_codes.hpp"
 #include "timing_config.hpp"
 
@@ -16,22 +17,14 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 
-#include <string.h>
 
 static const char *TAG = "event_bus";
 static SemaphoreHandle_t s_subscriber_mutex = NULL;
 
-/* ── Subscriber table ──────────────────────────────────────────────────────── */
+/* ── Subscriber table (rules in event_bus_core, locking here) ──────────────── */
 
-typedef struct {
-    portunus_event_id_t event_id;
-    event_bus_handler_t handler;
-    void               *ctx;
-    bool                active;
-} subscriber_entry_t;
-
-static subscriber_entry_t s_subscribers[MAX_EVENT_SUBSCRIBERS];
-static size_t             s_subscriber_count = 0;
+static bus_core_sub_t s_subscriber_storage[MAX_EVENT_SUBSCRIBERS];
+static bus_core_t     s_subscribers = {s_subscriber_storage, MAX_EVENT_SUBSCRIBERS, 0};
 
 /* ── Queue and task handles ────────────────────────────────────────────────── */
 
@@ -56,18 +49,12 @@ static void event_bus_dispatch_task(void *arg)
                without it.  This prevents deadlock if a callback calls
                event_bus_subscribe() (e.g. a component that registers
                new subscriptions in response to EVENT_SYSTEM_BOOT_COMPLETE). */
+            bus_core_sub_t snapshot[MAX_EVENT_SUBSCRIBERS];
             xSemaphoreTake(s_subscriber_mutex, portMAX_DELAY);
-            size_t count = s_subscriber_count;
-            subscriber_entry_t snapshot[MAX_EVENT_SUBSCRIBERS];
-            memcpy(snapshot, s_subscribers, count * sizeof(subscriber_entry_t));
+            const size_t count = bus_core_snapshot(s_subscribers, snapshot);
             xSemaphoreGive(s_subscriber_mutex);
 
-            for (size_t i = 0; i < count; i++) {
-                if (snapshot[i].active &&
-                    snapshot[i].event_id == event.id) {
-                    snapshot[i].handler(&event, snapshot[i].ctx);
-                }
-            }
+            bus_core_dispatch(snapshot, count, event);
         }
     }
 }
@@ -82,8 +69,7 @@ portunus_err_t event_bus_init(void)
     }
 
     /* Clear subscriber table. */
-    memset(s_subscribers, 0, sizeof(s_subscribers));
-    s_subscriber_count = 0;
+    bus_core_init(s_subscribers, s_subscriber_storage, MAX_EVENT_SUBSCRIBERS);
 
     /* Create subscriber table mutex. */
     s_subscriber_mutex = xSemaphoreCreateMutex();
@@ -156,6 +142,25 @@ portunus_err_t event_bus_publish_from_isr(const portunus_event_t *event,
     return PORTUNUS_OK;
 }
 
+#ifdef CONFIG_PORTUNUS_TEST_HOOKS
+void event_bus_reset_for_test(void)
+{
+    if (s_dispatch_task != NULL) {
+        vTaskDelete(s_dispatch_task);
+        s_dispatch_task = NULL;
+    }
+    if (s_event_queue != NULL) {
+        vQueueDelete(s_event_queue);
+        s_event_queue = NULL;
+    }
+    if (s_subscriber_mutex != NULL) {
+        vSemaphoreDelete(s_subscriber_mutex);
+        s_subscriber_mutex = NULL;
+    }
+    bus_core_init(s_subscribers, s_subscriber_storage, MAX_EVENT_SUBSCRIBERS);
+}
+#endif
+
 portunus_err_t event_bus_subscribe(portunus_event_id_t event_id,
                                    event_bus_handler_t handler,
                                    void *ctx)
@@ -163,26 +168,23 @@ portunus_err_t event_bus_subscribe(portunus_event_id_t event_id,
     if (handler == NULL) {
         return PORTUNUS_ERR_INVALID_ARG;
     }
-
-    xSemaphoreTake(s_subscriber_mutex, portMAX_DELAY);
-
-    if (s_subscriber_count >= MAX_EVENT_SUBSCRIBERS) {
-        ESP_LOGE(TAG, "Subscriber table full (%d/%d)",
-                 (int)s_subscriber_count, MAX_EVENT_SUBSCRIBERS);
-        xSemaphoreGive(s_subscriber_mutex);
-        return PORTUNUS_ERR_MAX_SUBSCRIBERS;
+    /* Before init there is no mutex to take: FreeRTOS asserts on NULL.
+     * Components subscribe from their start() at boot, so refuse with an
+     * error their fatal-subscription handling already reports. */
+    if (s_subscriber_mutex == NULL) {
+        return PORTUNUS_ERR_NOT_INIT;
     }
 
-    subscriber_entry_t *entry = &s_subscribers[s_subscriber_count];
-    entry->event_id = event_id;
-    entry->handler  = handler;
-    entry->ctx      = ctx;
-    entry->active   = true;
-    s_subscriber_count++;
-
-    ESP_LOGI(TAG, "Subscriber registered for event 0x%04x (total: %d)",
-             event_id, (int)s_subscriber_count);
-
+    xSemaphoreTake(s_subscriber_mutex, portMAX_DELAY);
+    const portunus_err_t err = bus_core_subscribe(s_subscribers, event_id, handler, ctx);
+    const size_t total = s_subscribers.count;
     xSemaphoreGive(s_subscriber_mutex);
-    return PORTUNUS_OK;
+
+    if (err == PORTUNUS_ERR_MAX_SUBSCRIBERS) {
+        ESP_LOGE(TAG, "Subscriber table full (%d/%d)", (int)total, MAX_EVENT_SUBSCRIBERS);
+    } else if (err == PORTUNUS_OK) {
+        ESP_LOGI(TAG, "Subscriber registered for event 0x%04x (total: %d)",
+                 event_id, (int)total);
+    }
+    return err;
 }

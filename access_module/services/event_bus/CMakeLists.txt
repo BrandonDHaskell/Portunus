@@ -10,6 +10,7 @@
 idf_component_register(
     SRCS
         "src/event_bus.cpp"
+        "src/event_bus_core.cpp"
     INCLUDE_DIRS
         "include"
     REQUIRES

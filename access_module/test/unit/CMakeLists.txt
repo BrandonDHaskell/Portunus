@@ -93,3 +93,12 @@ target_include_directories(test_iso14443a PRIVATE
     ${AM}/components/portunus_types/include)
 target_link_libraries(test_iso14443a PRIVATE unity)
 add_test(NAME iso14443a COMMAND test_iso14443a)
+
+add_executable(test_event_bus_core
+    test_event_bus_core.cpp
+    ${AM}/services/event_bus/src/event_bus_core.cpp)
+target_include_directories(test_event_bus_core PRIVATE
+    ${AM}/services/event_bus/include
+    ${AM}/components/portunus_types/include)
+target_link_libraries(test_event_bus_core PRIVATE unity)
+add_test(NAME event_bus_core COMMAND test_event_bus_core)

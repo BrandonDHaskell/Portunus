@@ -1,16 +1,16 @@
 /* Synchronous fake event bus for the component tier.
  *
- * Follows the real bus's contract (services/event_bus/src/event_bus.cpp)
- * wherever a test could observe the difference: dispatch runs over a snapshot
- * of the subscriber table, so a handler may subscribe; subscribe before init
- * and past MAX_EVENT_SUBSCRIBERS fail with the real error codes. Publishing
- * dispatches inline on the caller's task instead of a dispatcher task, which
- * keeps behavioural tests deterministic.
+ * The subscriber table, its limit and errors, and snapshot-then-dispatch come
+ * from event_bus_core, the same code the production bus uses, so the two
+ * cannot drift. This file adds only what tests need: inline dispatch on the
+ * caller's task instead of a dispatcher task (deterministic behavioural
+ * tests), a record of every published event, and fail_next.
  *
  * State is guarded by a FreeRTOS mutex so a real task under test (the
  * heartbeat service) and the test task can use the bus together. Handlers run
  * outside the lock. */
 #include "event_bus.hpp"
+#include "event_bus_core.hpp"
 #include "event_bus_fake.hpp"
 #include "error_codes.hpp"
 #include "timing_config.hpp"
@@ -21,9 +21,9 @@
 #include <vector>
 
 namespace {
-struct Sub { portunus_event_id_t id; event_bus_handler_t h; void *ctx; };
+bus_core_sub_t                g_storage[MAX_EVENT_SUBSCRIBERS];
+bus_core_t                    g_subs      = {g_storage, MAX_EVENT_SUBSCRIBERS, 0};
 std::vector<portunus_event_t> g_published;
-std::vector<Sub>              g_subs;
 bool                          g_inited    = false;
 size_t                        g_fail_left = 0;
 portunus_err_t                g_fail_err  = PORTUNUS_OK;
@@ -47,7 +47,7 @@ portunus_err_t event_bus_init(void) {
     Guard g;
     if (g_inited) return PORTUNUS_ERR_ALREADY_INIT;
     g_published.clear();
-    g_subs.clear();
+    bus_core_init(g_subs, g_storage, MAX_EVENT_SUBSCRIBERS);
     g_inited = true;
     return PORTUNUS_OK;
 }
@@ -55,7 +55,8 @@ portunus_err_t event_bus_init(void) {
 portunus_err_t event_bus_publish(const portunus_event_t *event) {
     if (event == nullptr) return PORTUNUS_ERR_INVALID_ARG;
 
-    std::vector<Sub> snapshot;
+    bus_core_sub_t snapshot[MAX_EVENT_SUBSCRIBERS];
+    size_t         count;
     {
         Guard g;
         if (!g_inited) return PORTUNUS_ERR_NOT_INIT;
@@ -64,13 +65,10 @@ portunus_err_t event_bus_publish(const portunus_event_t *event) {
             return g_fail_err;  /* dropped, as the real bus drops on QUEUE_FULL */
         }
         g_published.push_back(*event);
-        snapshot = g_subs;
+        count = bus_core_snapshot(g_subs, snapshot);
     }
-    /* Inline dispatch over the snapshot: a handler that subscribes cannot
-     * invalidate this loop, and its new handler sees the next event only. */
-    for (const Sub &s : snapshot) {
-        if (s.id == event->id) s.h(event, s.ctx);
-    }
+    /* Inline, outside the lock, as the real dispatcher runs handlers. */
+    bus_core_dispatch(snapshot, count, *event);
     return PORTUNUS_OK;
 }
 
@@ -82,12 +80,10 @@ portunus_err_t event_bus_publish_from_isr(const portunus_event_t *event,
 
 portunus_err_t event_bus_subscribe(portunus_event_id_t event_id,
                                    event_bus_handler_t handler, void *ctx) {
-    if (handler == nullptr) return PORTUNUS_ERR_INVALID_ARG;
+    if (handler == nullptr) return PORTUNUS_ERR_INVALID_ARG;   /* same order as the real bus */
     Guard g;
     if (!g_inited) return PORTUNUS_ERR_NOT_INIT;
-    if (g_subs.size() >= MAX_EVENT_SUBSCRIBERS) return PORTUNUS_ERR_MAX_SUBSCRIBERS;
-    g_subs.push_back({event_id, handler, ctx});
-    return PORTUNUS_OK;
+    return bus_core_subscribe(g_subs, event_id, handler, ctx);
 }
 
 } /* extern "C" */
@@ -95,7 +91,7 @@ portunus_err_t event_bus_subscribe(portunus_event_id_t event_id,
 void event_bus_fake_reset(void) {
     Guard g;
     g_published.clear();
-    g_subs.clear();
+    bus_core_init(g_subs, g_storage, MAX_EVENT_SUBSCRIBERS);
     g_inited    = false;
     g_fail_left = 0;
     g_fail_err  = PORTUNUS_OK;
@@ -133,5 +129,5 @@ size_t event_bus_fake_count_of(portunus_event_id_t id) {
 
 size_t event_bus_fake_subscriber_count(void) {
     Guard g;
-    return g_subs.size();
+    return g_subs.count;
 }
