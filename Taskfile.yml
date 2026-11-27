@@ -452,6 +452,7 @@ tasks:
   test:firmware:component:
     desc: "Firmware component tier: IDF linux target, POSIX FreeRTOS, fake event bus (access point, PEU, heartbeat, NVS)"
     cmds:
+      - "{{.FIRMWARE_DIR}}/test/component/check_kconfig_overrides.sh"   # COMP-05
       - task: test:firmware:_variant
         vars: { VARIANT: fake, DEFAULTS: "sdkconfig.defaults", EXTRA: "-DPORTUNUS_TEST_NVS=OFF" }
       - task: test:firmware:_variant
