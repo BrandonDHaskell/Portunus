@@ -24,6 +24,9 @@
 
 static const char *TAG = "event_bus";
 static SemaphoreHandle_t s_subscriber_mutex = NULL;
+/* Held by the dispatcher while it delivers one event, so unsubscribe can wait
+ * out a delivery that may still reach the handler being removed. */
+static SemaphoreHandle_t s_dispatch_mutex = NULL;
 
 /* ── Subscriber table (rules in event_bus_core, locking here) ──────────────── */
 
@@ -73,11 +76,13 @@ static void event_bus_dispatch_task(void *arg)
                event_bus_subscribe() (e.g. a component that registers
                new subscriptions in response to EVENT_SYSTEM_BOOT_COMPLETE). */
             bus_core_sub_t snapshot[MAX_EVENT_SUBSCRIBERS];
+            xSemaphoreTake(s_dispatch_mutex, portMAX_DELAY);
             xSemaphoreTake(s_subscriber_mutex, portMAX_DELAY);
             const size_t count = bus_core_snapshot(s_subscribers, snapshot);
             xSemaphoreGive(s_subscriber_mutex);
 
             bus_core_dispatch(snapshot, count, event);
+            xSemaphoreGive(s_dispatch_mutex);
         }
     }
 }
@@ -94,10 +99,11 @@ portunus_err_t event_bus_init(void)
     /* Clear subscriber table. */
     bus_core_init(s_subscribers, s_subscriber_storage, MAX_EVENT_SUBSCRIBERS);
 
-    /* Create subscriber table mutex. */
+    /* Create the subscriber table and dispatch mutexes. */
     s_subscriber_mutex = xSemaphoreCreateMutex();
-    if (s_subscriber_mutex == NULL) {
-        ESP_LOGE(TAG, "Failed to create subscriber mutex");
+    s_dispatch_mutex   = xSemaphoreCreateMutex();
+    if (s_subscriber_mutex == NULL || s_dispatch_mutex == NULL) {
+        ESP_LOGE(TAG, "Failed to create event bus mutexes");
         return PORTUNUS_FAIL;
     }
 
@@ -182,11 +188,44 @@ void event_bus_reset_for_test(void)
         vSemaphoreDelete(s_subscriber_mutex);
         s_subscriber_mutex = NULL;
     }
+    if (s_dispatch_mutex != NULL) {
+        vSemaphoreDelete(s_dispatch_mutex);
+        s_dispatch_mutex = NULL;
+    }
     bus_core_init(s_subscribers, s_subscriber_storage, MAX_EVENT_SUBSCRIBERS);
     s_dropped        = 0;
     s_queue_pressure = {};
 }
 #endif
+
+portunus_err_t event_bus_unsubscribe(portunus_event_id_t event_id,
+                                     event_bus_handler_t handler,
+                                     void *ctx)
+{
+    if (handler == NULL) {
+        return PORTUNUS_ERR_INVALID_ARG;
+    }
+    if (s_subscriber_mutex == NULL) {
+        return PORTUNUS_ERR_NOT_INIT;
+    }
+
+    xSemaphoreTake(s_subscriber_mutex, portMAX_DELAY);
+    const portunus_err_t err = bus_core_unsubscribe(s_subscribers, event_id, handler, ctx);
+    const size_t total = s_subscribers.count;
+    xSemaphoreGive(s_subscriber_mutex);
+    if (err != PORTUNUS_OK) {
+        return err;
+    }
+
+    /* Later snapshots no longer include it; wait out one already taken. The
+     * dispatcher itself cannot wait for the delivery it is running. */
+    if (xTaskGetCurrentTaskHandle() != s_dispatch_task) {
+        xSemaphoreTake(s_dispatch_mutex, portMAX_DELAY);
+        xSemaphoreGive(s_dispatch_mutex);
+    }
+    ESP_LOGI(TAG, "Subscriber removed for event 0x%04x (total: %d)", event_id, (int)total);
+    return PORTUNUS_OK;
+}
 
 uint32_t event_bus_dropped_events(void)
 {

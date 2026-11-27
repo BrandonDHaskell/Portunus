@@ -40,6 +40,13 @@ struct Guard {
     Guard()  { xSemaphoreTake(lock_handle(), portMAX_DELAY); }
     ~Guard() { xSemaphoreGive(lock_handle()); }
 };
+
+/* Held for each inline delivery, as the real dispatcher holds its dispatch
+ * mutex. Recursive: a handler may publish or unsubscribe on the same task. */
+SemaphoreHandle_t dispatch_lock() {
+    static SemaphoreHandle_t m = xSemaphoreCreateRecursiveMutex();
+    return m;
+}
 }  // namespace
 
 extern "C" {
@@ -69,8 +76,10 @@ portunus_err_t event_bus_publish(const portunus_event_t *event) {
         g_published.push_back(*event);
         count = bus_core_snapshot(g_subs, snapshot);
     }
-    /* Inline, outside the lock, as the real dispatcher runs handlers. */
+    /* Inline, outside the table lock, as the real dispatcher runs handlers. */
+    xSemaphoreTakeRecursive(dispatch_lock(), portMAX_DELAY);
     bus_core_dispatch(snapshot, count, *event);
+    xSemaphoreGiveRecursive(dispatch_lock());
     return PORTUNUS_OK;
 }
 
@@ -78,6 +87,23 @@ portunus_err_t event_bus_publish_from_isr(const portunus_event_t *event,
                                           BaseType_t *higher_priority_woken) {
     (void)higher_priority_woken;
     return event_bus_publish(event);
+}
+
+portunus_err_t event_bus_unsubscribe(portunus_event_id_t event_id,
+                                     event_bus_handler_t handler, void *ctx) {
+    if (handler == nullptr) return PORTUNUS_ERR_INVALID_ARG;
+    portunus_err_t err;
+    {
+        Guard g;
+        if (!g_inited) return PORTUNUS_ERR_NOT_INIT;
+        err = bus_core_unsubscribe(g_subs, event_id, handler, ctx);
+    }
+    if (err == PORTUNUS_OK) {
+        /* Wait out a delivery on another task (recursive: no-op on our own). */
+        xSemaphoreTakeRecursive(dispatch_lock(), portMAX_DELAY);
+        xSemaphoreGiveRecursive(dispatch_lock());
+    }
+    return err;
 }
 
 uint32_t event_bus_dropped_events(void) {

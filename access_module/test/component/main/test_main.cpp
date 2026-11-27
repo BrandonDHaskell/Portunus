@@ -736,6 +736,19 @@ void test_fake_bus_limits_and_arguments(void) {
                       event_bus_subscribe(EVENT_HEARTBEAT, noop_handler, nullptr));
 }
 
+/* D-T9: the fake supports unsubscribe with the real bus's contract. */
+void test_fake_bus_unsubscribe(void) {
+    g_late_hits = 0;
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, event_bus_subscribe(EVENT_ACCESS_GRANTED, late_handler, nullptr));
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, event_bus_unsubscribe(EVENT_ACCESS_GRANTED, late_handler, nullptr));
+    portunus_event_t e = make_grant();
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, event_bus_publish(&e));
+    TEST_ASSERT_EQUAL_INT(0, g_late_hits);
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_NOT_SUBSCRIBED,
+                      event_bus_unsubscribe(EVENT_ACCESS_GRANTED, late_handler, nullptr));
+    TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_subscriber_count());
+}
+
 /* fail_next drops the next n publishes with the given error, records and
  * dispatches nothing for them, then the bus works normally again. */
 void test_fake_bus_fail_next(void) {
@@ -914,6 +927,62 @@ void test_real_bus_subscribe_from_handler(void) {
     TEST_ASSERT_EQUAL_INT(1, g_late_calls);
 }
 
+namespace {
+volatile bool g_slow_done = false;
+void slow_handler(const portunus_event_t *e, void *ctx) {
+    xSemaphoreGive(g_entered);                     /* delivery has started */
+    vTaskDelay(pdMS_TO_TICKS(300));                /* still running when unsubscribe is called */
+    g_slow_done = true;
+    recorder(e, ctx);
+}
+void self_unsubscriber(const portunus_event_t *e, void *ctx) {
+    recorder(e, ctx);
+    event_bus_unsubscribe(EVENT_HEARTBEAT, self_unsubscriber, nullptr);
+}
+}  // namespace
+
+/* BUS-10 (D-T9): unsubscribe returns only after a delivery already reaching
+ * the handler has finished, and the handler never runs again, so the caller
+ * may free its context. */
+void test_real_bus_unsubscribe_waits_for_delivery(void) {
+    if (g_entered == nullptr) g_entered = xSemaphoreCreateBinary();
+    reset_recorder();
+    g_slow_done = false;
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, event_bus_subscribe(EVENT_HEARTBEAT, slow_handler, nullptr));
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, publish_heartbeat(1));
+    TEST_ASSERT_EQUAL(pdTRUE, xSemaphoreTake(g_entered, WAIT));        /* handler running */
+
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, event_bus_unsubscribe(EVENT_HEARTBEAT, slow_handler, nullptr));
+    TEST_ASSERT_TRUE(g_slow_done);                                      /* it waited */
+
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, publish_heartbeat(2));
+    vTaskDelay(pdMS_TO_TICKS(200));
+    TEST_ASSERT_EQUAL_size_t(1, g_seen.size());                         /* only event 1 */
+}
+
+/* BUS-11 (D-T9): a handler may unsubscribe itself from the dispatcher
+ * without deadlocking; it then misses later events. */
+void test_real_bus_unsubscribe_from_handler(void) {
+    reset_recorder();
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, event_bus_subscribe(EVENT_HEARTBEAT, self_unsubscriber, nullptr));
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, publish_heartbeat(1));
+    TEST_ASSERT_TRUE(wait_deliveries(1));
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, publish_heartbeat(2));
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, publish_heartbeat(3));
+    vTaskDelay(pdMS_TO_TICKS(200));
+    TEST_ASSERT_EQUAL_size_t(1, g_seen.size());
+}
+
+/* BUS-12 (D-T9): unsubscribe's error contract on the real bus. */
+void test_real_bus_unsubscribe_errors(void) {
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_NOT_SUBSCRIBED,
+                      event_bus_unsubscribe(EVENT_HEARTBEAT, recorder, nullptr));
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_INVALID_ARG, event_bus_unsubscribe(EVENT_HEARTBEAT, nullptr, nullptr));
+    event_bus_reset_for_test();
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_NOT_INIT, event_bus_unsubscribe(EVENT_HEARTBEAT, recorder, nullptr));
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, event_bus_init());
+}
+
 #endif /* PORTUNUS_TEST_REAL_BUS */
 
 /* ── Entry point ──────────────────────────────────────────────────────────── */
@@ -959,6 +1028,7 @@ extern "C" void app_main(void) {
     RUN_TEST(test_fake_bus_subscribe_from_handler);
     RUN_TEST(test_fake_bus_limits_and_arguments);
     RUN_TEST(test_fake_bus_fail_next);
+    RUN_TEST(test_fake_bus_unsubscribe);
 #endif
 
 #ifdef PORTUNUS_TEST_REAL_BUS
@@ -969,6 +1039,9 @@ extern "C" void app_main(void) {
     RUN_TEST(test_real_bus_delivers_in_publish_order);
     RUN_TEST(test_real_bus_queue_full_after_timeout);
     RUN_TEST(test_real_bus_subscribe_from_handler);
+    RUN_TEST(test_real_bus_unsubscribe_waits_for_delivery);
+    RUN_TEST(test_real_bus_unsubscribe_from_handler);
+    RUN_TEST(test_real_bus_unsubscribe_errors);
 #endif
 
     int failures = UNITY_END();

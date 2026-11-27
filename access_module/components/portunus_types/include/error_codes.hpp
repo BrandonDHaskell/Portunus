@@ -36,6 +36,7 @@ extern "C" {
 #define PORTUNUS_ERR_TASK_CREATE     (PORTUNUS_ERR_BASE_SERVICE + 0x05) /**< Failed to create FreeRTOS task */
 #define PORTUNUS_ERR_ALREADY_INIT    (PORTUNUS_ERR_BASE_SERVICE + 0x06) /**< Component already initialised */
 #define PORTUNUS_ERR_NOT_INIT        (PORTUNUS_ERR_BASE_SERVICE + 0x07) /**< Component not yet initialised */
+#define PORTUNUS_ERR_NOT_SUBSCRIBED  (PORTUNUS_ERR_BASE_SERVICE + 0x08) /**< No such event bus subscription */
 
 /* ── Module errors (credential reader, access point, feedback) ─────────────── */
 #define PORTUNUS_ERR_INVALID_ARG     (PORTUNUS_ERR_BASE_MODULE + 0x01)  /**< NULL pointer or out-of-range argument */
