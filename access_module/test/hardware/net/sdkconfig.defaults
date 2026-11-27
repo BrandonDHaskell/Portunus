@@ -1,0 +1,20 @@
+# Hardware tier, phase 5b (network). Production security defaults: TLS with
+# a pinned CA and HMAC request signing. The pinned CA is the run's
+# throwaway test CA, which the runner writes to certs/ca_cert.pem
+# (gitignored) before building; the repo's real CA is never used.
+CONFIG_IDF_TARGET="esp32s3"
+
+# Same table as the firmware. NVS is opened read-only, for the WiFi
+# credentials only, and never written or erased.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../../../partitions.csv"
+
+# Console input for the runner's config line (see test/hardware).
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+CONFIG_PORTUNUS_USE_TLS=y
+CONFIG_PORTUNUS_TLS_USE_CUSTOM_CA=y
+CONFIG_PORTUNUS_HMAC_ENABLED=y
+
+# HW-09 reads every task's stack high-water mark with uxTaskGetSystemState().
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y

@@ -506,6 +506,19 @@ tasks:
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
         {{.IDF_PYTHON}} scripts/hw_test.py --port "{{.PORT}}" --variant "{{.VARIANT | default "all"}}"
 
+  # Phase 5b: also runs a throwaway server on this host (gRPC on the LAN
+  # address the board uses, admin API on 127.0.0.1) for the duration of the run.
+  test:firmware:hardware:net:
+    desc: "Firmware hardware tier, network (PORT=/dev/ttyACM0, SERVER_IP=auto): WiFi, TLS, end-to-end, stacks"
+    requires:
+      vars: [PORT]
+    env:
+      IDF_PATH: "{{.IDF_PATH}}"
+    cmds:
+      - |
+        eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
+        {{.IDF_PYTHON}} scripts/hw_test.py --port "{{.PORT}}" --net {{if .SERVER_IP}}--server-ip "{{.SERVER_IP}}"{{end}}
+
   # ─── Deploy ────────────────────────────────────────────────────────────────
   # Requires SSH key-based auth to the Pi. Configure target in .env:
   #   DEPLOY_HOST=pi@192.168.1.100

@@ -1,0 +1,31 @@
+dependencies:
+  espressif/nghttp:
+    component_hash: e0429dc6ecf6fdfab077a52c3eb5846c1c4a4a6d969633e8d1227b438b78530a
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.69.0
+  idf:
+    source:
+      type: idf
+    version: 5.5.1
+  nikas-belogolov/nanopb:
+    component_hash: 6ab5c72064ab6a748ad72528f007f87c7a090a893eb22fa9af5b6f112259b8c9
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.4.10
+direct_dependencies:
+- espressif/nghttp
+- nikas-belogolov/nanopb
+manifest_hash: dd70e27ef675860f7ce7e5ac8a134a6540b993c3f4590e7b53c6a9cd0244a9d3
+target: esp32s3
+version: 2.0.0
