@@ -25,11 +25,15 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 
 #include <string.h>
 #include <inttypes.h>
 
 static const char *TAG = "peu_fsm";
+
+/* stop() waits this long for each task (see SystemFSM). */
+#define FSM_STOP_TIMEOUT_MS  2000
 
 /* ── Task configuration ───────────────────────────────────────────────────── */
 
@@ -126,6 +130,23 @@ portunus_err_t ProvisioningFSM::start()
 {
     ESP_LOGI(TAG, "Starting PEU FSM");
 
+    if (m_fsm_task_handle != nullptr || m_poll_task_handle != nullptr) {
+        return PORTUNUS_ERR_ALREADY_INIT;
+    }
+    if (m_event_queue == nullptr) {
+        return PORTUNUS_ERR_NOT_INIT;
+    }
+    if (m_fsm_exited == nullptr) {
+        m_fsm_exited = xSemaphoreCreateBinary();
+    }
+    if (m_poll_exited == nullptr) {
+        m_poll_exited = xSemaphoreCreateBinary();
+    }
+    if (m_fsm_exited == nullptr || m_poll_exited == nullptr) {
+        return PORTUNUS_ERR_TASK_CREATE;
+    }
+    m_stop_requested = false;
+
     /* A missing subscription would leave the FSM deaf to card reads or
      * results, so treat any failure as fatal. */
     for (portunus_event_id_t id : kSubscribedEvents) {
@@ -133,15 +154,24 @@ portunus_err_t ProvisioningFSM::start()
         if (err != PORTUNUS_OK) {
             ESP_LOGE(TAG, "Subscribe to event 0x%04x failed (0x%" PRIx32 ")",
                      (unsigned)id, (uint32_t)err);
+            for (portunus_event_id_t done : kSubscribedEvents) {
+                if (done == id) {
+                    break;
+                }
+                (void)event_bus_unsubscribe(done, on_event_bus_event, this);
+            }
             return PORTUNUS_ERR_SUBSCRIBE;
         }
     }
+    m_subscribed = true;
 
     BaseType_t ret = xTaskCreate(
         fsm_task_entry, "peu_fsm",
         FSM_TASK_STACK, this, FSM_TASK_PRIORITY, &m_fsm_task_handle);
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create FSM task");
+        m_fsm_task_handle = nullptr;
+        (void)stop();
         return PORTUNUS_ERR_TASK_CREATE;
     }
 
@@ -150,6 +180,8 @@ portunus_err_t ProvisioningFSM::start()
         POLL_TASK_STACK, this, POLL_TASK_PRIORITY, &m_poll_task_handle);
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create poll task");
+        m_poll_task_handle = nullptr;
+        (void)stop();
         return PORTUNUS_ERR_TASK_CREATE;
     }
 
@@ -160,6 +192,67 @@ portunus_err_t ProvisioningFSM::start()
              CONFIG_PORTUNUS_ARM_TIMEOUT_MS);
 
     return PORTUNUS_OK;
+}
+
+/* ── stop() ───────────────────────────────────────────────────────────────── */
+
+portunus_err_t ProvisioningFSM::stop()
+{
+    if (m_fsm_task_handle == nullptr && m_poll_task_handle == nullptr && !m_subscribed) {
+        return PORTUNUS_OK;
+    }
+
+    if (m_subscribed) {
+        for (portunus_event_id_t id : kSubscribedEvents) {
+            (void)event_bus_unsubscribe(id, on_event_bus_event, this);
+        }
+        m_subscribed = false;
+    }
+
+    m_stop_requested = true;
+    if (m_poll_task_handle != nullptr) {
+        xTaskNotifyGive(m_poll_task_handle);
+        if (xSemaphoreTake(m_poll_exited, pdMS_TO_TICKS(FSM_STOP_TIMEOUT_MS)) != pdTRUE) {
+            ESP_LOGE(TAG, "Poll task did not stop within %d ms", FSM_STOP_TIMEOUT_MS);
+            return PORTUNUS_ERR_TIMEOUT;
+        }
+        m_poll_task_handle = nullptr;
+    }
+    if (m_fsm_task_handle != nullptr) {
+        const portunus_event_t wake = {};          /* EVENT_NONE: cut the queue wait short */
+        (void)xQueueSendToFront(m_event_queue, &wake, 0);
+        if (xSemaphoreTake(m_fsm_exited, pdMS_TO_TICKS(FSM_STOP_TIMEOUT_MS)) != pdTRUE) {
+            ESP_LOGE(TAG, "FSM task did not stop within %d ms", FSM_STOP_TIMEOUT_MS);
+            return PORTUNUS_ERR_TIMEOUT;
+        }
+        m_fsm_task_handle = nullptr;
+    }
+
+    (void)xQueueReset(m_event_queue);
+    m_state       = PEU_STATE_IDLE;
+    m_deadline_ms = 0;
+    if (m_has_feedback) {
+        m_feedback->indicate(feedback_type_t::NONE);
+    }
+    ESP_LOGI(TAG, "PEU FSM stopped");
+    return PORTUNUS_OK;
+}
+
+ProvisioningFSM::~ProvisioningFSM()
+{
+    if (stop() == PORTUNUS_ERR_TIMEOUT) {
+        ESP_LOGE(TAG, "ProvisioningFSM destroyed while a task is still running");
+        return;
+    }
+    if (m_event_queue != nullptr) {
+        vQueueDelete(m_event_queue);
+    }
+    if (m_fsm_exited != nullptr) {
+        vSemaphoreDelete(m_fsm_exited);
+    }
+    if (m_poll_exited != nullptr) {
+        vSemaphoreDelete(m_poll_exited);
+    }
 }
 
 /* ── Event bus bridge ─────────────────────────────────────────────────────── */
@@ -193,7 +286,8 @@ void ProvisioningFSM::poll()
     const TickType_t poll_interval = pdMS_TO_TICKS(FSM_POLL_INTERVAL_MS);
     const TickType_t reread_delay  = pdMS_TO_TICKS(CARD_REREAD_DELAY_MS);
 
-    for (;;) {
+    /* Delays are notification waits so stop() can cut them short. */
+    while (!m_stop_requested) {
         // Always poll the arm button — it needs to fire from SLEEP to wake up.
         if (m_has_arm && m_arm->poll_arm()) {
             portunus_event_t evt;
@@ -218,13 +312,16 @@ void ProvisioningFSM::poll()
                 }
 
                 m_reader->halt();
-                vTaskDelay(reread_delay);
+                (void)ulTaskNotifyTake(pdTRUE, reread_delay);
                 continue;
             }
         }
 
-        vTaskDelay(poll_interval);
+        (void)ulTaskNotifyTake(pdTRUE, poll_interval);
     }
+
+    xSemaphoreGive(m_poll_exited);
+    vTaskDelete(nullptr);
 }
 
 /* ── FSM main loop ────────────────────────────────────────────────────────── */
@@ -233,7 +330,7 @@ void ProvisioningFSM::run()
 {
     const TickType_t timeout = pdMS_TO_TICKS(FSM_POLL_INTERVAL_MS);
 
-    for (;;) {
+    while (!m_stop_requested) {
         (void)receive_and_process(timeout);
         check_dropped_events();
         check_timeout();
@@ -242,6 +339,9 @@ void ProvisioningFSM::run()
         m_has_network = wifi_mgr_is_connected();
 #endif
     }
+
+    xSemaphoreGive(m_fsm_exited);
+    vTaskDelete(nullptr);
 }
 
 /* ── Event processing ─────────────────────────────────────────────────────── */

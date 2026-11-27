@@ -388,6 +388,35 @@ void test_oversize_uid_len_clamped(void) {
                                  sizeof uid10);
 }
 
+/* D-T9: start() subscribes and runs the tasks; stop() unsubscribes, ends both
+ * tasks promptly and turns the LED off; the FSM starts again afterwards. */
+void test_start_stop_restart(void) {
+    FakeCredentialReader reader;
+    FakeFeedback         feedback;
+    FakeArm              arm;
+    FakeClock            clock;
+    ProvisioningFSM      fsm(&reader, &feedback, &arm, &clock);
+
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.start());
+    TEST_ASSERT_EQUAL_size_t(4, event_bus_fake_subscriber_count());
+    TEST_ASSERT_EQUAL(PEU_STATE_IDLE, fsm.state());
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_ALREADY_INIT, fsm.start());
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    const TickType_t t0 = xTaskGetTickCount();
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.stop());
+    TEST_ASSERT_LESS_THAN_UINT32(500, (xTaskGetTickCount() - t0) * portTICK_PERIOD_MS);
+    TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_subscriber_count());
+    TEST_ASSERT_EQUAL(feedback_type_t::NONE, feedback.last());
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.stop());
+
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.start());
+    TEST_ASSERT_EQUAL_size_t(4, event_bus_fake_subscriber_count());
+    TEST_ASSERT_EQUAL(feedback_type_t::PEU_IDLE, feedback.last());
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.stop());
+}
+
 extern "C" void app_main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_init_requires_working_reader);
@@ -405,6 +434,7 @@ extern "C" void app_main(void) {
     RUN_TEST(test_oversize_uid_len_clamped);
     RUN_TEST(test_unpublished_capture_shows_error);
     RUN_TEST(test_dropped_event_during_capture_shows_error);
+    RUN_TEST(test_start_stop_restart);
     int failures = UNITY_END();
     exit(failures);
 }
