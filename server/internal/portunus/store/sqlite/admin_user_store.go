@@ -39,7 +39,7 @@ VALUES (?, ?, ?, ?, 1, 1, ?, ?);
 
 func (s *AdminUserStore) GetAdminUserByUsername(ctx context.Context, username string) (*store.AdminUserRecord, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT uuid, username, password_hash, COALESCE(role_id,'admin'), COALESCE(enabled,1),
+SELECT uuid, username, password_hash, COALESCE(role_id,''), COALESCE(enabled,1),
        must_change_pw, expires_at_ms, member_uuid, created_at_ms, updated_at_ms, last_login_at_ms
 FROM admin_users WHERE username = ?;
 `, username)
@@ -48,7 +48,7 @@ FROM admin_users WHERE username = ?;
 
 func (s *AdminUserStore) GetAdminUserByUUID(ctx context.Context, uuid string) (*store.AdminUserRecord, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT uuid, username, password_hash, COALESCE(role_id,'admin'), COALESCE(enabled,1),
+SELECT uuid, username, password_hash, COALESCE(role_id,''), COALESCE(enabled,1),
        must_change_pw, expires_at_ms, member_uuid, created_at_ms, updated_at_ms, last_login_at_ms
 FROM admin_users WHERE uuid = ?;
 `, uuid)
@@ -57,7 +57,7 @@ FROM admin_users WHERE uuid = ?;
 
 func (s *AdminUserStore) ListAdminUsers(ctx context.Context) ([]store.AdminUserRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT uuid, username, password_hash, COALESCE(role_id,'admin'), COALESCE(enabled,1),
+SELECT uuid, username, password_hash, COALESCE(role_id,''), COALESCE(enabled,1),
        must_change_pw, expires_at_ms, member_uuid, created_at_ms, updated_at_ms, last_login_at_ms
 FROM admin_users ORDER BY username;
 `)
@@ -175,7 +175,7 @@ func (s *AdminUserStore) CountEnabledAdminsWithRole(ctx context.Context, roleID 
 	var n int
 	err := s.db.QueryRowContext(ctx, `
 SELECT COUNT(*) FROM admin_users
-WHERE enabled = 1 AND COALESCE(role_id,'admin') = ?
+WHERE enabled = 1 AND role_id = ?
   AND (expires_at_ms IS NULL OR expires_at_ms > ?);`,
 		roleID, nowMs).Scan(&n)
 	if err != nil {

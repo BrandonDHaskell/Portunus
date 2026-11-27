@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log"
 	"testing"
@@ -153,5 +154,53 @@ func TestAuthService_ResolveSession_ExpiredAccountRejected(t *testing.T) {
 	_, err := svc.ResolveSession(ctx, "sess-exp")
 	if err == nil {
 		t.Fatal("expected error for expired account session, got nil")
+	}
+}
+
+// ── NULL role fails closed ────────────────────────────────────────────────────
+
+// nullRoleUser creates a user and then clears role_id directly, the state a
+// hand-edited or partially migrated row could be in.
+func nullRoleUser(t *testing.T, conn *sql.DB, us *sqlitestore.AdminUserStore, uuid, username, pass string) {
+	t.Helper()
+	if err := us.CreateAdminUser(context.Background(), uuid, username, hashPW(t, pass), "admin"); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if _, err := conn.Exec(`UPDATE admin_users SET role_id = NULL WHERE uuid = ?`, uuid); err != nil {
+		t.Fatalf("null role: %v", err)
+	}
+}
+
+func TestAuthService_NullRole_LoginRejected(t *testing.T) {
+	conn, writer := openSvcTestDB(t)
+	us := sqlitestore.NewAdminUserStore(conn, writer)
+	svc := service.NewAuthService(us, sqlitestore.NewSessionStore(conn, writer), sqlitestore.NewRoleStore(conn, writer), log.Default())
+
+	const pass = "correct-horse-battery"
+	nullRoleUser(t, conn, us, "uuid-norole-1", "norole1", pass)
+
+	if _, err := svc.Login(context.Background(), "norole1", pass); !errors.Is(err, service.ErrInvalidCredentials) {
+		t.Fatalf("Login with NULL role: got %v, want ErrInvalidCredentials", err)
+	}
+}
+
+func TestAuthService_NullRole_SessionNotResolved(t *testing.T) {
+	conn, writer := openSvcTestDB(t)
+	us := sqlitestore.NewAdminUserStore(conn, writer)
+	ss := sqlitestore.NewSessionStore(conn, writer)
+	svc := service.NewAuthService(us, ss, sqlitestore.NewRoleStore(conn, writer), log.Default())
+	ctx := context.Background()
+
+	nullRoleUser(t, conn, us, "uuid-norole-2", "norole2", "correct-horse-battery")
+	if err := ss.CreateSession(ctx, "sess-norole", "uuid-norole-2", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	sess, err := svc.ResolveSession(ctx, "sess-norole")
+	if err == nil {
+		t.Fatalf("NULL-role session resolved with %d permissions; must fail closed", len(sess.Permissions))
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("got %v, want store.ErrNotFound", err)
 	}
 }

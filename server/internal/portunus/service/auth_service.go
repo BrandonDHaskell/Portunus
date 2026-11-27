@@ -177,6 +177,10 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (str
 		return "", ErrInvalidCredentials
 	}
 
+	if user.RoleID == "" {
+		return "", ErrInvalidCredentials
+	}
+
 	sessionID, err := generateSessionID()
 	if err != nil {
 		return "", fmt.Errorf("login: generate session: %w", err)
@@ -225,9 +229,11 @@ func (s *AuthService) ResolveSession(ctx context.Context, sessionID string) (*Ad
 		return nil, store.ErrNotFound
 	}
 
+	// A user with no role holds no permissions. Fail closed: never default an
+	// unassigned account to the superuser role.
 	roleID := user.RoleID
 	if roleID == "" {
-		roleID = "admin"
+		return nil, store.ErrNotFound
 	}
 
 	perms, err := s.roles.GetRolePermissions(ctx, roleID)
