@@ -1,0 +1,28 @@
+# Golden vectors for the HMAC projections the module and the server both
+# sign (CLAUDE.md hazard #5). Read by the firmware unit test
+# (access_module/test/unit/test_access_protocol.cpp) and the Go tests in
+# server/internal/grpcapi and server/internal/devicesig: a change on one
+# side that the other does not make fails a test.
+#
+# The key is a test value, not a deployment secret.
+#
+# Format: whitespace-separated fields, one vector per line; "-" stands for
+# an empty field. The last two fields are always the projection and its
+# lowercase hex HMAC-SHA256 under the key.
+#
+#   heartbeat   module_id sequence
+#   access      module_id credential_id nonce_hex requested_at
+#   provision   module_id uid_hex
+#   access_resp module_id credential_id nonce_hex granted(0|1)
+key portunus-test-vector-key-not-a-secret
+heartbeat door-001 0 heartbeat|door-001|0 8467902e331333f6e91f90cb049a2470ffb44f43a349703cdbfa3a7e0139bd56
+heartbeat door-001 4294967295 heartbeat|door-001|4294967295 822e2907565591ff4b16de904b12f485994c164dfd9d0408d02666a92acb695d
+access door-001 04:A3:2B:1C 000102030405060708090a0b0c0d0e0f - access|door-001|04:A3:2B:1C|000102030405060708090a0b0c0d0e0f| 70b4ebecc61ccba9af204dc53175be88feaf616b44fc9c5795fb574557f872b7
+access door-001 04:A3:2B:1C 000102030405060708090a0b0c0d0e0f 2026-01-02T03:04:05.000006Z access|door-001|04:A3:2B:1C|000102030405060708090a0b0c0d0e0f|2026-01-02T03:04:05.000006Z fc919df6ff1d4a70604bfebe807108aeab79d4f39c92dccbfc993800528d9104
+access mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm 00:11:22:33:44:55:66:77:88:99 ffffffffffffffffffffffffffffffff 2026-12-31T23:59:59.999999Z access|mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm|00:11:22:33:44:55:66:77:88:99|ffffffffffffffffffffffffffffffff|2026-12-31T23:59:59.999999Z 5991ef5037ee9be87b23e54c2e75513f2c2a0e612fa740f664bf2fbbc6aca0cf
+provision door-001 04a32b1c provision|door-001|04a32b1c 1d0a1081720e903106d2b285c6d087c20f91128094f3822918e1864551c0b877
+provision pc-01 04112233445566778899 provision|pc-01|04112233445566778899 241fc9c2850a0e0ec0811c1406de092450bbe0ad769a84f0c9558ff02b6748c8
+access_resp door-001 04:A3:2B:1C 000102030405060708090a0b0c0d0e0f 1 access_resp|door-001|04:A3:2B:1C|000102030405060708090a0b0c0d0e0f|1 ce150f767bdcb89a4e95a29b3e8c9f42c94a3143f5fbeb8a440e6b72bea0cef2
+access_resp door-001 04:A3:2B:1C 000102030405060708090a0b0c0d0e0f 0 access_resp|door-001|04:A3:2B:1C|000102030405060708090a0b0c0d0e0f|0 8f7784c50077f4736a86ad0e51404452cc1dd9cf1f5c466010640313535f3336
+access_resp door-001 04:A3:2B:1C ffffffffffffffffffffffffffffffff 1 access_resp|door-001|04:A3:2B:1C|ffffffffffffffffffffffffffffffff|1 9575fc4346530ead14f06e59bf53d3ef38726be9adc486b50003987cda81186a
+access_resp mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm 00:11:22:33:44:55:66:77:88:99 ffffffffffffffffffffffffffffffff 1 access_resp|mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm|00:11:22:33:44:55:66:77:88:99|ffffffffffffffffffffffffffffffff|1 3172eb8cfbaf4fe48a937940abaf0481a1e95a4e25de4406f0d12baffcb54116

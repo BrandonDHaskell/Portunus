@@ -22,8 +22,8 @@ import (
 // a request projection ("access|...") signed with the same shared secret.
 //
 // Must match access_response_projection() in the firmware
-// (access_module/services/server_comm/src/access_projection.cpp); both sides
-// test the same golden vector (CLAUDE.md hazard #5).
+// (access_module/services/server_comm/src/access_protocol.cpp); both sides
+// test proto/testdata/hmac_vectors.txt (CLAUDE.md hazard #5).
 func AccessResponseProjection(moduleID, credentialID string, nonce []byte, granted bool) []byte {
 	v := 0
 	if granted {

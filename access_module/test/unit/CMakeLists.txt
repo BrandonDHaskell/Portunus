@@ -13,6 +13,10 @@ FetchContent_Declare(unity
     GIT_REPOSITORY https://github.com/ThrowTheSwitch/Unity.git
     GIT_TAG        v2.6.0)
 FetchContent_MakeAvailable(unity)
+# Unity enables its 64-bit assertions only when long or pointers are 64-bit,
+# so on the 32-bit host-m32 preset TEST_ASSERT_EQUAL_INT64 would fail at run
+# time. The device's time_t is 64-bit, so the tests need them everywhere.
+target_compile_definitions(unity PUBLIC UNITY_SUPPORT_64)
 
 # access_module root, two levels up from test/unit
 set(AM ${CMAKE_CURRENT_LIST_DIR}/../..)
@@ -103,10 +107,18 @@ target_include_directories(test_event_bus_core PRIVATE
 target_link_libraries(test_event_bus_core PRIVATE unity)
 add_test(NAME event_bus_core COMMAND test_event_bus_core)
 
-add_executable(test_access_projection
-    test_access_projection.cpp
-    ${AM}/services/server_comm/src/access_projection.cpp)
-target_include_directories(test_access_projection PRIVATE
-    ${AM}/services/server_comm/include)
-target_link_libraries(test_access_projection PRIVATE unity)
-add_test(NAME access_projection COMMAND test_access_projection)
+add_executable(test_access_protocol
+    test_access_protocol.cpp
+    ${AM}/services/server_comm/src/access_protocol.cpp)
+target_include_directories(test_access_protocol PRIVATE
+    ${AM}/services/server_comm/include
+    ${AM}/components/portunus_types/include)
+target_compile_definitions(test_access_protocol PRIVATE
+    PORTUNUS_HMAC_VECTORS="${AM}/../proto/testdata/hmac_vectors.txt")
+target_link_libraries(test_access_protocol PRIVATE unity)
+add_test(NAME access_protocol COMMAND test_access_protocol)
+
+# Confirms the host-m32 preset still has the ESP32-S3's data model.
+add_executable(test_target_abi test_target_abi.c)
+target_link_libraries(test_target_abi PRIVATE unity)
+add_test(NAME target_abi COMMAND test_target_abi)

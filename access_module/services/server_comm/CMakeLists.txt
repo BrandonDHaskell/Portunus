@@ -30,7 +30,7 @@
 idf_component_register(
     SRCS
         "src/server_comm.cpp"
-        "src/access_projection.cpp"
+        "src/access_protocol.cpp"
     INCLUDE_DIRS
         "include"
     REQUIRES
