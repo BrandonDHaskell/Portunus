@@ -139,7 +139,19 @@ type HeartbeatRequest struct {
 	// Free heap in bytes at the time of the heartbeat.
 	FreeHeapBytes uint32 `protobuf:"varint,7,opt,name=free_heap_bytes,json=freeHeapBytes,proto3" json:"free_heap_bytes,omitempty"`
 	// Monotonically increasing heartbeat counter (resets on reboot).
-	Sequence      uint32 `protobuf:"varint,8,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	Sequence uint32 `protobuf:"varint,8,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	// false while the card reader is in degraded mode (hardware fault, or it
+	// never came up). Sent by access-point modules; omitted by others.
+	ReaderOk *bool `protobuf:"varint,9,opt,name=reader_ok,json=readerOk,proto3,oneof" json:"reader_ok,omitempty"`
+	// false after the strike failed to lock and before a lock has succeeded:
+	// the door may be stuck unlocked. Sent by access-point modules; omitted by
+	// others.
+	StrikeOk *bool `protobuf:"varint,10,opt,name=strike_ok,json=strikeOk,proto3,oneof" json:"strike_ok,omitempty"`
+	// Events lost since boot: publishes the event bus refused, plus events a
+	// subscriber (FSM or comm task) dropped because its queue was full. Each
+	// lost request was answered on the device; a rising count means a slow
+	// server, network, or task.
+	DroppedEvents uint32 `protobuf:"varint,11,opt,name=dropped_events,json=droppedEvents,proto3" json:"dropped_events,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -226,6 +238,27 @@ func (x *HeartbeatRequest) GetFreeHeapBytes() uint32 {
 func (x *HeartbeatRequest) GetSequence() uint32 {
 	if x != nil {
 		return x.Sequence
+	}
+	return 0
+}
+
+func (x *HeartbeatRequest) GetReaderOk() bool {
+	if x != nil && x.ReaderOk != nil {
+		return *x.ReaderOk
+	}
+	return false
+}
+
+func (x *HeartbeatRequest) GetStrikeOk() bool {
+	if x != nil && x.StrikeOk != nil {
+		return *x.StrikeOk
+	}
+	return false
+}
+
+func (x *HeartbeatRequest) GetDroppedEvents() uint32 {
+	if x != nil {
+		return x.DroppedEvents
 	}
 	return 0
 }
@@ -630,7 +663,7 @@ var File_portunus_v1_portunus_proto protoreflect.FileDescriptor
 
 const file_portunus_v1_portunus_proto_rawDesc = "" +
 	"\n" +
-	"\x1aportunus/v1/portunus.proto\x12\vportunus.v1\"\xac\x02\n" +
+	"\x1aportunus/v1/portunus.proto\x12\vportunus.v1\"\xb3\x03\n" +
 	"\x10HeartbeatRequest\x12\x1b\n" +
 	"\tmodule_id\x18\x01 \x01(\tR\bmoduleId\x12)\n" +
 	"\x10firmware_version\x18\x02 \x01(\tR\x0ffirmwareVersion\x12\x19\n" +
@@ -640,9 +673,17 @@ const file_portunus_v1_portunus_proto_rawDesc = "" +
 	"\brssi_dbm\x18\x05 \x01(\x05H\x01R\arssiDbm\x88\x01\x01\x12\x0e\n" +
 	"\x02ip\x18\x06 \x01(\tR\x02ip\x12&\n" +
 	"\x0ffree_heap_bytes\x18\a \x01(\rR\rfreeHeapBytes\x12\x1a\n" +
-	"\bsequence\x18\b \x01(\rR\bsequenceB\x0e\n" +
+	"\bsequence\x18\b \x01(\rR\bsequence\x12 \n" +
+	"\treader_ok\x18\t \x01(\bH\x02R\breaderOk\x88\x01\x01\x12 \n" +
+	"\tstrike_ok\x18\n" +
+	" \x01(\bH\x03R\bstrikeOk\x88\x01\x01\x12%\n" +
+	"\x0edropped_events\x18\v \x01(\rR\rdroppedEventsB\x0e\n" +
 	"\f_door_closedB\v\n" +
-	"\t_rssi_dbm\"w\n" +
+	"\t_rssi_dbmB\f\n" +
+	"\n" +
+	"_reader_okB\f\n" +
+	"\n" +
+	"_strike_ok\"w\n" +
 	"\x11HeartbeatResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x14\n" +
 	"\x05known\x18\x02 \x01(\bR\x05known\x12\x1b\n" +
