@@ -39,6 +39,7 @@
 #include "sdkconfig.h"
 
 #include <sys/time.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -81,6 +82,14 @@ portunus_err_t server_comm_init(const portunus_device_config_t *cfg);
  * to populate AccessRequest.requested_at for replay protection.
  */
 bool server_comm_clock_synced(void);
+
+/**
+ * @brief Events lost since boot: requests or heartbeats dropped because the
+ * comm queue was full, and decisions the event bus refused. Dropped
+ * requests are answered (deny or COMM_ERROR); this counts them for logs and
+ * future telemetry (D-T5).
+ */
+uint32_t server_comm_dropped_events(void);
 
 #ifdef CONFIG_PORTUNUS_TEST_HOOKS
 /* Test-only entry points. CONFIG_PORTUNUS_TEST_HOOKS is defined only by the

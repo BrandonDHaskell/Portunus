@@ -75,6 +75,7 @@
 #include "grpc_client.hpp"
 #include "grpc_wire.hpp"
 #include "net_info.hpp"
+#include "queue_pressure.hpp"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_system.h"
@@ -89,6 +90,7 @@
 #include <inttypes.h>
 #include <time.h>
 #include <sys/time.h>
+#include <atomic>
 
 /* ── Wire size contracts (checked at compile time) ───────────────────────────
  * COMP-02: grpc_client frames each request in a fixed buffer, and writes the
@@ -148,6 +150,10 @@ static bool           s_reader_degraded = false; /* set by EVENT_CREDENTIAL_READ
 static bool           s_clock_synced    = false; /* true after first successful settimeofday() from heartbeat */
 static int64_t        s_last_sync_us    = 0;     /* esp_timer time of the last successful clock sync */
 static event_heartbeat_t s_last_heartbeat = {};  /* most recent heartbeat payload, reused for on-demand syncs */
+/* Events lost to a full comm queue or a failed publish (D-T5). Bumped by the
+ * bus dispatcher and the comm task, read by anyone: atomic. */
+static std::atomic<uint32_t> s_dropped{0};
+static queue_pressure_t   s_queue_pressure = {};   /* comm task only */
 
 /* The server rejects access requests whose requested_at is missing or more
  * than 60 s off its clock.  Re-syncing hourly keeps RTC drift (tens of ppm)
@@ -351,15 +357,23 @@ static void on_heartbeat_event(const portunus_event_t *event, void *ctx)
 {
     (void)ctx;
     if (s_comm_queue == NULL) { return; }
-    /* Best-effort: drop if queue is full rather than blocking dispatcher */
-    xQueueSend(s_comm_queue, event, 0);
+    /* Best-effort: drop if queue is full rather than blocking dispatcher.
+     * Not a request, so nothing to answer; counted for the pressure log. */
+    if (xQueueSend(s_comm_queue, event, 0) != pdTRUE) {
+        s_dropped++;
+        ESP_LOGW(TAG, "Comm queue full: heartbeat #%" PRIu32 " dropped",
+                 event->payload.heartbeat.sequence);
+    }
 }
 
 static void on_reader_fault_event(const portunus_event_t *event, void *ctx)
 {
     (void)ctx;
     if (s_comm_queue == NULL) { return; }
-    xQueueSend(s_comm_queue, event, 0);
+    if (xQueueSend(s_comm_queue, event, 0) != pdTRUE) {
+        s_dropped++;
+        ESP_LOGW(TAG, "Comm queue full: reader status event 0x%04x dropped", (unsigned)event->id);
+    }
 }
 
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
@@ -376,17 +390,27 @@ static void on_credential_event(const portunus_event_t *event, void *ctx)
         credential_uid_to_log_id(&event->payload.credential_read.credential,
                                  log_id, sizeof(log_id));
         ESP_LOGW(TAG, "Comm queue full: denying credential %s", log_id);
+        s_dropped++;
         publish_access_denied(log_id, "comm_busy");
     }
 }
 #endif /* CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT */
 
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
+static void publish_provision_result(provision_result_reason_t reason,
+                                     const char *member_uuid, const char *detail);
+
 static void on_provision_event(const portunus_event_t *event, void *ctx)
 {
     (void)ctx;
     if (s_comm_queue == NULL) { return; }
-    xQueueSend(s_comm_queue, event, 0);
+    if (xQueueSend(s_comm_queue, event, 0) != pdTRUE) {
+        /* Answer at once so the console shows its error instead of waiting
+         * out the capture timeout (SC-15, D-T5). */
+        ESP_LOGW(TAG, "Comm queue full: failing provision request");
+        s_dropped++;
+        publish_provision_result(PROVISION_RESULT_COMM_ERROR, NULL, "comm_busy");
+    }
 }
 #endif
 
@@ -620,7 +644,11 @@ static void handle_credential(const event_credential_read_t *cred)
     decision.id = resp.granted ? EVENT_ACCESS_GRANTED : EVENT_ACCESS_DENIED;
     proto_fill_decision(&decision.payload.access_decision, req_log_id, resp.granted,
                         resp.known, resp.reason);
-    event_bus_publish(&decision);
+    if (event_bus_publish(&decision) != PORTUNUS_OK) {
+        /* The FSM's decision timeout still answers the user with a deny. */
+        s_dropped++;
+        ESP_LOGE(TAG, "Access decision for %s not published (bus full)", req_log_id);
+    }
 }
 #endif /* CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT */
 
@@ -749,6 +777,19 @@ static void comm_task(void *arg)
 
         s_idle_ticks = 0;  /* Reset on any RPC activity */
 
+        switch (queue_pressure_sample(s_queue_pressure, uxQueueMessagesWaiting(s_comm_queue),
+                                      COMM_QUEUE_LENGTH)) {
+        case queue_pressure_event_t::HIGH:
+            ESP_LOGW(TAG, "Comm queue consistently near full (%d deep, %" PRIu32 " dropped so far): "
+                     "server or network slow", COMM_QUEUE_LENGTH, s_dropped.load());
+            break;
+        case queue_pressure_event_t::RECOVERED:
+            ESP_LOGI(TAG, "Comm queue pressure cleared");
+            break;
+        default:
+            break;
+        }
+
         if (!wifi_mgr_is_connected()) {
             ESP_LOGD(TAG, "WiFi not connected — dropping event 0x%04x",
                      (unsigned)event.id);
@@ -809,6 +850,11 @@ static void comm_task(void *arg)
 bool server_comm_clock_synced(void)
 {
     return s_clock_synced;
+}
+
+uint32_t server_comm_dropped_events(void)
+{
+    return s_dropped.load();
 }
 
 portunus_err_t server_comm_init(const portunus_device_config_t *cfg)
@@ -937,6 +983,8 @@ void server_comm_reset_for_test(void)
     s_last_sync_us    = 0;
     s_last_heartbeat  = {};
     s_idle_ticks      = 0;
+    s_dropped         = 0;
+    s_queue_pressure  = {};
 #if PORTUNUS_HMAC_ENABLED
     memset(s_hmac_secret, 0, sizeof(s_hmac_secret));
     s_hmac_secret_len = 0;
