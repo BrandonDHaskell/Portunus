@@ -139,6 +139,14 @@ jobs:
             -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.hb" set-target linux build
           $APP/build/hb/portunus_host_tests.elf
 
+      - name: Component tier, WiFi reconnect task (fake callbacks)
+        run: |
+          . $IDF_PATH/export.sh
+          APP=$PWD/access_module/test/component
+          idf.py --preview -C $APP -B $APP/build/wifi -D SDKCONFIG=$APP/build/wifi/sdkconfig \
+            -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.wifi" set-target linux build
+          $APP/build/wifi/portunus_host_tests.elf
+
       - name: Component tier, server_comm (access point, no-HMAC dev, PEU)
         run: |
           . $IDF_PATH/export.sh

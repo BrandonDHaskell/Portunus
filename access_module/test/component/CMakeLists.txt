@@ -36,6 +36,7 @@ set(EXTRA_COMPONENT_DIRS
     # the real event_bus under the fake's component name.
     ${AM}/services/heartbeat_service
     ${AM}/services/server_comm
+    ${AM}/services/wifi_reconnect
 )
 
 # Limit the build to exactly what main requires (and their transitive deps).

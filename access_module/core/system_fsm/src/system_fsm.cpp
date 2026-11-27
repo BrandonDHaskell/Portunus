@@ -81,7 +81,8 @@ portunus_err_t SystemFSM::init()
     if (m_reader != nullptr) {
         portunus_err_t err = m_reader->init();
         if (err == PORTUNUS_OK) {
-            m_has_reader = true;
+            m_has_reader    = true;
+            m_reader_inited = true;
             ESP_LOGI(TAG, "Credential reader: OK");
         } else {
             m_has_reader = false;
@@ -210,7 +211,9 @@ portunus_err_t SystemFSM::start()
     }
 
     /* ── Start credential polling sub-task ──────────────────────────────── */
-    if (m_has_reader) {
+    /* m_has_reader is false here after a stop() while degraded; the task
+     * then starts in recovery mode (see poll_credential). */
+    if (m_reader_inited) {
         ret = xTaskCreate(
             credential_poll_task_entry,
             "credential_poll",
@@ -765,6 +768,9 @@ void SystemFSM::poll_credential()
         .recovery_interval_ms = READER_RECOVERY_INTERVAL_MS,
     };
     reader_health_t health;
+    /* Restarted while degraded: probe first, so a reader that came back
+     * publishes RECOVERED (and the FSM and heartbeat see it). */
+    health.degraded = !m_has_reader;
 
     while (!m_stop_requested) {
         reader_step_t  step;

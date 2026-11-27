@@ -6,4 +6,5 @@
 static volatile bool s_connected = false;
 
 bool wifi_mgr_is_connected(void) { return s_connected; }
+portunus_err_t wifi_mgr_deinit(void) { return PORTUNUS_OK; }
 void wifi_mgr_fake_set_connected(bool connected) { s_connected = connected; }

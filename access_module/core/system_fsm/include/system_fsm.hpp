@@ -137,6 +137,9 @@ private:
      * may be read from another task (capabilities()): atomic (F15). The
      * decision core gets a consistent snapshot through caps(). */
     std::atomic<bool> m_has_reader{false};
+    /** init() brought the reader up. Unlike m_has_reader, degraded mode does
+     *  not clear it, so a restart while degraded still polls (and probes). */
+    bool              m_reader_inited = false;
     std::atomic<bool> m_has_access_point{false};
     std::atomic<bool> m_has_feedback{false};
     std::atomic<bool> m_has_network{false};

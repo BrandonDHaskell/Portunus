@@ -1,0 +1,6 @@
+# WiFi reconnect variant of the component tier, layered on sdkconfig.defaults:
+# SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.wifi"
+# Runs the real WifiReconnect task (services/wifi_reconnect) on the POSIX
+# FreeRTOS scheduler with fake connect callbacks. The tests pass their own
+# short intervals, so no timing Kconfig is overridden.
+CONFIG_PORTUNUS_TEST_WIFI_RECONNECT=y

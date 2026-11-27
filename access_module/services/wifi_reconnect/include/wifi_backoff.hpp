@@ -1,4 +1,4 @@
-/* Pure WiFi reconnect backoff step extracted from wifi_mgr's reconnect task.
+/* Pure WiFi reconnect backoff step used by the wifi_reconnect task.
  * No ESP-IDF or FreeRTOS dependency: the unit tier links wifi_backoff.cpp
  * and the reconnect task calls the same function. */
 #pragma once

@@ -771,6 +771,31 @@ void test_start_reports_dead_reader_and_open_door(void) {
     TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.stop());
 }
 
+/* A stop() while the reader is degraded must not leave it unpolled after the
+ * restart: degraded mode clears has_reader, and start() used to skip the
+ * poll task on it, so the reader was never probed again. The new task starts
+ * in recovery mode and reports RECOVERED once the reader answers. */
+void test_restart_while_degraded_probes_reader(void) {
+    LiveRig r;
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.init());
+    r.reader.init_result = PORTUNUS_ERR_SPI_INIT;            /* probes fail: stays degraded */
+    for (int i = 0; i < 5; ++i) r.reader.enqueue_error(PORTUNUS_ERR_SPI_TRANSFER);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.start());
+    TEST_ASSERT_TRUE(wait_until([] {
+        return event_bus_fake_count_of(EVENT_CREDENTIAL_READ_ERROR) >= 1;
+    }, 5000));
+    TEST_ASSERT_FALSE(r.fsm.capabilities().has_reader);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.stop());
+
+    r.reader.init_result = PORTUNUS_OK;                      /* the reader is back */
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.start());
+    TEST_ASSERT_TRUE(wait_until([] {
+        return event_bus_fake_count_of(EVENT_CREDENTIAL_READER_RECOVERED) >= 1;
+    }, 2000));
+    TEST_ASSERT_TRUE(wait_until([&r] { return r.fsm.capabilities().has_reader; }, 1000));
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, r.fsm.stop());
+}
+
 /* D-T9: stop() unsubscribes, ends both tasks promptly, locks the strike,
  * and leaves the FSM ready to start again; a second stop() is a no-op. */
 void test_stop_locks_and_allows_restart(void) {
@@ -1195,6 +1220,7 @@ extern "C" void app_main(void) {
     RUN_TEST(test_start_subscribes_and_reports_ready);
     RUN_TEST(test_start_reports_dead_reader_and_open_door);
     RUN_TEST(test_stop_locks_and_allows_restart);
+    RUN_TEST(test_restart_while_degraded_probes_reader);
     RUN_TEST(test_stop_during_hold_locks_strike);
     RUN_TEST(test_stop_reports_lock_failure);
     RUN_TEST(test_stop_waits_for_poll_task);

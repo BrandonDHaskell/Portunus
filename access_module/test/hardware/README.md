@@ -118,6 +118,18 @@ published the unlock timeout.
    Expect `Door closed during unlock hold` and one
    `Strike DE-ENERGIZED (locked)`, with no timer re-lock afterwards.
 
+## Deferred to the on-target tier
+
+Not manual checks: listed so the chunk 5 on-target app covers them. The host
+tiers cannot run them because the linux target has no `esp_wifi`.
+
+- **WIFI-HW** (`wifi_mgr` lifecycle). After `wifi_mgr_stop()`, no
+  `Reconnect: connecting` line follows `WiFi manager stopped`, and a later
+  `wifi_mgr_start()` connects again. `wifi_mgr_deinit()` returns OK, and
+  `wifi_mgr_init()` then succeeds a second time. The component tier (`wifi`
+  variant) tests only the reconnect task, with fake callbacks, not the
+  driver calls or the unregistering of event handlers.
+
 ## Results
 
 | ID | Date | Firmware commit | Polarity | Result | Notes |
