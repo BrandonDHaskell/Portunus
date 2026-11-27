@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/permissions"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store"
 	sqlitestore "github.com/BrandonDHaskell/Portunus/server/internal/portunus/store/sqlite"
@@ -58,7 +59,7 @@ func TestAdminUserService_SetEnabled_SelfDisableBlocked(t *testing.T) {
 	ctx := context.Background()
 	seedAdminUser(t, us, "uuid-self", "admin", true)
 
-	err := svc.SetEnabled(ctx, "uuid-self", "uuid-self", false)
+	err := svc.SetEnabled(ctx, "uuid-self", "uuid-self", allPerms(), false)
 	if !errors.Is(err, service.ErrCannotSelfDisable) {
 		t.Fatalf("expected ErrCannotSelfDisable, got: %v", err)
 	}
@@ -70,7 +71,7 @@ func TestAdminUserService_SetEnabled_LastAdminDisableBlocked(t *testing.T) {
 	seedAdminUser(t, us, "uuid-only", "admin", true)
 
 	// Different caller UUID so self-disable guard does not fire.
-	err := svc.SetEnabled(ctx, "uuid-only", "uuid-caller", false)
+	err := svc.SetEnabled(ctx, "uuid-only", "uuid-caller", allPerms(), false)
 	if !errors.Is(err, service.ErrLastAdmin) {
 		t.Fatalf("expected ErrLastAdmin, got: %v", err)
 	}
@@ -83,7 +84,7 @@ func TestAdminUserService_SetEnabled_NonLastAdminCanBeDisabled(t *testing.T) {
 	seedAdminUser(t, us, "uuid-b", "admin", true)
 
 	// Disabling uuid-a is fine because uuid-b still holds the admin role.
-	if err := svc.SetEnabled(ctx, "uuid-a", "uuid-b", false); err != nil {
+	if err := svc.SetEnabled(ctx, "uuid-a", "uuid-b", allPerms(), false); err != nil {
 		t.Fatalf("unexpected error disabling non-last admin: %v", err)
 	}
 }
@@ -95,7 +96,7 @@ func TestAdminUserService_SetEnabled_NonAdminRoleUserCanBeDisabled(t *testing.T)
 	seedAdminUser(t, us, "uuid-op", "operator", true)
 
 	// Disabling an operator user is always allowed (they don't hold the admin role).
-	if err := svc.SetEnabled(ctx, "uuid-op", "uuid-admin", false); err != nil {
+	if err := svc.SetEnabled(ctx, "uuid-op", "uuid-admin", allPerms(), false); err != nil {
 		t.Fatalf("unexpected error disabling operator user: %v", err)
 	}
 }
@@ -106,7 +107,7 @@ func TestAdminUserService_SetEnabled_AuditDisable(t *testing.T) {
 	seedAdminUser(t, us, "uuid-a", "admin", true)
 	seedAdminUser(t, us, "uuid-b", "admin", true)
 
-	if err := svc.SetEnabled(ctx, "uuid-a", "uuid-b", false); err != nil {
+	if err := svc.SetEnabled(ctx, "uuid-a", "uuid-b", allPerms(), false); err != nil {
 		t.Fatalf("SetEnabled: %v", err)
 	}
 	requireAuditEntry(t, as, "admin_user.disabled", "uuid-a")
@@ -118,7 +119,7 @@ func TestAdminUserService_SetEnabled_AuditEnable(t *testing.T) {
 	seedAdminUser(t, us, "uuid-admin", "admin", true)
 	seedAdminUser(t, us, "uuid-op", "operator", false)
 
-	if err := svc.SetEnabled(ctx, "uuid-op", "uuid-admin", true); err != nil {
+	if err := svc.SetEnabled(ctx, "uuid-op", "uuid-admin", allPerms(), true); err != nil {
 		t.Fatalf("SetEnabled: %v", err)
 	}
 	requireAuditEntry(t, as, "admin_user.enabled", "uuid-op")
@@ -181,7 +182,7 @@ func TestAdminUserService_SetExpiry_LastAdminBlocked(t *testing.T) {
 	seedAdminUser(t, us, "uuid-only", "admin", true)
 
 	future := time.Now().Add(24 * time.Hour)
-	err := svc.SetExpiry(ctx, "uuid-caller", "uuid-only", &future)
+	err := svc.SetExpiry(ctx, "uuid-caller", allPerms(), "uuid-only", &future)
 	if !errors.Is(err, service.ErrLastAdmin) {
 		t.Fatalf("expected ErrLastAdmin, got: %v", err)
 	}
@@ -193,7 +194,7 @@ func TestAdminUserService_SetExpiry_ClearAlwaysAllowed(t *testing.T) {
 	seedAdminUser(t, us, "uuid-only", "admin", true)
 
 	// Clearing expiry (nil) must never be blocked by the last-admin guard.
-	if err := svc.SetExpiry(ctx, "uuid-caller", "uuid-only", nil); err != nil {
+	if err := svc.SetExpiry(ctx, "uuid-caller", allPerms(), "uuid-only", nil); err != nil {
 		t.Fatalf("unexpected error clearing expiry on last admin: %v", err)
 	}
 }
@@ -206,7 +207,7 @@ func TestAdminUserService_SetExpiry_NonLastAdminAllowed(t *testing.T) {
 
 	future := time.Now().Add(24 * time.Hour)
 	// Setting expiry on uuid-a is fine because uuid-b still qualifies.
-	if err := svc.SetExpiry(ctx, "uuid-b", "uuid-a", &future); err != nil {
+	if err := svc.SetExpiry(ctx, "uuid-b", allPerms(), "uuid-a", &future); err != nil {
 		t.Fatalf("unexpected error setting expiry on non-last admin: %v", err)
 	}
 }
@@ -218,7 +219,7 @@ func TestAdminUserService_SetExpiry_AuditExpirySet(t *testing.T) {
 	seedAdminUser(t, us, "uuid-b", "admin", true)
 
 	future := time.Now().Add(24 * time.Hour)
-	if err := svc.SetExpiry(ctx, "uuid-b", "uuid-a", &future); err != nil {
+	if err := svc.SetExpiry(ctx, "uuid-b", allPerms(), "uuid-a", &future); err != nil {
 		t.Fatalf("SetExpiry: %v", err)
 	}
 	requireAuditEntry(t, as, "admin_user.expiry_set", "uuid-a")
@@ -229,7 +230,7 @@ func TestAdminUserService_SetExpiry_AuditExpiryClear(t *testing.T) {
 	ctx := context.Background()
 	seedAdminUser(t, us, "uuid-only", "admin", true)
 
-	if err := svc.SetExpiry(ctx, "uuid-caller", "uuid-only", nil); err != nil {
+	if err := svc.SetExpiry(ctx, "uuid-caller", allPerms(), "uuid-only", nil); err != nil {
 		t.Fatalf("SetExpiry clear: %v", err)
 	}
 	requireAuditEntry(t, as, "admin_user.expiry_set", "uuid-only")
@@ -277,4 +278,73 @@ func TestAdminUserService_SetMemberLink_DuplicateBlocked(t *testing.T) {
 	// satisfied), but this package has no member seeder. Covered in the sqlite
 	// store tests instead.
 	t.Skip("requires live member_access row; covered in store/sqlite tests")
+}
+
+// ── Target privilege guard (no acting on a more-privileged account) ──────────
+
+// limitedPerms is a custom console role that may manage admin accounts but
+// holds far less than the superuser role.
+func limitedPerms() map[string]struct{} {
+	return map[string]struct{}{
+		permissions.AdminUserList:    {},
+		permissions.AdminUserEdit:    {},
+		permissions.AdminUserDisable: {},
+	}
+}
+
+func TestAdminUserService_LimitedCaller_CannotActOnAdmin(t *testing.T) {
+	svc, us, rs, _ := newAdminUserSvc(t)
+	ctx := context.Background()
+	seedAdminUser(t, us, "uuid-a", "admin", true)
+	seedAdminUser(t, us, "uuid-b", "admin", true) // so the last-admin guard is not what blocks
+	if err := rs.CreateRole(ctx, "empty", "empty", ""); err != nil {
+		t.Fatalf("CreateRole: %v", err)
+	}
+	future := time.Now().Add(24 * time.Hour)
+
+	cases := []struct {
+		name string
+		call func() error
+	}{
+		{"demote", func() error { return svc.AssignRole(ctx, "uuid-lim", limitedPerms(), "uuid-a", "empty") }},
+		{"disable", func() error { return svc.SetEnabled(ctx, "uuid-a", "uuid-lim", limitedPerms(), false) }},
+		{"enable", func() error { return svc.SetEnabled(ctx, "uuid-a", "uuid-lim", limitedPerms(), true) }},
+		{"set expiry", func() error { return svc.SetExpiry(ctx, "uuid-lim", limitedPerms(), "uuid-a", &future) }},
+		{"clear expiry", func() error { return svc.SetExpiry(ctx, "uuid-lim", limitedPerms(), "uuid-a", nil) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.call(); !errors.Is(err, service.ErrPermissionSubsetViolation) {
+				t.Fatalf("got %v, want ErrPermissionSubsetViolation", err)
+			}
+		})
+	}
+
+	rec, err := us.GetAdminUserByUUID(ctx, "uuid-a")
+	if err != nil {
+		t.Fatalf("GetAdminUserByUUID: %v", err)
+	}
+	if rec.RoleID != "admin" || !rec.Enabled || rec.ExpiresAt != nil {
+		t.Errorf("target changed despite rejection: role=%q enabled=%v expires=%v", rec.RoleID, rec.Enabled, rec.ExpiresAt)
+	}
+}
+
+func TestAdminUserService_LimitedCaller_CanActOnEqualOrLesserAccount(t *testing.T) {
+	svc, us, rs, _ := newAdminUserSvc(t)
+	ctx := context.Background()
+	if err := rs.CreateRole(ctx, "empty", "empty", ""); err != nil {
+		t.Fatalf("CreateRole: %v", err)
+	}
+	seedAdminUser(t, us, "uuid-low", "empty", true)
+	future := time.Now().Add(24 * time.Hour)
+
+	if err := svc.SetExpiry(ctx, "uuid-lim", limitedPerms(), "uuid-low", &future); err != nil {
+		t.Fatalf("SetExpiry on lesser account: %v", err)
+	}
+	if err := svc.SetEnabled(ctx, "uuid-low", "uuid-lim", limitedPerms(), false); err != nil {
+		t.Fatalf("SetEnabled on lesser account: %v", err)
+	}
+	if err := svc.AssignRole(ctx, "uuid-lim", limitedPerms(), "uuid-low", "empty"); err != nil {
+		t.Fatalf("AssignRole on lesser account: %v", err)
+	}
 }
