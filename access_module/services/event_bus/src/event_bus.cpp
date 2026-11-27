@@ -168,6 +168,12 @@ portunus_err_t event_bus_subscribe(portunus_event_id_t event_id,
     if (handler == NULL) {
         return PORTUNUS_ERR_INVALID_ARG;
     }
+    /* Before init there is no mutex to take: FreeRTOS asserts on NULL.
+     * Components subscribe from their start() at boot, so refuse with an
+     * error their fatal-subscription handling already reports. */
+    if (s_subscriber_mutex == NULL) {
+        return PORTUNUS_ERR_NOT_INIT;
+    }
 
     xSemaphoreTake(s_subscriber_mutex, portMAX_DELAY);
     const portunus_err_t err = bus_core_subscribe(s_subscribers, event_id, handler, ctx);

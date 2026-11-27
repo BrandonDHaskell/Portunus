@@ -707,7 +707,6 @@ void test_real_bus_second_init_refused(void) {
 /* BUS-03 (F12): subscribing before init is refused with NOT_INIT instead of
  * taking the not-yet-created mutex; publishing is refused too. */
 void test_real_bus_subscribe_before_init(void) {
-    TEST_IGNORE_MESSAGE("F12: subscribe before init takes a NULL mutex; un-ignored by the fix");
     event_bus_reset_for_test();
     TEST_ASSERT_EQUAL(PORTUNUS_ERR_NOT_INIT,
                       event_bus_subscribe(EVENT_HEARTBEAT, recorder, nullptr));

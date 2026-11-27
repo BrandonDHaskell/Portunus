@@ -76,7 +76,9 @@ portunus_err_t event_bus_publish_from_isr(const portunus_event_t *event,
  * @param event_id  The event type to listen for.
  * @param handler   Callback function invoked on the dispatcher task.
  * @param ctx       Opaque context pointer passed to the handler (may be NULL).
- * @return PORTUNUS_OK on success, PORTUNUS_ERR_MAX_SUBSCRIBERS if the table is full.
+ * @return PORTUNUS_OK on success, PORTUNUS_ERR_MAX_SUBSCRIBERS if the table is
+ *         full, PORTUNUS_ERR_INVALID_ARG for a NULL handler, or
+ *         PORTUNUS_ERR_NOT_INIT before event_bus_init().
  */
 portunus_err_t event_bus_subscribe(portunus_event_id_t event_id,
                                    event_bus_handler_t handler,
