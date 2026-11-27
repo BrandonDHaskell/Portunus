@@ -264,12 +264,36 @@ tasks:
         fi
         exit 0
 
+  # Both profile builds delete sdkconfig so the profile overlay always wins,
+  # which would also discard the per-device hardware settings set in
+  # menuconfig. Save those first into sdkconfig.defaults.local (gitignored),
+  # which both builds layer between sdkconfig.defaults and the profile.
+  #
+  # Saved: pins, wiring polarity (strike active-low, reed NC, arm button),
+  # module type, feature switches, reader tuning, the unlock hold, and the
+  # request timeout. Both "CONFIG_X=..." and "# CONFIG_X is not set" lines are
+  # kept: a bool switched off is written in the second form, and dropping it
+  # would turn it back on. Security settings (TLS, HMAC, dev mode) are not
+  # saved: the profile decides them.
+  firmware:_save-device-config:
+    internal: true
+    dir: "{{.FIRMWARE_DIR}}"
+    cmds:
+      - |
+        if [ -f sdkconfig ]; then
+          grep -E "^(# )?CONFIG_PORTUNUS_(SPI_|MFRC522_|DOOR_STRIKE_|REED_SWITCH_|LED_PIN|ARM_BUTTON_|MODULE_TYPE_|ENABLE_|UNLOCK_HOLD_MS|SERVER_REQUEST_TIMEOUT)[A-Z0-9_]*( is not set|=)" \
+            sdkconfig > sdkconfig.defaults.local 2>/dev/null || true
+        elif [ ! -f sdkconfig.defaults.local ]; then
+          : > sdkconfig.defaults.local
+        fi
+
   firmware:build:dev:
     desc: Build firmware with dev sdkconfig overlay
     dir: "{{.FIRMWARE_DIR}}"
     env:
       IDF_PATH: "{{.IDF_PATH}}"
     cmds:
+      - task: firmware:_save-device-config
       - |
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
         rm -f sdkconfig
@@ -284,16 +308,8 @@ tasks:
     env:
       IDF_PATH: "{{.IDF_PATH}}"
     cmds:
+      - task: firmware:_save-device-config
       - |
-        # Snapshot device-specific settings (GPIO, stack sizes) before the
-        # clean sdkconfig deletion. These are not in any profile defaults file and
-        # would otherwise be lost on every prod build.
-        if [ -f sdkconfig ]; then
-          grep -E "^CONFIG_PORTUNUS_(SPI_|MFRC522_|DOOR_STRIKE_PIN=|REED_SWITCH_PIN=|MODULE_TYPE_|ENABLE_|SERVER_REQUEST_TIMEOUT)" \
-            sdkconfig > sdkconfig.defaults.local 2>/dev/null || true
-        else
-          : > sdkconfig.defaults.local
-        fi
         rm -f sdkconfig
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
         idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.local;sdkconfig.defaults.prod" build
