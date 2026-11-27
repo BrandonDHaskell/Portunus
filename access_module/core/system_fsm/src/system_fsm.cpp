@@ -238,8 +238,10 @@ portunus_err_t SystemFSM::start()
     boot_event.id = EVENT_SYSTEM_BOOT_COMPLETE;
     event_bus_publish(&boot_event);
 
+    /* A lock that failed on a previous stop() is not known to have cleared. */
     if (m_has_feedback) {
-        m_feedback->indicate(feedback_type_t::SYSTEM_READY);
+        m_feedback->indicate(m_lock_fault ? feedback_type_t::STRIKE_FAULT
+                                          : feedback_type_t::SYSTEM_READY);
     }
 
     ESP_LOGI(TAG, "System FSM running — state=OPERATIONAL");
@@ -306,7 +308,7 @@ portunus_err_t SystemFSM::stop()
                      (uint32_t)lock_err);
             m_lock_fault = true;
             if (m_has_feedback) {
-                m_feedback->indicate(feedback_type_t::SYSTEM_ERROR);
+                m_feedback->indicate(feedback_type_t::STRIKE_FAULT);
             }
             result = PORTUNUS_ERR_LOCK_FAILED;
         } else {
@@ -680,7 +682,7 @@ void SystemFSM::note_lock_result(bool locked)
         m_lock_fault = true;
         ESP_LOGE(TAG, "Strike did not lock; retrying, door may be unlocked");
         if (m_has_feedback) {
-            m_feedback->indicate(feedback_type_t::SYSTEM_ERROR);
+            m_feedback->indicate(feedback_type_t::STRIKE_FAULT);
         }
     } else if (locked && m_lock_fault) {
         m_lock_fault = false;

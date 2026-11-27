@@ -54,6 +54,10 @@ enum class feedback_type_t : uint8_t {
     PEU_RESULT_DUPLICATE,       /**< Card already exists — 2× medium blinks (one-shot) */
     PEU_RESULT_UNAUTHORIZED,    /**< Not authorised — long on + 3× rapid blinks (one-shot) */
     PEU_RESULT_ERROR,           /**< Comm/network error — SYSTEM_ERROR pattern (continuous) */
+
+    /* Appended so existing values keep their numbers. */
+    STRIKE_FAULT,               /**< Strike failed to lock: SYSTEM_ERROR pattern, and one-shots
+                                     return to it until SYSTEM_READY clears it (continuous) */
 };
 
 /**

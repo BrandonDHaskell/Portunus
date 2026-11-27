@@ -26,9 +26,11 @@ uint32_t led_pattern_length(feedback_type_t type);
 /** LED level for `type` at `tick` (tick < length for one-shots). */
 bool led_pattern_level(feedback_type_t type, uint32_t tick);
 
-/** Patterns a one-shot returns to when it ends. Only the access-point idle
- *  blink: SYSTEM_ERROR is excluded so one offline card read cannot leave the
- *  error blink on for good, and the PEU FSM re-indicates its own states. */
+/** Patterns a one-shot returns to when it ends: the access-point idle blink
+ *  and STRIKE_FAULT, which must outlast a card tap because the door may be
+ *  stuck unlocked. SYSTEM_ERROR is excluded so one offline card read cannot
+ *  leave the error blink on for good, and the PEU FSM re-indicates its own
+ *  states. */
 bool led_pattern_is_baseline(feedback_type_t type);
 
 struct led_engine_t {
