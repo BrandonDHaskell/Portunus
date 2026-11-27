@@ -30,14 +30,19 @@ void test_granted_with_access_point_unlocks_and_holds(void) {
     TEST_ASSERT_EQUAL(door_cmd_t::UNLOCK_AND_HOLD, a.door);
     TEST_ASSERT_EQUAL_UINT8(1, a.feedback_count);
     TEST_ASSERT_EQUAL(feedback_type_t::ACCESS_GRANTED, a.feedback[0]);
+    /* DEC-10 (D-T4): if the unlock signal cannot be sent, show an error. */
+    TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_ERROR, a.feedback_if_unlock_fails);
 }
 
-void test_granted_without_access_point_does_not_unlock(void) {
+/* DEC-10 (D-T4): with no access point there is no unlock signal to send, so
+ * a grant shows an error, never green over a door that cannot open. */
+void test_granted_without_access_point_shows_error(void) {
     fsm_actions_t a = decide_system_event(
         caps(true, false, true, true), ev(EVENT_ACCESS_GRANTED));
     TEST_ASSERT_EQUAL(door_cmd_t::NONE, a.door);
     TEST_ASSERT_EQUAL_UINT8(1, a.feedback_count);
-    TEST_ASSERT_EQUAL(feedback_type_t::ACCESS_GRANTED, a.feedback[0]);
+    TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_ERROR, a.feedback[0]);
+    TEST_ASSERT_EQUAL(feedback_type_t::NONE, a.feedback_if_unlock_fails);
 }
 
 void test_denied_never_touches_strike(void) {
@@ -109,6 +114,11 @@ void test_exhaustive_capability_event_matrix(void) {
             const bool unlock = (id == EVENT_ACCESS_GRANTED) && c.has_access_point;
             TEST_ASSERT_EQUAL_MESSAGE(unlock ? door_cmd_t::UNLOCK_AND_HOLD : door_cmd_t::NONE,
                                       a.door, msg);
+            /* A failure indication exists exactly when an unlock is attempted
+             * and there is feedback hardware to show it on. */
+            TEST_ASSERT_EQUAL_MESSAGE(unlock && c.has_feedback ? feedback_type_t::SYSTEM_ERROR
+                                                               : feedback_type_t::NONE,
+                                      a.feedback_if_unlock_fails, msg);
 
             TEST_ASSERT_LESS_OR_EQUAL_UINT8_MESSAGE(FSM_MAX_FEEDBACK, a.feedback_count, msg);
             for (uint8_t i = a.feedback_count; i < FSM_MAX_FEEDBACK; ++i) {
@@ -128,10 +138,11 @@ void test_exhaustive_capability_event_matrix(void) {
                 }
                 break;
             case EVENT_ACCESS_GRANTED:
-                /* Pins today's behaviour, including granted feedback without an
-                 * access point; DEC-10 revisits this under D-T4 (F4). */
+                /* DEC-10 (D-T4): green only when there is a strike to signal. */
                 TEST_ASSERT_EQUAL_UINT8_MESSAGE(1, a.feedback_count, msg);
-                TEST_ASSERT_EQUAL_MESSAGE(feedback_type_t::ACCESS_GRANTED, a.feedback[0], msg);
+                TEST_ASSERT_EQUAL_MESSAGE(c.has_access_point ? feedback_type_t::ACCESS_GRANTED
+                                                             : feedback_type_t::SYSTEM_ERROR,
+                                          a.feedback[0], msg);
                 break;
             case EVENT_ACCESS_DENIED:
                 TEST_ASSERT_EQUAL_UINT8_MESSAGE(1, a.feedback_count, msg);
@@ -148,7 +159,7 @@ void test_exhaustive_capability_event_matrix(void) {
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_granted_with_access_point_unlocks_and_holds);
-    RUN_TEST(test_granted_without_access_point_does_not_unlock);
+    RUN_TEST(test_granted_without_access_point_shows_error);
     RUN_TEST(test_denied_never_touches_strike);
     RUN_TEST(test_credential_read_online_shows_card_read_only);
     RUN_TEST(test_credential_read_offline_appends_system_error);

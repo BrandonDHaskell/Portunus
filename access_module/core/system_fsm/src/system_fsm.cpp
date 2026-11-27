@@ -362,7 +362,7 @@ void SystemFSM::process_event(const portunus_event_t &event)
         ESP_LOGI(TAG, "ACCESS GRANTED — credential=%s reason=%s",
                  ad->credential_id, ad->reason);
         if (!m_caps.has_access_point) {
-            ESP_LOGW(TAG, "Access granted but no access point — cannot unlock");
+            ESP_LOGW(TAG, "Access granted but no access point: cannot unlock, showing error");
         }
         break;
     }
@@ -377,24 +377,31 @@ void SystemFSM::process_event(const portunus_event_t &event)
         break;
     }
 
-    /* Door command — identical unlock/gate-timer semantics. */
+    /* Door command: start the hold timer only once the unlock signal is out. */
+    bool unlock_failed = false;
     if (actions.door == door_cmd_t::UNLOCK_AND_HOLD) {
         portunus_err_t err = m_access->unlock();
         if (err == PORTUNUS_OK) {
             start_unlock_timer();
-            ESP_LOGI(TAG, "Strike energized — hold timer started (%d ms)",
-                     UNLOCK_HOLD_MS);
+            ESP_LOGI(TAG, "Strike energized, hold timer started (%d ms)", UNLOCK_HOLD_MS);
         } else {
-            ESP_LOGE(TAG, "Failed to unlock: 0x%" PRIx32, (uint32_t)err);
+            ESP_LOGE(TAG, "Unlock signal not sent (0x%" PRIx32 "): showing error, not a grant",
+                     (uint32_t)err);
+            unlock_failed = true;
         }
     } else if (actions.door == door_cmd_t::LOCK) {
         (void)m_access->lock();
     }
 
-    /* Feedback — replay the decided indications in order. */
+    /* Feedback: the decided indications in order, or the decided failure
+     * indication if the unlock signal could not be sent. */
     if (m_caps.has_feedback) {
-        for (uint8_t i = 0; i < actions.feedback_count; i++) {
-            m_feedback->indicate(actions.feedback[i]);
+        if (unlock_failed) {
+            m_feedback->indicate(actions.feedback_if_unlock_fails);
+        } else {
+            for (uint8_t i = 0; i < actions.feedback_count; i++) {
+                m_feedback->indicate(actions.feedback[i]);
+            }
         }
     }
 }

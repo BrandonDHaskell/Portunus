@@ -92,6 +92,8 @@ void test_grant_unlocks_and_starts_hold_timer(void) {
 }
 
 /* Grant with unlock failure: hold timer NOT started (success-gate). */
+/* FSM-18 (D-T4): when the unlock signal cannot be sent, no hold timer starts
+ * and the LED shows an error, never the grant. */
 void test_grant_unlock_failure_does_not_start_timer(void) {
     FakeAccessPoint access;
     FakeFeedback    fb;
@@ -107,10 +109,12 @@ void test_grant_unlock_failure_does_not_start_timer(void) {
 
     TEST_ASSERT_EQUAL(0, access.unlocks);  /* unlock attempted but failed */
     TEST_ASSERT_FALSE(fix.strike_energized());
+    TEST_ASSERT_EQUAL(0, fb.count_of(feedback_type_t::ACCESS_GRANTED));
+    TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_ERROR, fb.last());
 }
 
-/* Grant without access point: no unlock, ACCESS_GRANTED feedback still shown. */
-void test_grant_without_access_point_shows_feedback(void) {
+/* FSM-18 (D-T4): with no access point a grant shows an error. */
+void test_grant_without_access_point_shows_error(void) {
     FakeFeedback fb;
     FakeClock    clk;
 
@@ -120,7 +124,8 @@ void test_grant_without_access_point_shows_feedback(void) {
 
     inject_decision(fix, make_grant());
 
-    TEST_ASSERT_EQUAL(1, fb.count_of(feedback_type_t::ACCESS_GRANTED));
+    TEST_ASSERT_EQUAL(0, fb.count_of(feedback_type_t::ACCESS_GRANTED));
+    TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_ERROR, fb.last());
     TEST_ASSERT_FALSE(fix.strike_energized());
 }
 
@@ -352,7 +357,7 @@ void test_init_capability_matrix(void) {
 }
 
 /* FSM-11 (D-T11): a failing access point is not fatal. init() succeeds, and
- * a grant still shows feedback without touching the strike. */
+ * a grant shows an error without touching the strike (D-T4). */
 void test_init_nonfatal_when_access_point_fails(void) {
     FakeAccessPoint access;
     FakeFeedback    fb;
@@ -366,7 +371,7 @@ void test_init_nonfatal_when_access_point_fails(void) {
     inject_decision(fix, make_grant());
     TEST_ASSERT_EQUAL(0, access.unlocks);
     TEST_ASSERT_FALSE(fix.strike_energized());
-    TEST_ASSERT_EQUAL(feedback_type_t::ACCESS_GRANTED, fb.last());
+    TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_ERROR, fb.last());
 }
 
 /* FSM-12: init reads the door state, so the first poll of an unchanged door
@@ -804,7 +809,7 @@ extern "C" void app_main(void) {
     /* Behavioral suite */
     RUN_TEST(test_grant_unlocks_and_starts_hold_timer);
     RUN_TEST(test_grant_unlock_failure_does_not_start_timer);
-    RUN_TEST(test_grant_without_access_point_shows_feedback);
+    RUN_TEST(test_grant_without_access_point_shows_error);
     RUN_TEST(test_deny_shows_feedback_only);
     RUN_TEST(test_credential_read_online_shows_card_read);
     RUN_TEST(test_credential_read_offline_shows_card_read_and_error);

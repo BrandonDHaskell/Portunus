@@ -16,8 +16,17 @@ fsm_actions_t decide_system_event(const system_capabilities_t &caps,
         }
         break;
     case EVENT_ACCESS_GRANTED:
-        if (caps.has_access_point) a.door = door_cmd_t::UNLOCK_AND_HOLD;
-        if (caps.has_feedback)     push_feedback(a, feedback_type_t::ACCESS_GRANTED);
+        /* Show a grant only for an unlock signal the module can send: with no
+         * access point, or if unlock() fails, it is an error (D-T4). */
+        if (caps.has_access_point) {
+            a.door = door_cmd_t::UNLOCK_AND_HOLD;
+            if (caps.has_feedback) {
+                push_feedback(a, feedback_type_t::ACCESS_GRANTED);
+                a.feedback_if_unlock_fails = feedback_type_t::SYSTEM_ERROR;
+            }
+        } else if (caps.has_feedback) {
+            push_feedback(a, feedback_type_t::SYSTEM_ERROR);
+        }
         break;
     case EVENT_ACCESS_DENIED:
         if (caps.has_feedback)     push_feedback(a, feedback_type_t::ACCESS_DENIED);
