@@ -176,15 +176,25 @@ The server’s gRPC interceptor:
 3. computes the expected `HMAC-SHA256(secret, projection)`
 4. rejects invalid or missing signatures with gRPC `UNAUTHENTICATED`
 
-The projection format is `"{type}|{module_id}|{key_field}"`:
+The projection format is `"{type}|{module_id}|{key_fields}"`:
 
 | RPC | Projection |
 |---|---|
 | `SendHeartbeat` | `heartbeat\|{module_id}\|{sequence}` |
-| `RequestAccess` | `access\|{module_id}\|{credential_id}` |
+| `RequestAccess` | `access\|{module_id}\|{credential_id}\|{nonce_hex}\|{requested_at}` |
 | `ProvisionCredential` | `provision\|{module_id}\|{hex(credential_uid)}` |
 
 This differs from the HTTP path, which signs the raw body bytes. The projection approach is used on the gRPC path to avoid spurious HMAC mismatches caused by wire-format differences between Nanopb (on the ESP32) and the Go protobuf library (on the server). Both use the same pre-shared secret.
+
+### Access response authentication
+
+The server also signs every access decision, and the firmware verifies the signature before it unlocks or denies. The signature travels in the `x-portunus-sig` trailer on gRPC and the `X-Portunus-Sig` response header on HTTP, computed with the same pre-shared secret over:
+
+```text
+access_resp|{module_id}|{credential_id}|{nonce_hex}|{1 or 0}
+```
+
+`nonce_hex` is the request's 16-byte nonce, so a signed grant verifies only for the request that asked for it: a captured response cannot be replayed to open the door for a later read of the same card. The `access_resp` prefix keeps a response signature from ever matching a request projection. Both transports compute it in `server/internal/devicesig`; the firmware builds it in `access_module/services/server_comm/src/access_projection.cpp`, and the two share a golden-vector test. A response with a missing or wrong signature is treated as a deny.
 
 ### Enforcement is configuration-dependent
 

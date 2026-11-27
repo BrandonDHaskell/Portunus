@@ -2,18 +2,16 @@ package httpapi
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
 	"time"
 
 	pb "github.com/BrandonDHaskell/Portunus/server/api/portunus/v1"
+	"github.com/BrandonDHaskell/Portunus/server/internal/devicesig"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/permissions"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store"
@@ -368,15 +366,8 @@ func (s *Server) handleAccessRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if s.hmacSecret != "" {
-		v := 0
-		if resp.Granted {
-			v = 1
-		}
-		proj := fmt.Sprintf("access|%s|%s|%d", req.ModuleID, req.CredentialID, v)
-		mac := hmac.New(sha256.New, []byte(s.hmacSecret))
-		mac.Write([]byte(proj))
-		w.Header().Set("X-Portunus-Sig", hex.EncodeToString(mac.Sum(nil)))
+	if sig := devicesig.AccessResponseSig(s.hmacSecret, req.ModuleID, req.CredentialID, req.Nonce, resp.Granted); sig != "" {
+		w.Header().Set("X-Portunus-Sig", sig)
 	}
 
 	if !resp.Known {

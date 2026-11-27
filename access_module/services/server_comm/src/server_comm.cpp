@@ -16,6 +16,7 @@
  */
 
 #include "server_comm.hpp"
+#include "access_projection.hpp"
 #include "event_bus.hpp"
 #include "event_types.hpp"
 #include "error_codes.hpp"
@@ -674,16 +675,24 @@ static void handle_credential(const event_credential_read_t *cred)
 
 #if PORTUNUS_HMAC_ENABLED
     /* Verify the server's response signature before acting on the decision.
-     * Projection: "access|{module_id}|{credential_id}|{0 or 1}" — must match
-     * AccessResponseProjection() in server/internal/grpcapi/interceptors.go. */
+     * The projection includes this request's nonce, so only a response to
+     * this request verifies (see access_projection.hpp). */
     if (resp_sig_hex[0] == '\0') {
-        ESP_LOGE(TAG, "Access response missing X-Portunus-Sig — denying");
+        ESP_LOGE(TAG, "Access response missing X-Portunus-Sig, denying");
         publish_access_denied(req_log_id, "missing_response_sig");
         return;
     }
-    char resp_proj[128];
-    snprintf(resp_proj, sizeof(resp_proj), "access|%s|%s|%d",
-             req.module_id, req.credential_id, resp.granted ? 1 : 0);
+    char resp_proj[160];
+    /* "access_resp|" + module_id + | + credential_id + | + 32 hex + | + digit + NUL */
+    static_assert(sizeof("access_resp|") - 1 + sizeof(portunus_v1_AccessRequest::module_id) +
+                      sizeof(portunus_v1_AccessRequest::credential_id) + 32 + 3 <= sizeof(resp_proj),
+                  "resp_proj too small for the longest access response projection");
+    if (!access_response_projection(resp_proj, sizeof(resp_proj), req.module_id,
+                                    req.credential_id, nonce_hex, resp.granted)) {
+        ESP_LOGE(TAG, "Access response projection does not fit, denying");
+        publish_access_denied(req_log_id, "sig_compute_error");
+        return;
+    }
     char expected_sig[PORTUNUS_HMAC_HEX_LEN];
     if (!compute_hmac_hex((const uint8_t *)resp_proj, strlen(resp_proj), expected_sig)) {
         ESP_LOGE(TAG, "HMAC compute failed during response verify");
@@ -691,7 +700,7 @@ static void handle_credential(const event_credential_read_t *cred)
         return;
     }
     if (!sig_hex_equal(resp_sig_hex, expected_sig)) {
-        ESP_LOGE(TAG, "Access response HMAC mismatch — denying");
+        ESP_LOGE(TAG, "Access response HMAC mismatch, denying");
         publish_access_denied(req_log_id, "invalid_response_sig");
         return;
     }
