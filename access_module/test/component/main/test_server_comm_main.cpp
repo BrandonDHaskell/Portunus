@@ -294,6 +294,56 @@ void test_rpc_paths_match_proto(void) {
 #endif
 }
 
+/* Lets a held RPC finish after a delay, from another task, while the test
+ * itself is blocked in server_comm_deinit(). */
+static void release_later(void *) {
+    vTaskDelay(pdMS_TO_TICKS(200));
+    grpc_fake_release();
+    vTaskDelete(NULL);
+}
+
+static void start_release_later(void) {
+    TEST_ASSERT_EQUAL(pdPASS, xTaskCreate(release_later, "release", 4096, nullptr, 5, nullptr));
+}
+
+/* SC-17 (D-T9): deinit removes every subscription, destroys the client, and
+ * leaves server_comm ready to init again; a second deinit is a no-op. */
+void test_deinit_releases_everything(void) {
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, start());
+    TEST_ASSERT_EQUAL(1, grpc_fake_live_clients());
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, server_comm_deinit());
+    TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_subscriber_count());
+    TEST_ASSERT_EQUAL(0, grpc_fake_live_clients());
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, server_comm_deinit());
+
+    publish_heartbeat(0);                       /* nobody listening: no RPC */
+    settle(100);
+    TEST_ASSERT_EQUAL_size_t(0, grpc_fake_call_count());
+
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, start());     /* init again works */
+    TEST_ASSERT_EQUAL_size_t(SERVER_COMM_SUBSCRIPTION_COUNT, event_bus_fake_subscriber_count());
+    TEST_ASSERT_EQUAL(1, grpc_fake_live_clients());
+}
+
+/* SC-17 (D-T9, decision 3): a comm task stuck in an RPC past the stop
+ * timeout is not force-deleted. deinit reports TIMEOUT and keeps the client;
+ * it is already unsubscribed, and a later deinit finishes the job. */
+void test_deinit_timeout_leaves_task(void) {
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, start());
+    grpc_fake_hold();
+    publish_heartbeat(0);
+    TEST_ASSERT_TRUE(grpc_fake_wait_held_call(2000));
+
+    server_comm_set_stop_timeout_for_test(200);
+    TEST_ASSERT_EQUAL(PORTUNUS_ERR_TIMEOUT, server_comm_deinit());
+    TEST_ASSERT_EQUAL(1, grpc_fake_live_clients());
+    TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_subscriber_count());
+
+    grpc_fake_release();
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, server_comm_deinit());
+    TEST_ASSERT_EQUAL(0, grpc_fake_live_clients());
+}
+
 /* ── Access point ─────────────────────────────────────────────────────────── */
 
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
@@ -342,6 +392,36 @@ void test_full_queue_denies_card(void) {
     TEST_ASSERT_TRUE(wait_for([] {
         return event_bus_fake_count_of(EVENT_ACCESS_DENIED) >= 1 + 9;
     }, 5000));
+}
+
+/* SC-17 (D-T9, decision 2): deinit waits for the card in hand, then answers
+ * every card still queued with a deny (shutdown) rather than an RPC. */
+void test_deinit_denies_queued_cards(void) {
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, start());
+    sync_clock();
+    grpc_fake_hold();
+    publish_card();                               /* in hand: blocks in its RPC */
+    TEST_ASSERT_TRUE(grpc_fake_wait_held_call(2000));
+    for (int i = 0; i < 3; ++i) publish_card();   /* queued behind it */
+
+    start_release_later();
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, server_comm_deinit());
+
+    /* One answer for the card in hand (no reply queued: a transport deny),
+     * three shutdown denies, and only the one RequestAccess. */
+    TEST_ASSERT_EQUAL_size_t(4, event_bus_fake_count_of(EVENT_ACCESS_DENIED));
+    TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_count_of(EVENT_ACCESS_GRANTED));
+    size_t shutdown = 0;
+    portunus_event_t e;
+    for (size_t i = 0; event_bus_fake_copy(i, &e); ++i) {
+        if (e.id == EVENT_ACCESS_DENIED &&
+            strcmp(e.payload.access_decision.reason, "shutdown") == 0) {
+            TEST_ASSERT_EQUAL_STRING(card_log_id().c_str(), e.payload.access_decision.credential_id);
+            ++shutdown;
+        }
+    }
+    TEST_ASSERT_EQUAL_size_t(3, shutdown);
+    TEST_ASSERT_EQUAL_size_t(1, calls_to(ACCESS_RPC).size());
 }
 
 /* SC-04: offline, a card read is answered with one deny (no_network) carrying
@@ -581,6 +661,32 @@ void test_full_queue_fails_provision_fast(void) {
     }, 5000));
 }
 
+/* SC-17 (D-T9, decision 2): provision requests still queued at deinit fail
+ * with COMM_ERROR (shutdown) instead of leaving the console waiting. */
+void test_deinit_fails_queued_provisions(void) {
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, start());
+    grpc_fake_hold();
+    publish_provision_request();
+    TEST_ASSERT_TRUE(grpc_fake_wait_held_call(2000));
+    for (int i = 0; i < 3; ++i) publish_provision_request();
+
+    start_release_later();
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, server_comm_deinit());
+
+    TEST_ASSERT_EQUAL_size_t(4, event_bus_fake_count_of(EVENT_PROVISION_FAILED));
+    size_t shutdown = 0;
+    portunus_event_t e;
+    for (size_t i = 0; event_bus_fake_copy(i, &e); ++i) {
+        if (e.id == EVENT_PROVISION_FAILED &&
+            strcmp(e.payload.provision_result.detail, "shutdown") == 0) {
+            TEST_ASSERT_EQUAL(PROVISION_RESULT_COMM_ERROR, e.payload.provision_result.reason);
+            ++shutdown;
+        }
+    }
+    TEST_ASSERT_EQUAL_size_t(3, shutdown);
+    TEST_ASSERT_EQUAL_size_t(1, calls_to(PROVISION_RPC).size());
+}
+
 /* The provision path end to end: a PENDING_CREATED reply succeeds; a
  * transport failure is a COMM_ERROR. */
 void test_provision_round_trip(void) {
@@ -619,9 +725,12 @@ extern "C" void app_main(void) {
     RUN_TEST(test_offline_heartbeat_is_dropped);
     RUN_TEST(test_heartbeat_syncs_clock);
     RUN_TEST(test_rpc_paths_match_proto);
+    RUN_TEST(test_deinit_releases_everything);
+    RUN_TEST(test_deinit_timeout_leaves_task);
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
     RUN_TEST(test_offline_card_denied);
     RUN_TEST(test_full_queue_denies_card);
+    RUN_TEST(test_deinit_denies_queued_cards);
     RUN_TEST(test_transport_failure_denies);
     RUN_TEST(test_bad_status_denies);
     RUN_TEST(test_undecodable_body_denies);
@@ -638,6 +747,7 @@ extern "C" void app_main(void) {
 #ifdef CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
     RUN_TEST(test_offline_provision_fails_fast);
     RUN_TEST(test_full_queue_fails_provision_fast);
+    RUN_TEST(test_deinit_fails_queued_provisions);
     RUN_TEST(test_provision_round_trip);
 #endif
     exit(UNITY_END());

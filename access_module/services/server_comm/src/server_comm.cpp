@@ -83,6 +83,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -141,11 +142,20 @@ static const char *TAG = "server_comm";
 #define COMM_TASK_STACK_SIZE    10240   /* nghttp2 session requires larger stack */
 #define COMM_TASK_PRIORITY      2       /* Below heartbeat(3) and credential_poll(4) */
 #define COMM_QUEUE_LENGTH       8       /* Pending events waiting for I/O */
+/* deinit waits for the task to finish the event in hand: at worst a card read
+ * (a clock-sync heartbeat then the access RPC), each up to connect + RPC
+ * timeouts, plus the 1 s queue wait. */
+#define COMM_STOP_TIMEOUT_MS    (4 * PORTUNUS_SERVER_REQUEST_TIMEOUT_MS + 2000)
+static int s_stop_timeout_ms = COMM_STOP_TIMEOUT_MS;   /* test hook may shorten it */
 
 /* ── Module state ──────────────────────────────────────────────────────────── */
 static QueueHandle_t  s_comm_queue    = NULL;
 static TaskHandle_t   s_comm_task     = NULL;
 static bool           s_initialized   = false;
+/* Cooperative shutdown (D-T9): deinit sets the flag and wakes the task, which
+ * exits at the top of its loop and signals s_exited. */
+static std::atomic<bool> s_stop_requested{false};
+static SemaphoreHandle_t s_exited = NULL;
 static bool           s_reader_degraded = false; /* set by EVENT_CREDENTIAL_READ_ERROR, cleared by RECOVERED */
 /* true after the first successful clock sync. Written by the comm task, read
  * from any task via server_comm_clock_synced(): atomic (F15). */
@@ -756,6 +766,25 @@ static void handle_provision(const event_provision_request_t *req)
 
 /* ── Task ──────────────────────────────────────────────────────────────────── */
 
+/* A request still queued when server_comm shuts down gets an answer, as a
+ * dropped one does (D-T5), so no FSM waits for a reply that will not come. */
+static void answer_for_shutdown(const portunus_event_t &event)
+{
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
+    if (event.id == EVENT_CREDENTIAL_READ) {
+        char log_id[CREDENTIAL_LOG_ID_LEN];
+        credential_uid_to_log_id(&event.payload.credential_read.credential, log_id, sizeof(log_id));
+        publish_access_denied(log_id, "shutdown");
+    }
+#endif
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
+    if (event.id == EVENT_PROVISION_REQUEST) {
+        publish_provision_result(PROVISION_RESULT_COMM_ERROR, NULL, "shutdown");
+    }
+#endif
+    (void)event;
+}
+
 static void comm_task(void *arg)
 {
     (void)arg;
@@ -763,7 +792,7 @@ static void comm_task(void *arg)
 
     ESP_LOGI(TAG, "Server comm task started");
 
-    for (;;) {
+    while (!s_stop_requested) {
         if (xQueueReceive(s_comm_queue, &event, pdMS_TO_TICKS(1000)) != pdTRUE) {
             if (++s_idle_ticks >= GRPC_PING_INTERVAL_TICKS) {
                 s_idle_ticks = 0;
@@ -778,6 +807,14 @@ static void comm_task(void *arg)
         }
 
         s_idle_ticks = 0;  /* Reset on any RPC activity */
+
+        if (event.id == EVENT_NONE) {
+            continue;          /* deinit's wake-up */
+        }
+        if (s_stop_requested) {
+            answer_for_shutdown(event);
+            continue;
+        }
 
         switch (queue_pressure_sample(s_queue_pressure, uxQueueMessagesWaiting(s_comm_queue),
                                       COMM_QUEUE_LENGTH)) {
@@ -845,6 +882,9 @@ static void comm_task(void *arg)
             break;
         }
     }
+
+    xSemaphoreGive(s_exited);
+    vTaskDelete(NULL);
 }
 
 /* ── Public API ────────────────────────────────────────────────────────────── */
@@ -858,6 +898,24 @@ uint32_t server_comm_dropped_events(void)
 {
     return s_dropped.load();
 }
+
+/* The event bus subscriptions init makes and deinit removes. */
+static const struct {
+    portunus_event_id_t id;
+    event_bus_handler_t handler;
+} s_subscriptions[] = {
+    { EVENT_HEARTBEAT,                   on_heartbeat_event },
+    { EVENT_CREDENTIAL_READ_ERROR,       on_reader_fault_event },
+    { EVENT_CREDENTIAL_READER_RECOVERED, on_reader_fault_event },
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
+    { EVENT_CREDENTIAL_READ,             on_credential_event },
+#endif
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
+    { EVENT_PROVISION_REQUEST,           on_provision_event },
+#endif
+};
+static_assert(sizeof(s_subscriptions) / sizeof(s_subscriptions[0]) == SERVER_COMM_SUBSCRIPTION_COUNT,
+              "update SERVER_COMM_SUBSCRIPTION_COUNT in server_comm.hpp");
 
 portunus_err_t server_comm_init(const portunus_device_config_t *cfg)
 {
@@ -920,23 +978,14 @@ portunus_err_t server_comm_init(const portunus_device_config_t *cfg)
     /* Subscribe to events.  A missing subscription means card reads or
      * provision requests never reach the server, so any failure is fatal:
      * main.cpp then runs offline and the FSM's decision timeout reports it. */
-    const struct {
-        portunus_event_id_t id;
-        event_bus_handler_t handler;
-    } subs[] = {
-        { EVENT_HEARTBEAT,                   on_heartbeat_event },
-        { EVENT_CREDENTIAL_READ_ERROR,       on_reader_fault_event },
-        { EVENT_CREDENTIAL_READER_RECOVERED, on_reader_fault_event },
-#ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
-        { EVENT_CREDENTIAL_READ,             on_credential_event },
-#endif
-#ifdef CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
-        { EVENT_PROVISION_REQUEST,           on_provision_event },
-#endif
-    };
-    static_assert(sizeof(subs) / sizeof(subs[0]) == SERVER_COMM_SUBSCRIPTION_COUNT,
-                  "update SERVER_COMM_SUBSCRIPTION_COUNT in server_comm.hpp");
-    for (const auto &sub : subs) {
+    if (s_exited == NULL) {
+        s_exited = xSemaphoreCreateBinary();
+        if (s_exited == NULL) {
+            return PORTUNUS_ERR_TASK_CREATE;
+        }
+    }
+    s_stop_requested = false;
+    for (const auto &sub : s_subscriptions) {
         portunus_err_t sub_err = event_bus_subscribe(sub.id, sub.handler, NULL);
         if (sub_err != PORTUNUS_OK) {
             ESP_LOGE(TAG, "Failed to subscribe to event 0x%04x: 0x%04x",
@@ -964,21 +1013,8 @@ portunus_err_t server_comm_init(const portunus_device_config_t *cfg)
     return PORTUNUS_OK;
 }
 
-#ifdef CONFIG_PORTUNUS_TEST_HOOKS
-void server_comm_reset_for_test(void)
+static void clear_state(void)
 {
-    if (s_comm_task != NULL) {
-        vTaskDelete(s_comm_task);
-        s_comm_task = NULL;
-    }
-    if (s_comm_queue != NULL) {
-        vQueueDelete(s_comm_queue);
-        s_comm_queue = NULL;
-    }
-    if (s_grpc_handle != NULL) {
-        grpc_client_destroy(s_grpc_handle);
-        s_grpc_handle = NULL;
-    }
     s_initialized     = false;
     s_reader_degraded = false;
     s_clock_synced    = false;
@@ -991,6 +1027,68 @@ void server_comm_reset_for_test(void)
     memset(s_hmac_secret, 0, sizeof(s_hmac_secret));
     s_hmac_secret_len = 0;
 #endif
+}
+
+portunus_err_t server_comm_deinit(void)
+{
+    if (!s_initialized) {
+        return PORTUNUS_OK;
+    }
+
+    /* No new events once these return (unsubscribe waits out a delivery). */
+    for (const auto &sub : s_subscriptions) {
+        (void)event_bus_unsubscribe(sub.id, sub.handler, NULL);
+    }
+
+    s_stop_requested = true;
+    const portunus_event_t wake = {};          /* EVENT_NONE: cut the queue wait short */
+    (void)xQueueSendToFront(s_comm_queue, &wake, 0);
+    if (xSemaphoreTake(s_exited, pdMS_TO_TICKS(s_stop_timeout_ms)) != pdTRUE) {
+        /* Not force-deleted: it may be mid-RPC. Call deinit again later. */
+        ESP_LOGE(TAG, "Comm task did not stop within %d ms", s_stop_timeout_ms);
+        return PORTUNUS_ERR_TIMEOUT;
+    }
+    s_comm_task = NULL;
+
+    portunus_event_t event;
+    while (xQueueReceive(s_comm_queue, &event, 0) == pdTRUE) {
+        answer_for_shutdown(event);
+    }
+    vQueueDelete(s_comm_queue);
+    s_comm_queue = NULL;
+    grpc_client_destroy(s_grpc_handle);
+    s_grpc_handle = NULL;
+
+    clear_state();
+    ESP_LOGI(TAG, "Server comm stopped");
+    return PORTUNUS_OK;
+}
+
+#ifdef CONFIG_PORTUNUS_TEST_HOOKS
+void server_comm_set_stop_timeout_for_test(int ms)
+{
+    s_stop_timeout_ms = ms > 0 ? ms : COMM_STOP_TIMEOUT_MS;
+}
+
+void server_comm_reset_for_test(void)
+{
+    s_stop_timeout_ms = COMM_STOP_TIMEOUT_MS;
+    if (server_comm_deinit() != PORTUNUS_OK) {
+        /* Last resort for a wedged test: the forced path deinit avoids. */
+        if (s_comm_task != NULL) {
+            vTaskDelete(s_comm_task);
+            s_comm_task = NULL;
+        }
+        if (s_comm_queue != NULL) {
+            vQueueDelete(s_comm_queue);
+            s_comm_queue = NULL;
+        }
+        if (s_grpc_handle != NULL) {
+            grpc_client_destroy(s_grpc_handle);
+            s_grpc_handle = NULL;
+        }
+    }
+    clear_state();
 }
 
 void server_comm_set_clock_setter_for_test(int (*set_time)(const struct timeval *tv))
