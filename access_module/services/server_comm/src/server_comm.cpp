@@ -16,7 +16,7 @@
  */
 
 #include "server_comm.hpp"
-#include "access_projection.hpp"
+#include "access_protocol.hpp"
 #include "event_bus.hpp"
 #include "event_types.hpp"
 #include "error_codes.hpp"
@@ -116,6 +116,24 @@ static_assert(CREDENTIAL_UID_MAX_LEN <=
               sizeof(portunus_v1_ProvisionCredentialRequest_credential_uid_t::bytes),
               "ProvisionCredentialRequest.credential_uid must hold the longest UID");
 
+/* "access_resp|" + module_id + | + credential_id + | + 32 hex + | + digit + NUL */
+static_assert(sizeof("access_resp|") - 1 + sizeof(portunus_v1_AccessRequest::module_id) +
+                  sizeof(portunus_v1_AccessRequest::credential_id) + 32 + 3 <=
+                  PROTO_RESPONSE_PROJECTION_CAP,
+              "PROTO_RESPONSE_PROJECTION_CAP too small for the longest response projection");
+
+/* access_protocol maps ProvisionStatus by number; tie them to Nanopb. */
+static_assert(static_cast<int>(PROTO_PROVISION_DUPLICATE_ACTIVE) ==
+              static_cast<int>(portunus_v1_ProvisionStatus_PROVISION_STATUS_DUPLICATE_ACTIVE), "ProvisionStatus drift");
+static_assert(static_cast<int>(PROTO_PROVISION_DUPLICATE_INACTIVE) ==
+              static_cast<int>(portunus_v1_ProvisionStatus_PROVISION_STATUS_DUPLICATE_INACTIVE), "ProvisionStatus drift");
+static_assert(static_cast<int>(PROTO_PROVISION_DUPLICATE_PENDING) ==
+              static_cast<int>(portunus_v1_ProvisionStatus_PROVISION_STATUS_DUPLICATE_PENDING), "ProvisionStatus drift");
+static_assert(static_cast<int>(PROTO_PROVISION_UNAUTHORIZED) ==
+              static_cast<int>(portunus_v1_ProvisionStatus_PROVISION_STATUS_UNAUTHORIZED), "ProvisionStatus drift");
+static_assert(static_cast<int>(PROTO_PROVISION_PENDING_CREATED) ==
+              static_cast<int>(portunus_v1_ProvisionStatus_PROVISION_STATUS_PENDING_CREATED), "ProvisionStatus drift");
+
 static const char *TAG = "server_comm";
 
 /* ── Configuration ─────────────────────────────────────────────────────────── */
@@ -190,20 +208,17 @@ static bool compute_hmac_hex(const uint8_t *data, size_t data_len,
     out_hex[64] = '\0';
     return true;
 }
-/**
- * @brief Constant-time comparison of two 64-char hex HMAC strings.
- *
- * Runs all 64 iterations regardless of the first mismatch to avoid
- * leaking timing information about partial matches.
- */
-static bool sig_hex_equal(const char *a, const char *b)
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
+/* compute_hmac_hex in the shape access_protocol expects (access decisions
+ * are verified only on the access point). */
+static bool hmac_for_protocol(const uint8_t *data, size_t len,
+                              char out_hex[PROTO_HMAC_HEX_CHARS + 1], void * /*ctx*/)
 {
-    uint8_t diff = 0;
-    for (int i = 0; i < 64; ++i) {
-        diff |= static_cast<uint8_t>(a[i]) ^ static_cast<uint8_t>(b[i]);
-    }
-    return diff == 0;
+    return compute_hmac_hex(data, len, out_hex);
 }
+#endif
+static_assert(PORTUNUS_HMAC_HEX_LEN == PROTO_HMAC_HEX_CHARS + 1,
+              "access_protocol and security_config disagree on the signature length");
 #endif /* PORTUNUS_HMAC_ENABLED */
 
 /* ── Forward declarations ──────────────────────────────────────────────────── */
@@ -249,55 +264,6 @@ static bool get_rssi(int32_t *out)
 /* ── Clock sync helpers ────────────────────────────────────────────────────── */
 
 /**
- * @brief Parse an RFC 3339 UTC timestamp into a struct timeval.
- *
- * Accepts the format produced by the Go server: "2006-01-02T15:04:05.999999999Z".
- * Fractional seconds are optional; the 'Z' suffix is assumed (UTC).
- * Requires the process timezone to be set to UTC0 (done in server_comm_init).
- *
- * @return true on success, false if @p s is empty or malformed.
- */
-static bool parse_server_time(const char *s, struct timeval *out)
-{
-    if (s == NULL || s[0] == '\0') { return false; }
-
-    int year, mon, mday, hour, min, sec;
-    if (sscanf(s, "%4d-%2d-%2dT%2d:%2d:%2d",
-               &year, &mon, &mday, &hour, &min, &sec) < 6) {
-        return false;
-    }
-
-    struct tm tm = {};
-    tm.tm_year  = year - 1900;
-    tm.tm_mon   = mon - 1;
-    tm.tm_mday  = mday;
-    tm.tm_hour  = hour;
-    tm.tm_min   = min;
-    tm.tm_sec   = sec;
-    tm.tm_isdst = 0;
-
-    /* TZ=UTC0 ensures mktime() treats this as UTC, not local time. */
-    time_t t = mktime(&tm);
-    if (t == (time_t)-1) { return false; }
-
-    /* Parse fractional seconds (e.g. ".123456789") → microseconds. */
-    long usec = 0;
-    const char *dot = strchr(s, '.');
-    if (dot != NULL) {
-        /* Copy up to 9 digits, right-pad with '0' to get nanoseconds. */
-        char frac[10] = {'0','0','0','0','0','0','0','0','0','\0'};
-        int i = 0;
-        const char *p = dot + 1;
-        while (i < 9 && *p >= '0' && *p <= '9') { frac[i++] = *p++; }
-        usec = strtol(frac, NULL, 10) / 1000;  /* ns → µs */
-    }
-
-    out->tv_sec  = t;
-    out->tv_usec = (suseconds_t)usec;
-    return true;
-}
-
-/**
  * @brief Set the system clock from a heartbeat response server_time field.
  *
  * Applies an RTT/2 correction: the server captures server_time before the
@@ -313,19 +279,11 @@ static bool parse_server_time(const char *s, struct timeval *out)
 static void sync_clock_from_response(const char *server_time, int64_t rtt_us)
 {
     struct timeval tv;
-    if (!parse_server_time(server_time, &tv)) {
-        ESP_LOGW(TAG, "Clock sync skipped — unparseable server_time");
+    if (!proto_parse_server_time(server_time, &tv)) {
+        ESP_LOGW(TAG, "Clock sync skipped: unparseable server_time");
         return;
     }
-
-    /* Apply RTT/2 offset, carrying microseconds into seconds if needed. */
-    int64_t half_rtt_us = rtt_us / 2;
-    tv.tv_usec += (suseconds_t)(half_rtt_us % 1000000LL);
-    tv.tv_sec  += (time_t)(half_rtt_us / 1000000LL);
-    if (tv.tv_usec >= 1000000L) {
-        tv.tv_sec  += 1;
-        tv.tv_usec -= 1000000L;
-    }
+    proto_add_half_rtt(&tv, rtt_us);
 
     if (settimeofday(&tv, NULL) != 0) {
         ESP_LOGW(TAG, "Clock sync failed — settimeofday error");
@@ -349,10 +307,8 @@ static void sync_clock_from_response(const char *server_time, int64_t rtt_us)
  * making verification independent of wire-format differences between Nanopb
  * and the Go protobuf library.
  *
- * Projection formats (must match hmacProjection() in grpcapi/interceptors.go):
- *   Heartbeat:   "heartbeat|{module_id}|{sequence}"
- *   Access:      "access|{module_id}|{credential_id}"
- *   Provision:   "provision|{module_id}|{hex(credential_uid)}"
+ * Projections are built by access_protocol (proto_*_projection), which
+ * documents the formats and their server counterparts.
  *
  * @param method         gRPC method path (e.g. "/portunus.v1.PortunusService/SendHeartbeat")
  * @param req_buf        Nanopb-encoded protobuf request body
@@ -468,16 +424,7 @@ static void publish_access_denied(const char *credential_id, const char *reason)
     portunus_event_t deny;
     memset(&deny, 0, sizeof(deny));
     deny.id = EVENT_ACCESS_DENIED;
-
-    if (credential_id != NULL) {
-        strncpy(deny.payload.access_decision.credential_id, credential_id,
-                sizeof(deny.payload.access_decision.credential_id) - 1);
-    }
-    strncpy(deny.payload.access_decision.reason, reason,
-            sizeof(deny.payload.access_decision.reason) - 1);
-    deny.payload.access_decision.granted = false;
-    deny.payload.access_decision.known   = false;
-
+    proto_fill_decision(&deny.payload.access_decision, credential_id, false, false, reason);
     event_bus_publish(&deny);
 }
 
@@ -518,7 +465,10 @@ static void handle_heartbeat(const event_heartbeat_t *hb)
     int64_t t_before = esp_timer_get_time();
 
     char proj[128];
-    snprintf(proj, sizeof(proj), "heartbeat|%s|%" PRIu32, req.module_id, req.sequence);
+    if (!proto_heartbeat_projection(proj, sizeof(proj), req.module_id, req.sequence)) {
+        ESP_LOGE(TAG, "Heartbeat projection does not fit");
+        return;
+    }
     int grpc_status = 0;
     portunus_err_t err = grpc_post_proto(
         "/portunus.v1.PortunusService/SendHeartbeat",
@@ -605,15 +555,7 @@ static void handle_credential(const event_credential_read_t *cred)
     if (s_clock_synced) {
         struct timeval tv;
         gettimeofday(&tv, NULL);
-        struct tm tm_utc;
-        gmtime_r(&tv.tv_sec, &tm_utc);
-        /* Format: "2006-01-02T15:04:05.000000Z" (microsecond precision) */
-        int n = strftime(req.requested_at, sizeof(req.requested_at) - 1,
-                         "%Y-%m-%dT%H:%M:%S", &tm_utc);
-        if (n > 0) {
-            snprintf(req.requested_at + n, sizeof(req.requested_at) - n,
-                     ".%06ldZ", (long)tv.tv_usec);
-        }
+        (void)proto_format_requested_at(req.requested_at, sizeof(req.requested_at), &tv);
     }
 
     /* Encode */
@@ -635,17 +577,15 @@ static void handle_credential(const event_credential_read_t *cred)
     char *p_resp_sig = nullptr;
 #endif
 
-    /* Hex-encode nonce for the HMAC projection.
-     * Format: "access|{module_id}|{credential_id}|{nonce_hex}|{requested_at}"
-     * Must match hmacProjection() in grpcapi/interceptors.go. */
-    char nonce_hex[33] = {};
-    for (size_t i = 0; i < req.nonce.size && i * 2 + 2 < sizeof(nonce_hex); ++i) {
-        snprintf(&nonce_hex[i * 2], 3, "%02x",
-                 static_cast<unsigned>(req.nonce.bytes[i]));
-    }
+    char nonce_hex[2 * sizeof(req.nonce.bytes) + 1];
     char proj[192];
-    snprintf(proj, sizeof(proj), "access|%s|%s|%s|%s",
-             req.module_id, req.credential_id, nonce_hex, req.requested_at);
+    if (!proto_hex_lower(req.nonce.bytes, req.nonce.size, nonce_hex, sizeof(nonce_hex)) ||
+        !proto_access_projection(proj, sizeof(proj), req.module_id, req.credential_id,
+                                 nonce_hex, req.requested_at)) {
+        ESP_LOGE(TAG, "Access projection does not fit");
+        publish_access_denied(req_log_id, "encode_error");
+        return;
+    }
     int grpc_status = 0;
     portunus_err_t err = grpc_post_proto(
         "/portunus.v1.PortunusService/RequestAccess",
@@ -674,34 +614,14 @@ static void handle_credential(const event_credential_read_t *cred)
     }
 
 #if PORTUNUS_HMAC_ENABLED
-    /* Verify the server's response signature before acting on the decision.
-     * The projection includes this request's nonce, so only a response to
-     * this request verifies (see access_projection.hpp). */
-    if (resp_sig_hex[0] == '\0') {
-        ESP_LOGE(TAG, "Access response missing X-Portunus-Sig, denying");
-        publish_access_denied(req_log_id, "missing_response_sig");
-        return;
-    }
-    char resp_proj[160];
-    /* "access_resp|" + module_id + | + credential_id + | + 32 hex + | + digit + NUL */
-    static_assert(sizeof("access_resp|") - 1 + sizeof(portunus_v1_AccessRequest::module_id) +
-                      sizeof(portunus_v1_AccessRequest::credential_id) + 32 + 3 <= sizeof(resp_proj),
-                  "resp_proj too small for the longest access response projection");
-    if (!access_response_projection(resp_proj, sizeof(resp_proj), req.module_id,
-                                    req.credential_id, nonce_hex, resp.granted)) {
-        ESP_LOGE(TAG, "Access response projection does not fit, denying");
-        publish_access_denied(req_log_id, "sig_compute_error");
-        return;
-    }
-    char expected_sig[PORTUNUS_HMAC_HEX_LEN];
-    if (!compute_hmac_hex((const uint8_t *)resp_proj, strlen(resp_proj), expected_sig)) {
-        ESP_LOGE(TAG, "HMAC compute failed during response verify");
-        publish_access_denied(req_log_id, "sig_compute_error");
-        return;
-    }
-    if (!sig_hex_equal(resp_sig_hex, expected_sig)) {
-        ESP_LOGE(TAG, "Access response HMAC mismatch, denying");
-        publish_access_denied(req_log_id, "invalid_response_sig");
+    /* Verify the server's signature before acting on the decision. It covers
+     * this request's nonce, so only a response to this request verifies. */
+    const char *sig_problem = access_check_response_sig(hmac_for_protocol, nullptr, resp_sig_hex,
+                                                        req.module_id, req.credential_id,
+                                                        nonce_hex, resp.granted);
+    if (sig_problem != nullptr) {
+        ESP_LOGE(TAG, "Access response signature check failed (%s), denying", sig_problem);
+        publish_access_denied(req_log_id, sig_problem);
         return;
     }
 #endif /* PORTUNUS_HMAC_ENABLED */
@@ -713,14 +633,8 @@ static void handle_credential(const event_credential_read_t *cred)
     portunus_event_t decision;
     memset(&decision, 0, sizeof(decision));
     decision.id = resp.granted ? EVENT_ACCESS_GRANTED : EVENT_ACCESS_DENIED;
-
-    strncpy(decision.payload.access_decision.credential_id, req_log_id,
-            sizeof(decision.payload.access_decision.credential_id) - 1);
-    strncpy(decision.payload.access_decision.reason, resp.reason,
-            sizeof(decision.payload.access_decision.reason) - 1);
-    decision.payload.access_decision.granted = resp.granted;
-    decision.payload.access_decision.known   = resp.known;
-
+    proto_fill_decision(&decision.payload.access_decision, req_log_id, resp.granted,
+                        resp.known, resp.reason);
     event_bus_publish(&decision);
 }
 #endif /* CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT */
@@ -781,17 +695,13 @@ static void handle_provision(const event_provision_request_t *req)
     uint8_t resp_buf[portunus_v1_ProvisionCredentialResponse_size + RESP_FRAME_MARGIN];
     int resp_len = 0;
 
-    /* Hex-encode credential_uid for the HMAC projection.
-     * Must match hmacProjection() in grpcapi/interceptors.go. */
-    char uid_hex[64] = {};
-    for (size_t i = 0;
-         i < pb_req.credential_uid.size && i * 2 + 2 < sizeof(uid_hex);
-         ++i) {
-        snprintf(&uid_hex[i * 2], 3, "%02x",
-                 static_cast<unsigned>(pb_req.credential_uid.bytes[i]));
-    }
     char proj[128];
-    snprintf(proj, sizeof(proj), "provision|%s|%s", pb_req.module_id, uid_hex);
+    if (!proto_provision_projection(proj, sizeof(proj), pb_req.module_id,
+                                    pb_req.credential_uid.bytes, pb_req.credential_uid.size)) {
+        ESP_LOGE(TAG, "Provision projection does not fit");
+        publish_provision_result(PROVISION_RESULT_COMM_ERROR, NULL, "encode_error");
+        return;
+    }
     int grpc_status = 0;
     portunus_err_t err = grpc_post_proto(
         "/portunus.v1.PortunusService/ProvisionCredential",
@@ -823,24 +733,8 @@ static void handle_provision(const event_provision_request_t *req)
     ESP_LOGI(TAG, "Provision response — status=%d member_uuid=%s detail=%s",
              pb_resp.status, pb_resp.member_uuid, pb_resp.detail);
 
-    /* Map proto status → internal reason code */
-    provision_result_reason_t reason;
-    switch (pb_resp.status) {
-    case portunus_v1_ProvisionStatus_PROVISION_STATUS_PENDING_CREATED:
-        reason = PROVISION_RESULT_PENDING_CREATED;    break;
-    case portunus_v1_ProvisionStatus_PROVISION_STATUS_DUPLICATE_ACTIVE:
-        reason = PROVISION_RESULT_DUPLICATE_ACTIVE;   break;
-    case portunus_v1_ProvisionStatus_PROVISION_STATUS_DUPLICATE_INACTIVE:
-        reason = PROVISION_RESULT_DUPLICATE_INACTIVE; break;
-    case portunus_v1_ProvisionStatus_PROVISION_STATUS_DUPLICATE_PENDING:
-        reason = PROVISION_RESULT_DUPLICATE_PENDING;  break;
-    case portunus_v1_ProvisionStatus_PROVISION_STATUS_UNAUTHORIZED:
-        reason = PROVISION_RESULT_UNAUTHORIZED;       break;
-    default:
-        reason = PROVISION_RESULT_COMM_ERROR;         break;
-    }
-
-    publish_provision_result(reason, pb_resp.member_uuid, pb_resp.detail);
+    publish_provision_result(proto_provision_reason(pb_resp.status),
+                             pb_resp.member_uuid, pb_resp.detail);
 }
 
 #endif /* CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE */
@@ -969,7 +863,7 @@ portunus_err_t server_comm_init(const portunus_device_config_t *cfg)
                  s_server_host, (int)s_grpc_port);
     }
 
-    /* Clock: operate in UTC so mktime() in parse_server_time() is correct. */
+    /* Clock: operate in UTC so mktime() in proto_parse_server_time() is correct. */
     setenv("TZ", "UTC0", 1);
     tzset();
 
