@@ -348,3 +348,29 @@ func TestAdminUserService_LimitedCaller_CanActOnEqualOrLesserAccount(t *testing.
 		t.Fatalf("AssignRole on lesser account: %v", err)
 	}
 }
+
+// ── CreateUser: no minting accounts above your own permissions (F-7) ──────────
+
+func TestAdminUserService_CreateUser_RoleMustBeWithinCaller(t *testing.T) {
+	svc, us, rs, _ := newAdminUserSvc(t)
+	ctx := context.Background()
+	if err := rs.CreateRole(ctx, "empty", "empty", ""); err != nil {
+		t.Fatalf("CreateRole: %v", err)
+	}
+	creator := map[string]struct{}{permissions.AdminUserCreate: {}}
+
+	_, err := svc.CreateUser(ctx, "uuid-creator", creator, "mallory", "a-valid-password-1", "admin")
+	if !errors.Is(err, service.ErrPermissionSubsetViolation) {
+		t.Fatalf("creating an admin with only admin_user.create: got %v, want ErrPermissionSubsetViolation", err)
+	}
+	if _, err := us.GetAdminUserByUsername(ctx, "mallory"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("account created despite the refusal (err=%v)", err)
+	}
+
+	if _, err := svc.CreateUser(ctx, "uuid-creator", creator, "trent", "a-valid-password-1", "empty"); err != nil {
+		t.Fatalf("creating a role within the caller's permissions: %v", err)
+	}
+	if _, err := svc.CreateUser(ctx, "uuid-admin", allPerms(), "victor", "a-valid-password-1", "admin"); err != nil {
+		t.Fatalf("superuser creating an admin: %v", err)
+	}
+}

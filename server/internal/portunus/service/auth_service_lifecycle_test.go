@@ -307,7 +307,7 @@ func TestAuth_DecoyHashCostMatchesRealHashes(t *testing.T) {
 		t.Fatal(err)
 	}
 	adminSvc := service.NewAdminUserService(f.users, f.roles, nil)
-	created, err := adminSvc.CreateUser(ctx, "uuid-cost", "grace", "a-valid-password-1", "operator")
+	created, err := adminSvc.CreateUser(ctx, "uuid-cost", allPerms(), "grace", "a-valid-password-1", "operator")
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}

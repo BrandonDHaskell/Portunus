@@ -51,7 +51,9 @@ func NewAdminUserService(users store.AdminUserStore, roles store.RoleStore, audi
 // CreateUser creates a new admin user with the given role.
 // The new account starts with must_change_pw = 1 so the operator must set a
 // personal password on first login.
-func (s *AdminUserService) CreateUser(ctx context.Context, callerUUID, username, password, roleID string) (*AdminUserInfo, error) {
+// The role's permissions must be a subset of callerPerms (F-7): a caller may
+// not mint an account more privileged than themselves.
+func (s *AdminUserService) CreateUser(ctx context.Context, callerUUID string, callerPerms map[string]struct{}, username, password, roleID string) (*AdminUserInfo, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return nil, fmt.Errorf("username is required")
@@ -73,6 +75,16 @@ func (s *AdminUserService) CreateUser(ctx context.Context, callerUUID, username,
 			return nil, fmt.Errorf("role %q not found", roleID)
 		}
 		return nil, fmt.Errorf("create user: verify role: %w", err)
+	}
+	rolePerms, err := s.roles.GetRolePermissions(ctx, roleID)
+	if err != nil {
+		return nil, fmt.Errorf("create user: load role permissions: %w", err)
+	}
+	for _, p := range rolePerms {
+		if _, ok := callerPerms[p]; !ok {
+			s.recordAudit(ctx, callerUUID, "admin_user.created", "", "failure", username+":"+roleID)
+			return nil, ErrPermissionSubsetViolation
+		}
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)

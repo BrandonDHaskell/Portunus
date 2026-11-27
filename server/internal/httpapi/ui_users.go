@@ -54,7 +54,7 @@ func (s *Server) handleUIUsersCreate(w http.ResponseWriter, r *http.Request) {
 	roleID := r.FormValue("role_id")
 
 	sess := sessionFromContext(r.Context())
-	_, err := s.adminUserService.CreateUser(r.Context(), sess.AdminUUID, username, password, roleID)
+	_, err := s.adminUserService.CreateUser(r.Context(), sess.AdminUUID, sess.Permissions, username, password, roleID)
 	if err != nil {
 		if errors.Is(err, store.ErrUsernameAlreadyExists) {
 			d := newUIPageData(r, "users")
@@ -65,6 +65,10 @@ func (s *Server) handleUIUsersCreate(w http.ResponseWriter, r *http.Request) {
 				d.Roles = roles
 			}
 			render.render(w, "users_create", d)
+			return
+		}
+		if errors.Is(err, service.ErrPermissionSubsetViolation) {
+			flashRedirect(w, r, "/admin/ui/users/new", "You cannot create an account with a role that has permissions you do not hold.", "error")
 			return
 		}
 		s.logger.Printf("ui create user: %v", err)
