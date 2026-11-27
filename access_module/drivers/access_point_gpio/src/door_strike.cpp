@@ -76,6 +76,18 @@ portunus_err_t door_strike_energize(void)
         ESP_LOGE(TAG, "Strike energize gpio_set_level failed: %s", esp_err_to_name(err));
         return PORTUNUS_ERR_GPIO_INIT;
     }
+    /* Read the pad back: if it did not reach the active level, the unlock
+     * signal never left the module (pin held by a short or a miswired
+     * driver stage), so report it rather than a grant. This checks the
+     * signal sent, not that the strike moved: there is no strike feedback. */
+    const int readback = gpio_get_level(static_cast<gpio_num_t>(PIN_DOOR_STRIKE));
+    if (!strike_readback_matches(DOOR_STRIKE_ACTIVE_LOW, true, readback)) {
+        ESP_LOGE(TAG, "Strike energize readback mismatch: expected %d got %d; unlock signal not sent",
+                 STRIKE_LEVEL_ACTIVE, readback);
+        gpio_set_level(static_cast<gpio_num_t>(PIN_DOOR_STRIKE), STRIKE_LEVEL_INACTIVE);
+        s_energized = false;
+        return PORTUNUS_ERR_GPIO_INIT;
+    }
     s_energized = true;
     ESP_LOGI(TAG, "Strike ENERGIZED (unlocked)");
     return PORTUNUS_OK;

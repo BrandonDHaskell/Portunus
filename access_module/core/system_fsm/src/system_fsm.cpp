@@ -270,6 +270,11 @@ void SystemFSM::run()
             poll_reed_switch();
         }
 
+        /* 3b. Retry a failed early re-lock every poll until it succeeds. */
+        if (m_relock_retry) {
+            retry_relock();
+        }
+
         /* 4. Check unlock hold timer. */
         if (m_strike_energized) {
             check_unlock_timer();
@@ -362,7 +367,7 @@ void SystemFSM::process_event(const portunus_event_t &event)
         ESP_LOGI(TAG, "ACCESS GRANTED — credential=%s reason=%s",
                  ad->credential_id, ad->reason);
         if (!m_caps.has_access_point) {
-            ESP_LOGW(TAG, "Access granted but no access point — cannot unlock");
+            ESP_LOGW(TAG, "Access granted but no access point: cannot unlock, showing error");
         }
         break;
     }
@@ -377,24 +382,31 @@ void SystemFSM::process_event(const portunus_event_t &event)
         break;
     }
 
-    /* Door command — identical unlock/gate-timer semantics. */
+    /* Door command: start the hold timer only once the unlock signal is out. */
+    bool unlock_failed = false;
     if (actions.door == door_cmd_t::UNLOCK_AND_HOLD) {
         portunus_err_t err = m_access->unlock();
         if (err == PORTUNUS_OK) {
             start_unlock_timer();
-            ESP_LOGI(TAG, "Strike energized — hold timer started (%d ms)",
-                     UNLOCK_HOLD_MS);
+            ESP_LOGI(TAG, "Strike energized, hold timer started (%d ms)", UNLOCK_HOLD_MS);
         } else {
-            ESP_LOGE(TAG, "Failed to unlock: 0x%" PRIx32, (uint32_t)err);
+            ESP_LOGE(TAG, "Unlock signal not sent (0x%" PRIx32 "): showing error, not a grant",
+                     (uint32_t)err);
+            unlock_failed = true;
         }
     } else if (actions.door == door_cmd_t::LOCK) {
         (void)m_access->lock();
     }
 
-    /* Feedback — replay the decided indications in order. */
+    /* Feedback: the decided indications in order, or the decided failure
+     * indication if the unlock signal could not be sent. */
     if (m_caps.has_feedback) {
-        for (uint8_t i = 0; i < actions.feedback_count; i++) {
-            m_feedback->indicate(actions.feedback[i]);
+        if (unlock_failed) {
+            m_feedback->indicate(actions.feedback_if_unlock_fails);
+        } else {
+            for (uint8_t i = 0; i < actions.feedback_count; i++) {
+                m_feedback->indicate(actions.feedback[i]);
+            }
         }
     }
 }
@@ -430,13 +442,15 @@ void SystemFSM::poll_reed_switch()
                 ESP_LOGI(TAG, "Door closed during unlock hold — re-locking early");
                 portunus_err_t lock_err = m_access->lock();
                 if (lock_err != PORTUNUS_OK) {
-                    ESP_LOGE(TAG, "Early re-lock failed (0x%" PRIx32 "); hold timer will retry",
+                    ESP_LOGE(TAG, "Early re-lock failed (0x%" PRIx32 "); retrying every poll",
                              (uint32_t)lock_err);
-                    /* Leave the timer armed: check_unlock_timer retries once the
-                     * original hold deadline passes (not on the next tick), then
-                     * on every tick until lock() succeeds. */
+                    /* The door is shut but may still be unlocked: retry on every
+                     * poll (retry_relock) rather than waiting out the hold. */
+                    m_relock_retry = true;
+                    note_lock_result(false);
                 } else {
                     cancel_unlock_timer();
+                    note_lock_result(true);
                 }
             }
         }
@@ -451,26 +465,63 @@ void SystemFSM::start_unlock_timer()
 {
     m_strike_energized   = true;
     m_unlock_deadline_ms = m_clock->now_ms() + UNLOCK_HOLD_MS;
+    m_relock_retry       = false;   /* a new grant unlocks on purpose */
 }
 
 void SystemFSM::cancel_unlock_timer()
 {
     m_strike_energized   = false;
     m_unlock_deadline_ms = 0;
+    m_relock_retry       = false;
+}
+
+void SystemFSM::retry_relock()
+{
+    if (!m_strike_energized) {
+        m_relock_retry = false;
+        return;
+    }
+    if (m_access->lock() == PORTUNUS_OK) {
+        ESP_LOGI(TAG, "Re-lock retry succeeded");
+        cancel_unlock_timer();       /* the hold was cut short: no UNLOCK_TIMEOUT */
+        note_lock_result(true);
+    }
+}
+
+/* lock() reports only that the lock signal was sent and the pin read back
+ * locked; there is no strike sensor. A failure means the door may be stuck
+ * unlocked: show it until a retry succeeds. */
+void SystemFSM::note_lock_result(bool locked)
+{
+    if (!locked && !m_lock_fault) {
+        m_lock_fault = true;
+        ESP_LOGE(TAG, "Strike did not lock; retrying, door may be unlocked");
+        if (m_caps.has_feedback) {
+            m_feedback->indicate(feedback_type_t::SYSTEM_ERROR);
+        }
+    } else if (locked && m_lock_fault) {
+        m_lock_fault = false;
+        ESP_LOGI(TAG, "Strike locked after retrying");
+        if (m_caps.has_feedback) {
+            m_feedback->indicate(feedback_type_t::SYSTEM_READY);
+        }
+    }
 }
 
 void SystemFSM::check_unlock_timer()
 {
     if (m_clock->now_ms() >= m_unlock_deadline_ms) {
-        ESP_LOGI(TAG, "Unlock hold timer expired — re-locking");
+        ESP_LOGI(TAG, "Unlock hold timer expired, re-locking");
 
         if (m_caps.has_access_point) {
             portunus_err_t lock_err = m_access->lock();
             if (lock_err != PORTUNUS_OK) {
-                ESP_LOGE(TAG, "Re-lock after timer expiry failed (0x%" PRIx32 ") — will retry",
+                ESP_LOGE(TAG, "Re-lock after timer expiry failed (0x%" PRIx32 "), will retry",
                          (uint32_t)lock_err);
+                note_lock_result(false);
                 return; /* Leave timer expired so next tick retries. */
             }
+            note_lock_result(true);
         }
         cancel_unlock_timer();
 
