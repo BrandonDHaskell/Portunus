@@ -392,6 +392,7 @@ static void on_provision_event(const portunus_event_t *event, void *ctx)
 
 /* ── Event handlers (run on comm_task) ─────────────────────────────────────── */
 
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
 /**
  * @brief Publish an EVENT_ACCESS_DENIED so the FSM can show error feedback.
  *
@@ -410,6 +411,7 @@ static void publish_access_denied(const char *credential_id, const char *reason)
     proto_fill_decision(&deny.payload.access_decision, credential_id, false, false, reason);
     event_bus_publish(&deny);
 }
+#endif /* CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT */
 
 static void handle_heartbeat(const event_heartbeat_t *hb)
 {
@@ -751,14 +753,23 @@ static void comm_task(void *arg)
             ESP_LOGD(TAG, "WiFi not connected — dropping event 0x%04x",
                      (unsigned)event.id);
 
-            /* Credential events need a deny so the FSM clears CARD_READ
-               feedback.  Heartbeats can be silently dropped. */
+            /* Requests need an answer so the FSM does not wait for one:
+               a deny clears the access point's CARD_READ feedback, and a
+               COMM_ERROR shows the console's error at once instead of after
+               its capture timeout.  Heartbeats can be silently dropped. */
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
             if (event.id == EVENT_CREDENTIAL_READ) {
                 char log_id[CREDENTIAL_LOG_ID_LEN];
                 credential_uid_to_log_id(&event.payload.credential_read.credential,
                                          log_id, sizeof(log_id));
                 publish_access_denied(log_id, "no_network");
             }
+#endif
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
+            if (event.id == EVENT_PROVISION_REQUEST) {
+                publish_provision_result(PROVISION_RESULT_COMM_ERROR, NULL, "no_network");
+            }
+#endif
             continue;
         }
 

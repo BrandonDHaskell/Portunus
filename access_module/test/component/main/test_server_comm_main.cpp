@@ -522,7 +522,6 @@ static portunus_event_t wait_provision_result(void) {
 /* SC-06 (F3): offline, a provision request is answered at once with
  * COMM_ERROR instead of leaving the console to time out. */
 void test_offline_provision_fails_fast(void) {
-    TEST_IGNORE_MESSAGE("SC-06: offline provision requests get no reply; un-ignored by the fix");
     TEST_ASSERT_EQUAL(PORTUNUS_OK, start());
     wifi_mgr_fake_set_connected(false);
     publish_provision_request();
