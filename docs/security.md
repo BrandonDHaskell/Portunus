@@ -293,7 +293,7 @@ This fallback exists only for local development and integration testing. It must
 
 ### Admin credential enrollment
 
-**Member credential attachment** (`POST /admin/v1/members/{member_uuid}/credential`): the caller supplies the pre-computed `credential_hash` as a 64-character hex string. The server stores the 32-byte hash in `member_access`. The admin web UI accepts a raw credential UID and hashes it server-side with `HMAC-SHA256(secret, rawUID)` before forwarding to this path.
+**Member credential attachment** (`POST /admin/v1/members/{member_uuid}/credential`): the caller supplies the raw credential UID as `credential_id` in colon-separated hex (e.g. `"04:A3:2B:1C"`). The admin web UI form takes the same input. Both paths parse it to raw bytes and hash it server-side with `HMAC-SHA256(secret, rawUID)` through one shared helper, so an admin-enrolled card matches the door lookup byte for byte. Callers never supply a hash: the credential-hash secret stays on the server.
 
 ### PROVISIONING_CONSOLE capture path
 

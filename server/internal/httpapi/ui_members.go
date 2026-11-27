@@ -166,12 +166,11 @@ func (s *Server) handleUIMembersAttachCredential(w http.ResponseWriter, r *http.
 	}
 
 	credentialID := r.FormValue("credential_id")
-	rawUID, err := service.ParseCredentialUID(credentialID)
+	credHash, err := s.credentialHashFromUID(credentialID)
 	if err != nil {
 		flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Invalid credential UID — use colon-separated hex, e.g. 04:A3:2B:1C.", "error")
 		return
 	}
-	credHash := service.HashCredentialID(rawUID, s.credentialHashSecret)
 
 	if err := s.memberAccessService.AttachCredential(r.Context(), memberUUID, credHash); err != nil {
 		msg := "Failed to attach credential."

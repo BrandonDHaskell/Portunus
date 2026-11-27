@@ -163,9 +163,9 @@ func (s *Server) handleAdminAttachCredential(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	credHash, err := hex.DecodeString(req.CredentialHashHex)
-	if err != nil || len(credHash) != 32 {
-		writeError(w, http.StatusBadRequest, "invalid_credential_hash", "credential_hash must be a 64-character hex string (32 bytes)")
+	credHash, err := s.credentialHashFromUID(req.CredentialID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_credential_id", "credential_id must be colon-separated hex, e.g. 04:A3:2B:1C")
 		return
 	}
 
@@ -266,4 +266,15 @@ func memberRecordToInfo(rec *store.MemberAccessRecord) types.MemberInfo {
 		info.ArchivedByUUID = rec.ArchivedByUUID
 	}
 	return info
+}
+
+// credentialHashFromUID is the only way an admin path turns a typed UID into a
+// stored credential hash. Both the REST and UI attach handlers go through it so
+// they cannot drift from the door lookup in AccessService.Decide (hazard #1).
+func (s *Server) credentialHashFromUID(credentialID string) ([]byte, error) {
+	rawUID, err := service.ParseCredentialUID(credentialID)
+	if err != nil {
+		return nil, err
+	}
+	return service.HashCredentialID(rawUID, s.credentialHashSecret), nil
 }
