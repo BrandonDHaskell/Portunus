@@ -39,10 +39,14 @@ portunus_err_t door_strike_init(void);
 /**
  * @brief Energize the door strike (unlock the door).
  *
- * Sets the GPIO to the active level.  Returns immediately — the
- * caller (FSM via IAccessPoint) is responsible for timing.
+ * Sets the GPIO to the active level and reads the pad back. Returns
+ * immediately; the caller (FSM via IAccessPoint) is responsible for timing.
+ * The readback confirms the unlock signal left the module, not that the
+ * strike moved.
  *
- * @return PORTUNUS_OK on success.
+ * @return PORTUNUS_OK on success, or PORTUNUS_ERR_GPIO_INIT if the write
+ *         fails or the readback does not show the active level (the pin is
+ *         then driven back to inactive and the strike reported locked).
  */
 portunus_err_t door_strike_energize(void);
 

@@ -29,7 +29,8 @@ An on-target Unity app lands with chunk 5; until then these are manual.
 3. Wait for the hold time (`CONFIG_PORTUNUS_UNLOCK_HOLD_MS`). Expect
    `Unlock hold timer expired` then `Strike DE-ENERGIZED (locked)`;
    pin reads LOW.
-4. No `readback mismatch` and no `Re-lock after timer expiry failed` lines.
+4. No `readback mismatch` (energize or de-energize) and no
+   `Re-lock after timer expiry failed` lines.
 
 ## HW-02: active-low strike (F1)
 
@@ -44,7 +45,8 @@ published the unlock timeout.
 2. Tap a card. Pin reads LOW, `Strike ENERGIZED (unlocked)`.
 3. After the hold time: `Strike DE-ENERGIZED (locked)` exactly once; pin
    reads HIGH.
-4. No `readback mismatch` and no repeated `Re-lock after timer expiry failed`.
+4. No `readback mismatch` (energize or de-energize) and no repeated
+   `Re-lock after timer expiry failed`.
 5. If a reed switch is fitted: open and close the door during the hold.
    Expect `Door closed during unlock hold` and one
    `Strike DE-ENERGIZED (locked)`, with no timer re-lock afterwards.
