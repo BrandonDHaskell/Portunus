@@ -8,6 +8,7 @@
 
 #include "event_bus.hpp"
 #include "event_bus_core.hpp"
+#include "queue_pressure.hpp"
 #include "error_codes.hpp"
 #include "timing_config.hpp"
 
@@ -16,6 +17,9 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
+
+#include <atomic>
+#include <inttypes.h>
 
 
 static const char *TAG = "event_bus";
@@ -29,6 +33,11 @@ static bus_core_t     s_subscribers = {s_subscriber_storage, MAX_EVENT_SUBSCRIBE
 /* ── Queue and task handles ────────────────────────────────────────────────── */
 
 static QueueHandle_t s_event_queue  = NULL;
+
+/* QUEUE_FULL refusals (any publishing task: atomic) and the dispatcher's
+ * view of how full the queue stays (dispatcher only). D-T5. */
+static std::atomic<uint32_t> s_dropped{0};
+static queue_pressure_t      s_queue_pressure = {};
 static TaskHandle_t  s_dispatch_task = NULL;
 
 #define DISPATCH_TASK_STACK_SIZE  4096
@@ -45,6 +54,20 @@ static void event_bus_dispatch_task(void *arg)
 
     for (;;) {
         if (xQueueReceive(s_event_queue, &event, portMAX_DELAY) == pdTRUE) {
+            switch (queue_pressure_sample(s_queue_pressure, uxQueueMessagesWaiting(s_event_queue),
+                                          EVENT_QUEUE_LENGTH)) {
+            case queue_pressure_event_t::HIGH:
+                ESP_LOGW(TAG, "Event queue consistently near full (%d deep, %" PRIu32
+                         " dropped so far): a subscriber is slow", EVENT_QUEUE_LENGTH,
+                         s_dropped.load());
+                break;
+            case queue_pressure_event_t::RECOVERED:
+                ESP_LOGI(TAG, "Event queue pressure cleared");
+                break;
+            default:
+                break;
+            }
+
             /* Snapshot the subscriber table under the lock, then dispatch
                without it.  This prevents deadlock if a callback calls
                event_bus_subscribe() (e.g. a component that registers
@@ -119,6 +142,7 @@ portunus_err_t event_bus_publish(const portunus_event_t *event)
     TickType_t timeout = pdMS_TO_TICKS(EVENT_QUEUE_TIMEOUT_MS);
     if (xQueueSendToBack(s_event_queue, event, timeout) != pdTRUE) {
         ESP_LOGW(TAG, "Event queue full, dropping event id=0x%04x", event->id);
+        s_dropped++;
         return PORTUNUS_ERR_QUEUE_FULL;
     }
 
@@ -136,6 +160,7 @@ portunus_err_t event_bus_publish_from_isr(const portunus_event_t *event,
     }
 
     if (xQueueSendToBackFromISR(s_event_queue, event, higher_priority_woken) != pdTRUE) {
+        s_dropped++;   /* lock-free atomic: safe from an ISR */
         return PORTUNUS_ERR_QUEUE_FULL;
     }
 
@@ -158,8 +183,15 @@ void event_bus_reset_for_test(void)
         s_subscriber_mutex = NULL;
     }
     bus_core_init(s_subscribers, s_subscriber_storage, MAX_EVENT_SUBSCRIBERS);
+    s_dropped        = 0;
+    s_queue_pressure = {};
 }
 #endif
+
+uint32_t event_bus_dropped_events(void)
+{
+    return s_dropped.load();
+}
 
 portunus_err_t event_bus_subscribe(portunus_event_id_t event_id,
                                    event_bus_handler_t handler,

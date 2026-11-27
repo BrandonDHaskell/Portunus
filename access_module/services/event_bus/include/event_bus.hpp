@@ -23,6 +23,8 @@
 #include "freertos/FreeRTOS.h"
 #include "sdkconfig.h"
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -83,6 +85,13 @@ portunus_err_t event_bus_publish_from_isr(const portunus_event_t *event,
 portunus_err_t event_bus_subscribe(portunus_event_id_t event_id,
                                    event_bus_handler_t handler,
                                    void *ctx);
+
+/**
+ * @brief Publishes refused with PORTUNUS_ERR_QUEUE_FULL since init (D-T5).
+ * Each refusal is also reported to its publisher, which answers it; this
+ * count is for logs and telemetry.
+ */
+uint32_t event_bus_dropped_events(void);
 
 #ifdef CONFIG_PORTUNUS_TEST_HOOKS
 /**

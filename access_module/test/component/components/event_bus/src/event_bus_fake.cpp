@@ -25,6 +25,7 @@ bus_core_sub_t                g_storage[MAX_EVENT_SUBSCRIBERS];
 bus_core_t                    g_subs      = {g_storage, MAX_EVENT_SUBSCRIBERS, 0};
 std::vector<portunus_event_t> g_published;
 bool                          g_inited    = false;
+uint32_t                      g_dropped   = 0;
 size_t                        g_fail_left = 0;
 portunus_err_t                g_fail_err  = PORTUNUS_OK;
 
@@ -62,6 +63,7 @@ portunus_err_t event_bus_publish(const portunus_event_t *event) {
         if (!g_inited) return PORTUNUS_ERR_NOT_INIT;
         if (g_fail_left > 0) {
             --g_fail_left;
+            if (g_fail_err == PORTUNUS_ERR_QUEUE_FULL) ++g_dropped;
             return g_fail_err;  /* dropped, as the real bus drops on QUEUE_FULL */
         }
         g_published.push_back(*event);
@@ -76,6 +78,11 @@ portunus_err_t event_bus_publish_from_isr(const portunus_event_t *event,
                                           BaseType_t *higher_priority_woken) {
     (void)higher_priority_woken;
     return event_bus_publish(event);
+}
+
+uint32_t event_bus_dropped_events(void) {
+    Guard g;
+    return g_dropped;
 }
 
 portunus_err_t event_bus_subscribe(portunus_event_id_t event_id,
@@ -95,6 +102,7 @@ void event_bus_fake_reset(void) {
     g_inited    = false;
     g_fail_left = 0;
     g_fail_err  = PORTUNUS_OK;
+    g_dropped   = 0;
 }
 
 void event_bus_fake_fail_next(size_t n, portunus_err_t err) {

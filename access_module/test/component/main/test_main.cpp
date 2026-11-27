@@ -747,6 +747,7 @@ void test_fake_bus_fail_next(void) {
     TEST_ASSERT_EQUAL(PORTUNUS_ERR_QUEUE_FULL, event_bus_publish(&e));
     TEST_ASSERT_EQUAL(PORTUNUS_ERR_QUEUE_FULL, event_bus_publish(&e));
     TEST_ASSERT_EQUAL(PORTUNUS_OK, event_bus_publish(&e));
+    TEST_ASSERT_EQUAL_UINT32(2, event_bus_dropped_events());
     TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count());
     TEST_ASSERT_EQUAL_INT(1, g_late_hits);
 }
@@ -874,9 +875,11 @@ void test_real_bus_queue_full_after_timeout(void) {
         TEST_ASSERT_EQUAL(PORTUNUS_OK, publish_heartbeat(i));
     }
     const TickType_t t0 = xTaskGetTickCount();
+    TEST_ASSERT_EQUAL_UINT32(0, event_bus_dropped_events());
     TEST_ASSERT_EQUAL(PORTUNUS_ERR_QUEUE_FULL, publish_heartbeat(999));
     const uint32_t waited_ms = (xTaskGetTickCount() - t0) * portTICK_PERIOD_MS;
     TEST_ASSERT_GREATER_OR_EQUAL_UINT32(EVENT_QUEUE_TIMEOUT_MS, waited_ms);
+    TEST_ASSERT_EQUAL_UINT32(1, event_bus_dropped_events());   /* D-T5: counted */
 
     xSemaphoreGive(g_release);
     TEST_ASSERT_TRUE(wait_deliveries(EVENT_QUEUE_LENGTH + 1));
