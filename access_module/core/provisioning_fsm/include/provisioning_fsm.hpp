@@ -37,6 +37,10 @@
 #include "i_feedback.hpp"
 #include "portunus_types.hpp"
 
+#include "queue_pressure.hpp"
+
+#include <atomic>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -101,6 +105,11 @@ private:
     /* ── FSM state ────────────────────────────────────────────────────────── */
     peu_state_t  m_state       = PEU_STATE_IDLE;
     int64_t      m_deadline_ms = 0;   /**< Multipurpose timeout (idle/arm/capture/result); 0 = none */
+    /* Events lost to a full FSM queue (bus dispatcher) or a failed publish
+     * from the poll task: atomic. Checked by the FSM task (D-T5). */
+    std::atomic<uint32_t> m_dropped{0};
+    uint32_t              m_dropped_seen = 0;   /**< FSM task only */
+    queue_pressure_t      m_queue_pressure;     /**< FSM task only */
 
     /* ── FreeRTOS handles ─────────────────────────────────────────────────── */
     TaskHandle_t  m_fsm_task_handle  = nullptr;
@@ -115,6 +124,8 @@ private:
     void run();
     void poll();
     void process_event(const portunus_event_t &event);
+    bool receive_and_process(TickType_t timeout);  /**< run() step 1 */
+    void check_dropped_events();
     void check_timeout();
 
     /* ── Event handlers ───────────────────────────────────────────────────── */
@@ -131,7 +142,7 @@ private:
     void enter_idle_after_result(); /**< → Idle if arm present, → Armed if not */
 
     /* ── Request helpers ──────────────────────────────────────────────────── */
-    void publish_capture_request(const event_credential_read_t *cred);
+    bool publish_capture_request(const event_credential_read_t *cred);
 
     /* ── Event bus bridge ─────────────────────────────────────────────────── */
     static void on_event_bus_event(const portunus_event_t *event, void *ctx);

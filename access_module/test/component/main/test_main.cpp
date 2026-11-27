@@ -579,6 +579,74 @@ void test_bridge_drops_ninth_event(void) {
     TEST_ASSERT_EQUAL(8, fix.queued());
 }
 
+/* D-T5: an event lost to the full bridge queue is counted, and the FSM's
+ * next pass shows a comm error, once per batch of losses. */
+void test_dropped_event_shows_comm_error(void) {
+    FakeAccessPoint access;
+    FakeFeedback    fb;
+    FakeClock       clk;
+    SystemFSM fsm(nullptr, &access, &fb, &clk);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
+    SystemFSMTestFixture fix(fsm);
+
+    const portunus_event_t e = make_credential_read();
+    for (int i = 0; i < 9; ++i) fix.bridge(e);     /* 8 fit, the 9th is lost */
+    TEST_ASSERT_EQUAL_UINT32(1, fix.dropped());
+    fix.check_dropped();
+    TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_ERROR, fb.last());
+    TEST_ASSERT_EQUAL(1, fb.count_of(feedback_type_t::SYSTEM_ERROR));
+    fix.check_dropped();                            /* nothing new: no repeat */
+    TEST_ASSERT_EQUAL(1, fb.count_of(feedback_type_t::SYSTEM_ERROR));
+}
+
+/* D-T5: a card read the reader task cannot publish (bus full) is counted
+ * and shown the same way, so a tap never vanishes without a sign. */
+void test_failed_card_publish_shows_comm_error(void) {
+    FakeAccessPoint access;
+    FakeFeedback    fb;
+    FakeClock       clk;
+    SystemFSM fsm(nullptr, &access, &fb, &clk);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
+    SystemFSMTestFixture fix(fsm);
+
+    const credential_t card = {{0x04, 0xA3, 0x2B, 0x1C}, 4};
+    event_bus_fake_fail_next(1, PORTUNUS_ERR_QUEUE_FULL);
+    fix.publish_credential(card);
+    TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_count_of(EVENT_CREDENTIAL_READ));
+    TEST_ASSERT_EQUAL_UINT32(1, fix.dropped());
+    fix.check_dropped();
+    TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_ERROR, fb.last());
+
+    fix.publish_credential(card);                   /* bus healthy again */
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_CREDENTIAL_READ));
+    TEST_ASSERT_EQUAL_UINT32(1, fix.dropped());
+}
+
+/* D-T5: a queue kept near full warns once (queue_pressure), and the warning
+ * clears once it drains. Nothing is dropped along the way. */
+void test_queue_pressure_warns_when_kept_full(void) {
+    FakeAccessPoint access;
+    FakeClock       clk;
+    SystemFSM fsm(nullptr, &access, nullptr, &clk);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
+    SystemFSMTestFixture fix(fsm);
+
+    const portunus_event_t e = make_grant();        /* unsolicited: ignored */
+    for (int i = 0; i < 8; ++i) fix.bridge(e);
+    for (int i = 0; i < 4; ++i) {                   /* consumer keeps it at 7 of 8 */
+        TEST_ASSERT_TRUE(fix.drain_one());
+        fix.bridge(e);
+        TEST_ASSERT_FALSE(fix.queue_pressure_warned());
+    }
+    TEST_ASSERT_TRUE(fix.drain_one());              /* fifth high sample */
+    TEST_ASSERT_TRUE(fix.queue_pressure_warned());
+
+    while (fix.drain_one()) {}
+    TEST_ASSERT_FALSE(fix.queue_pressure_warned());
+    TEST_ASSERT_EQUAL_UINT32(0, fix.dropped());
+    TEST_ASSERT_EQUAL(0, access.unlocks);
+}
+
 /* FSM-20: an event bridged before init() (no queue yet) is dropped quietly. */
 void test_bridge_before_init_is_noop(void) {
     FakeAccessPoint access;
@@ -877,6 +945,9 @@ extern "C" void app_main(void) {
     RUN_TEST(test_second_grant_extends_hold);
     RUN_TEST(test_bridge_drops_ninth_event);
     RUN_TEST(test_bridge_before_init_is_noop);
+    RUN_TEST(test_dropped_event_shows_comm_error);
+    RUN_TEST(test_failed_card_publish_shows_comm_error);
+    RUN_TEST(test_queue_pressure_warns_when_kept_full);
     RUN_TEST(test_unlock_timeout_only_after_lock_succeeds);
 #endif
 

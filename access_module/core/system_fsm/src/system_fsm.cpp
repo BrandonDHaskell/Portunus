@@ -217,6 +217,58 @@ portunus_err_t SystemFSM::start()
 
 /* ── Event bus bridge ─────────────────────────────────────────────────────── */
 
+bool SystemFSM::receive_and_process(TickType_t timeout)
+{
+    portunus_event_t event;
+    if (xQueueReceive(m_event_queue, &event, timeout) != pdTRUE) {
+        return false;
+    }
+    switch (queue_pressure_sample(m_queue_pressure, uxQueueMessagesWaiting(m_event_queue),
+                                  FSM_EVENT_QUEUE_LEN)) {
+    case queue_pressure_event_t::HIGH:
+        ESP_LOGW(TAG, "FSM event queue consistently near full (%d deep): events arriving faster "
+                 "than they are handled", FSM_EVENT_QUEUE_LEN);
+        break;
+    case queue_pressure_event_t::RECOVERED:
+        ESP_LOGI(TAG, "FSM event queue pressure cleared");
+        break;
+    default:
+        break;
+    }
+    process_event(event);
+    return true;
+}
+
+/* A lost card read means the server's decision will arrive unsolicited and be
+ * ignored; a lost decision means the user waits for the decision timeout.
+ * Either way the user must not be left guessing: show a comm error (D-T5). */
+void SystemFSM::check_dropped_events()
+{
+    const uint32_t dropped = m_dropped.load();
+    if (dropped == m_dropped_seen) {
+        return;
+    }
+    ESP_LOGE(TAG, "%" PRIu32 " event(s) lost to a full queue (%" PRIu32 " since boot)",
+             dropped - m_dropped_seen, dropped);
+    m_dropped_seen = dropped;
+    if (m_caps.has_feedback) {
+        m_feedback->indicate(feedback_type_t::SYSTEM_ERROR);
+    }
+}
+
+void SystemFSM::publish_credential_read(const credential_t &cred)
+{
+    portunus_event_t event;
+    memset(&event, 0, sizeof(event));
+    event.id                                   = EVENT_CREDENTIAL_READ;
+    event.payload.credential_read.credential   = cred;
+    event.payload.credential_read.timestamp_ms = m_clock->now_ms();
+    if (event_bus_publish(&event) != PORTUNUS_OK) {
+        ESP_LOGE(TAG, "Card read not published (event bus full)");
+        m_dropped++;
+    }
+}
+
 void SystemFSM::on_event_bus_event(const portunus_event_t *event, void *ctx)
 {
     auto *fsm = static_cast<SystemFSM *>(ctx);
@@ -231,7 +283,8 @@ void SystemFSM::on_event_bus_event(const portunus_event_t *event, void *ctx)
      * other subscribers).
      */
     if (xQueueSend(fsm->m_event_queue, event, pdMS_TO_TICKS(10)) != pdTRUE) {
-        ESP_LOGW(TAG, "FSM event queue full — dropped event 0x%04x", event->id);
+        ESP_LOGW(TAG, "FSM event queue full: dropped event 0x%04x", event->id);
+        fsm->m_dropped++;
     }
 }
 
@@ -253,17 +306,16 @@ void SystemFSM::credential_poll_task_entry(void *arg)
 
 void SystemFSM::run()
 {
-    portunus_event_t event;
     const TickType_t poll_timeout = pdMS_TO_TICKS(FSM_POLL_INTERVAL_MS);
 
     ESP_LOGD(TAG, "FSM task running (poll_interval=%d ms)", FSM_POLL_INTERVAL_MS);
 
     for (;;) {
-        /* 1. Wait for an event or timeout. */
-        if (xQueueReceive(m_event_queue, &event, poll_timeout) == pdTRUE) {
-            /* 2. Process received event. */
-            process_event(event);
-        }
+        /* 1-2. Wait for an event or timeout, and process it. */
+        (void)receive_and_process(poll_timeout);
+
+        /* 2b. Show any events lost to a full queue since the last check. */
+        check_dropped_events();
 
         /* 3. Poll reed switch for door state changes. */
         if (m_caps.has_access_point) {
@@ -568,12 +620,7 @@ void SystemFSM::poll_credential()
         }
 
         if (step.publish_credential) {
-            portunus_event_t event;
-            memset(&event, 0, sizeof(event));
-            event.id                                   = EVENT_CREDENTIAL_READ;
-            event.payload.credential_read.credential   = cred;
-            event.payload.credential_read.timestamp_ms = m_clock->now_ms();
-            event_bus_publish(&event);
+            publish_credential_read(cred);
         }
         if (step.halt) {
             m_reader->halt();

@@ -26,6 +26,10 @@
 #include "i_feedback.hpp"
 #include "i_clock.hpp"
 
+#include "queue_pressure.hpp"
+
+#include <atomic>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -125,6 +129,13 @@ private:
      * never unlocks for a request the user was told failed. */
     uint8_t m_pending_decisions    = 0;
     int64_t m_decision_deadline_ms = 0;  /**< Clock time when the oldest wait expires */
+    /* ── Lost events (D-T5) ───────────────────────────────────────────────── */
+    /* Events lost because the FSM queue was full (bus dispatcher) or a card
+     * read could not be published (poll task): atomic. The FSM task shows an
+     * error when it grows. */
+    std::atomic<uint32_t> m_dropped{0};
+    uint32_t              m_dropped_seen = 0;   /**< FSM task only */
+    queue_pressure_t      m_queue_pressure;     /**< FSM task only */
 
     /* ── FreeRTOS handles ─────────────────────────────────────────────────── */
     TaskHandle_t  m_fsm_task_handle  = nullptr;
@@ -137,6 +148,9 @@ private:
 
     /* ── Internal methods ─────────────────────────────────────────────────── */
     void run();                                  /**< FSM main loop */
+    bool receive_and_process(TickType_t timeout); /**< run() steps 1-2 */
+    void check_dropped_events();
+    void publish_credential_read(const credential_t &cred);
     void poll_credential();                      /**< Credential polling loop */
     void process_event(const portunus_event_t &event);
     void poll_reed_switch();

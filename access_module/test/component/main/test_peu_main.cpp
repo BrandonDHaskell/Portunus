@@ -339,6 +339,41 @@ void test_capture_send_times_out(void) {
     TEST_ASSERT_EQUAL(PEU_STATE_IDLE, r.fsm.state());
 }
 
+/* PEU-14 (D-T5): a capture request that cannot be published (bus full) shows
+ * the error at once instead of waiting out the capture timeout. */
+void test_unpublished_capture_shows_error(void) {
+    Rig r(false);
+    r.start();
+    event_bus_fake_fail_next(1, PORTUNUS_ERR_QUEUE_FULL);
+    r.fix.inject(make_card());
+    TEST_ASSERT_EQUAL(PEU_STATE_RESULT, r.fsm.state());
+    TEST_ASSERT_EQUAL(feedback_type_t::PEU_RESULT_ERROR, r.feedback.last());
+    TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_count_of(EVENT_PROVISION_REQUEST));
+}
+
+/* PEU-15 (D-T5, option a): an event lost to the full FSM queue during a
+ * capture shows the error at once (it was most likely the result); in any
+ * other state it is only logged. */
+void test_dropped_event_during_capture_shows_error(void) {
+    Rig r(true);
+    r.start();
+    to_capture_send(r);
+    for (int i = 0; i < 9; ++i) r.fix.bridge(make_arm());   /* 8 fit, 1 lost */
+    TEST_ASSERT_EQUAL_UINT32(1, r.fix.dropped());
+    r.fix.check_dropped();
+    TEST_ASSERT_EQUAL(PEU_STATE_RESULT, r.fsm.state());
+    TEST_ASSERT_EQUAL(feedback_type_t::PEU_RESULT_ERROR, r.feedback.last());
+
+    Rig idle(true);
+    idle.start();                                            /* IDLE */
+    idle.feedback.reset();
+    for (int i = 0; i < 9; ++i) idle.fix.bridge(make_card());
+    TEST_ASSERT_EQUAL_UINT32(1, idle.fix.dropped());
+    idle.fix.check_dropped();
+    TEST_ASSERT_EQUAL(PEU_STATE_IDLE, idle.fsm.state());
+    TEST_ASSERT_TRUE(idle.feedback.indications.empty());
+}
+
 /* PEU-13: an out-of-range uid_len is clamped to the request's UID buffer. */
 void test_oversize_uid_len_clamped(void) {
     Rig r(false);
@@ -368,6 +403,8 @@ extern "C" void app_main(void) {
     RUN_TEST(test_result_returns_after_display_time);
     RUN_TEST(test_capture_send_times_out);
     RUN_TEST(test_oversize_uid_len_clamped);
+    RUN_TEST(test_unpublished_capture_shows_error);
+    RUN_TEST(test_dropped_event_during_capture_shows_error);
     int failures = UNITY_END();
     exit(failures);
 }
