@@ -7,7 +7,9 @@ set(AM ${CMAKE_CURRENT_LIST_DIR}/../../..)  # access_module root
 # wrong one on first configure. provisioning_fsm compiles no sources outside
 # the PEU variant, and the other variants never reference heartbeat_service,
 # so its esp_timer call (no linux implementation) is not linked there.
-if(PORTUNUS_TEST_NVS)
+if(PORTUNUS_TEST_SERVER_COMM)
+    set(_test_src "test_server_comm_main.cpp")
+elseif(PORTUNUS_TEST_NVS)
     set(_test_src "test_nvs_main.cpp")
 elseif(CONFIG_PORTUNUS_TEST_HEARTBEAT)
     set(_test_src "test_heartbeat_main.cpp")
@@ -29,6 +31,7 @@ idf_component_register(
         system_fsm
         provisioning_fsm
         heartbeat_service
+        linux_time_shim
         event_bus
         portunus_types
         portunus_config
@@ -50,4 +53,16 @@ endif()
 # COMPONENTS for this build only.
 if(PORTUNUS_TEST_NVS)
     target_link_libraries(${COMPONENT_LIB} PRIVATE idf::portunus_nvs idf::nvs_flash)
+endif()
+
+# The server_comm variants link the real server_comm, the fakes it talks to,
+# and Nanopb (to encode scripted responses) the same way: after
+# registration, added to COMPONENTS by the top-level CMakeLists.txt.
+if(PORTUNUS_TEST_SERVER_COMM)
+    target_link_libraries(${COMPONENT_LIB} PRIVATE
+        idf::server_comm idf::grpc_client idf::wifi_mgr idf::portunus_proto idf::mbedtls
+        idf::portunus_config)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE
+        PORTUNUS_HMAC_VECTORS="${AM}/../proto/testdata/hmac_vectors.txt"
+        PORTUNUS_PROTO_FILE="${AM}/../proto/portunus/v1/portunus.proto")
 endif()

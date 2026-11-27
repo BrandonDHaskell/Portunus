@@ -13,6 +13,9 @@ allowed='
 sdkconfig.defaults.peu:CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE  selects the PEU variant
 sdkconfig.defaults.hb:CONFIG_PORTUNUS_TEST_HEARTBEAT                     selects the heartbeat test app
 sdkconfig.defaults.hb:CONFIG_PORTUNUS_HEARTBEAT_INTERVAL_MS              tests wait multiples of it
+sdkconfig.defaults.sc:CONFIG_PORTUNUS_TLS_USE_CUSTOM_CA                  no certs/ca_cert.pem in the test project
+sdkconfig.defaults.sc_nohmac:CONFIG_PORTUNUS_ENV_DEV                     HMAC can be off only in dev builds
+sdkconfig.defaults.sc_nohmac:CONFIG_PORTUNUS_HMAC_ENABLED                SC-12 pins the no-HMAC behaviour
 '
 
 status=0

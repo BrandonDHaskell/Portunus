@@ -15,5 +15,6 @@ idf_component_register(
     INCLUDE_DIRS
         "${AM}/services/wifi_mgr/include"
         "${AM}/components/portunus_nvs/include"
+        "include"
     REQUIRES portunus_types
 )

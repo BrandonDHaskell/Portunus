@@ -74,8 +74,7 @@
 /* ESP-IDF */
 #include "grpc_client.hpp"
 #include "grpc_wire.hpp"
-#include "esp_wifi.h"
-#include "esp_netif.h"
+#include "net_info.hpp"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_system.h"
@@ -231,37 +230,21 @@ static void handle_credential(const event_credential_read_t *cred);
 static void handle_provision(const event_provision_request_t *req);
 #endif
 
-/* ── Helpers ───────────────────────────────────────────────────────────────── */
-
-/**
- * @brief Get the station IP as a dotted-quad string.
- *        Returns false if the interface is down or has no IP.
- */
-static bool get_sta_ip_str(char *buf, size_t len)
-{
-    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if (netif == NULL) { return false; }
-
-    esp_netif_ip_info_t info;
-    if (esp_netif_get_ip_info(netif, &info) != ESP_OK) { return false; }
-    if (info.ip.addr == 0) { return false; }
-
-    snprintf(buf, len, IPSTR, IP2STR(&info.ip));
-    return true;
-}
-
-/**
- * @brief Get WiFi RSSI.  Returns false if unavailable.
- */
-static bool get_rssi(int32_t *out)
-{
-    wifi_ap_record_t ap;
-    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) { return false; }
-    *out = ap.rssi;
-    return true;
-}
-
 /* ── Clock sync helpers ────────────────────────────────────────────────────── */
+
+#ifdef CONFIG_PORTUNUS_TEST_HOOKS
+static int (*s_test_set_time)(const struct timeval *tv) = nullptr;
+#endif
+
+static int set_system_time(const struct timeval *tv)
+{
+#ifdef CONFIG_PORTUNUS_TEST_HOOKS
+    if (s_test_set_time != nullptr) {
+        return s_test_set_time(tv);
+    }
+#endif
+    return settimeofday(tv, NULL);
+}
 
 /**
  * @brief Set the system clock from a heartbeat response server_time field.
@@ -285,7 +268,7 @@ static void sync_clock_from_response(const char *server_time, int64_t rtt_us)
     }
     proto_add_half_rtt(&tv, rtt_us);
 
-    if (settimeofday(&tv, NULL) != 0) {
+    if (set_system_time(&tv) != 0) {
         ESP_LOGW(TAG, "Clock sync failed — settimeofday error");
         return;
     }
@@ -409,6 +392,7 @@ static void on_provision_event(const portunus_event_t *event, void *ctx)
 
 /* ── Event handlers (run on comm_task) ─────────────────────────────────────── */
 
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
 /**
  * @brief Publish an EVENT_ACCESS_DENIED so the FSM can show error feedback.
  *
@@ -427,6 +411,7 @@ static void publish_access_denied(const char *credential_id, const char *reason)
     proto_fill_decision(&deny.payload.access_decision, credential_id, false, false, reason);
     event_bus_publish(&deny);
 }
+#endif /* CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT */
 
 static void handle_heartbeat(const event_heartbeat_t *hb)
 {
@@ -441,12 +426,12 @@ static void handle_heartbeat(const event_heartbeat_t *hb)
     req.free_heap_bytes = hb->free_heap_bytes;
     req.sequence        = hb->sequence;
 
-    if (get_sta_ip_str(req.ip, sizeof(req.ip))) {
+    if (net_info_sta_ip(req.ip, sizeof(req.ip))) {
         /* ip populated */
     }
 
     int32_t rssi;
-    if (get_rssi(&rssi)) {
+    if (net_info_rssi(&rssi)) {
         req.has_rssi_dbm = true;
         req.rssi_dbm     = rssi;
     }
@@ -768,14 +753,23 @@ static void comm_task(void *arg)
             ESP_LOGD(TAG, "WiFi not connected — dropping event 0x%04x",
                      (unsigned)event.id);
 
-            /* Credential events need a deny so the FSM clears CARD_READ
-               feedback.  Heartbeats can be silently dropped. */
+            /* Requests need an answer so the FSM does not wait for one:
+               a deny clears the access point's CARD_READ feedback, and a
+               COMM_ERROR shows the console's error at once instead of after
+               its capture timeout.  Heartbeats can be silently dropped. */
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
             if (event.id == EVENT_CREDENTIAL_READ) {
                 char log_id[CREDENTIAL_LOG_ID_LEN];
                 credential_uid_to_log_id(&event.payload.credential_read.credential,
                                          log_id, sizeof(log_id));
                 publish_access_denied(log_id, "no_network");
             }
+#endif
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE
+            if (event.id == EVENT_PROVISION_REQUEST) {
+                publish_provision_result(PROVISION_RESULT_COMM_ERROR, NULL, "no_network");
+            }
+#endif
             continue;
         }
 
@@ -921,3 +915,36 @@ portunus_err_t server_comm_init(const portunus_device_config_t *cfg)
     ESP_LOGI(TAG, "Server comm initialised");
     return PORTUNUS_OK;
 }
+
+#ifdef CONFIG_PORTUNUS_TEST_HOOKS
+void server_comm_reset_for_test(void)
+{
+    if (s_comm_task != NULL) {
+        vTaskDelete(s_comm_task);
+        s_comm_task = NULL;
+    }
+    if (s_comm_queue != NULL) {
+        vQueueDelete(s_comm_queue);
+        s_comm_queue = NULL;
+    }
+    if (s_grpc_handle != NULL) {
+        grpc_client_destroy(s_grpc_handle);
+        s_grpc_handle = NULL;
+    }
+    s_initialized     = false;
+    s_reader_degraded = false;
+    s_clock_synced    = false;
+    s_last_sync_us    = 0;
+    s_last_heartbeat  = {};
+    s_idle_ticks      = 0;
+#if PORTUNUS_HMAC_ENABLED
+    memset(s_hmac_secret, 0, sizeof(s_hmac_secret));
+    s_hmac_secret_len = 0;
+#endif
+}
+
+void server_comm_set_clock_setter_for_test(int (*set_time)(const struct timeval *tv))
+{
+    s_test_set_time = set_time;
+}
+#endif
