@@ -51,6 +51,8 @@ type harness struct {
 	ModuleAuths *sqlitestore.ModuleAuthorizationStore
 	Audit       *sqlitestore.AuditStore
 	Auth        *service.AuthService
+	Heartbeat   *service.HeartbeatService
+	Provision   *service.ProvisionService
 }
 
 func newHarness(t *testing.T, opts harnessOptions) *harness {
@@ -92,12 +94,15 @@ func newHarness(t *testing.T, opts harnessOptions) *harness {
 		replayStore = replay.NewStore(opts.ReplayWindow)
 	}
 
+	heartbeatSvc := service.NewHeartbeatService(heartbeatStore, registry)
+	provisionSvc := service.NewProvisionService(registry, memberStore, accessEventStore, testCredentialHashSecret, auditStore)
+
 	srv := httpapi.NewServer(httpapi.Dependencies{
 		Logger:               logger,
 		Addr:                 ":0",
-		HeartbeatService:     service.NewHeartbeatService(heartbeatStore, registry),
+		HeartbeatService:     heartbeatSvc,
 		AccessService:        accessSvc,
-		ProvisionService:     service.NewProvisionService(registry, memberStore, accessEventStore, testCredentialHashSecret, auditStore),
+		ProvisionService:     provisionSvc,
 		AdminService:         service.NewAdminService(moduleAdminStore, testCredentialHashSecret),
 		AuthService:          authSvc,
 		AdminUserService:     service.NewAdminUserService(adminUserStore, roleStore, auditStore),
@@ -117,6 +122,7 @@ func newHarness(t *testing.T, opts harnessOptions) *harness {
 		t: t, TS: ts, Conn: conn, Access: accessSvc,
 		AdminUsers: adminUserStore, Roles: roleStore, Members: memberStore,
 		ModuleAuths: moduleAuthStore, Audit: auditStore, Auth: authSvc,
+		Heartbeat: heartbeatSvc, Provision: provisionSvc,
 	}
 	h.Admin = h.loginAs("admin")
 	return h
@@ -234,4 +240,26 @@ func (h *harness) postForm(path string, form url.Values, cookie *http.Cookie) *h
 		h.t.Fatalf("postForm do: %v", err)
 	}
 	return resp
+}
+
+// seedPEU inserts a commissioned provisioning & enrollment unit.
+func (h *harness) seedPEU(moduleID string) {
+	h.t.Helper()
+	_, err := h.Conn.Exec(`INSERT INTO modules(module_id, enabled, commissioned_at_ms, module_type, created_at_ms, updated_at_ms) VALUES (?,1,1,'provisioning_enrollment_unit',0,0)`, moduleID)
+	if err != nil {
+		h.t.Fatalf("seedPEU %q: %v", moduleID, err)
+	}
+}
+
+// enroll attaches the canonical hash of a colon UID to memberUUID, the same
+// hash every enrollment path produces.
+func (h *harness) enroll(memberUUID, uid string) {
+	h.t.Helper()
+	raw, err := service.ParseCredentialUID(uid)
+	if err != nil {
+		h.t.Fatalf("ParseCredentialUID(%q): %v", uid, err)
+	}
+	if err := h.Members.AttachCredential(context.Background(), memberUUID, service.HashCredentialID(raw, testCredentialHashSecret)); err != nil {
+		h.t.Fatalf("AttachCredential: %v", err)
+	}
 }
