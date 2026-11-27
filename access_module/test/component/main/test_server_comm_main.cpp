@@ -333,6 +333,54 @@ void test_heartbeat_reports_health(void) {
 #endif
 }
 
+/* SC-16: keepalive. The idle tick is shortened to 20 ms; the PING still
+ * needs 30 empty ticks (about 600 ms here, 30 s in production). Timing
+ * bounds are loose (none before 20 ticks, one by 60), so an off-by-one in
+ * the threshold is not caught here. */
+static constexpr int KEEPALIVE_TICK_MS = 20;
+
+/* SC-16a: connected and idle, a PING goes out after the idle ticks, then
+ * again every interval. */
+void test_keepalive_ping_when_idle(void) {
+    server_comm_set_idle_tick_ms_for_test(KEEPALIVE_TICK_MS);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, start());
+    settle(20 * KEEPALIVE_TICK_MS);
+    TEST_ASSERT_EQUAL_INT(0, grpc_fake_ping_count());           /* not yet */
+    TEST_ASSERT_TRUE(wait_for([] { return grpc_fake_ping_count() >= 1; }, 40 * KEEPALIVE_TICK_MS));
+    settle(15 * KEEPALIVE_TICK_MS);
+    TEST_ASSERT_EQUAL_INT(1, grpc_fake_ping_count());           /* one per interval */
+    TEST_ASSERT_TRUE(wait_for([] { return grpc_fake_ping_count() >= 2; }, 40 * KEEPALIVE_TICK_MS));
+    TEST_ASSERT_EQUAL_size_t(0, grpc_fake_call_count());        /* PINGs, not RPCs */
+}
+
+/* SC-16b: with the gRPC connection down there is nothing to keep alive. */
+void test_no_keepalive_when_disconnected(void) {
+    server_comm_set_idle_tick_ms_for_test(KEEPALIVE_TICK_MS);
+    grpc_fake_set_connected(false);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, start());
+    settle(80 * KEEPALIVE_TICK_MS);                              /* well over two intervals */
+    TEST_ASSERT_EQUAL_INT(0, grpc_fake_ping_count());
+}
+
+/* SC-16c: traffic restarts the idle count, so a busy link sends no PING. */
+void test_keepalive_counts_from_last_activity(void) {
+    server_comm_set_idle_tick_ms_for_test(KEEPALIVE_TICK_MS);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, start());
+    settle(20 * KEEPALIVE_TICK_MS);
+    publish_heartbeat(1);                                        /* activity at ~tick 20 */
+    settle(20 * KEEPALIVE_TICK_MS);                              /* ~tick 40 from start */
+    TEST_ASSERT_EQUAL_INT(0, grpc_fake_ping_count());
+    TEST_ASSERT_TRUE(wait_for([] { return grpc_fake_ping_count() >= 1; }, 40 * KEEPALIVE_TICK_MS));
+}
+
+/* SC-16d: a failed PING is logged and the keepalive carries on. */
+void test_failed_keepalive_is_retried_next_interval(void) {
+    server_comm_set_idle_tick_ms_for_test(KEEPALIVE_TICK_MS);
+    grpc_fake_set_ping_result(PORTUNUS_ERR_HTTP_CONNECT);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, start());
+    TEST_ASSERT_TRUE(wait_for([] { return grpc_fake_ping_count() >= 2; }, 100 * KEEPALIVE_TICK_MS));
+}
+
 /* SC-18: RPC paths are /{package}.{service}/{rpc} from portunus.proto. */
 static std::string rpc_path(const char *rpc) {
     FILE *f = fopen(PORTUNUS_PROTO_FILE, "r");
@@ -797,6 +845,10 @@ extern "C" void app_main(void) {
     RUN_TEST(test_offline_heartbeat_is_dropped);
     RUN_TEST(test_heartbeat_syncs_clock);
     RUN_TEST(test_heartbeat_reports_health);
+    RUN_TEST(test_keepalive_ping_when_idle);
+    RUN_TEST(test_no_keepalive_when_disconnected);
+    RUN_TEST(test_keepalive_counts_from_last_activity);
+    RUN_TEST(test_failed_keepalive_is_retried_next_interval);
     RUN_TEST(test_rpc_paths_match_proto);
     RUN_TEST(test_deinit_releases_everything);
     RUN_TEST(test_deinit_timeout_leaves_task);
