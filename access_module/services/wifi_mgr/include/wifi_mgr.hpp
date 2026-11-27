@@ -16,13 +16,15 @@
  * the backoff delay never blocks the ESP-IDF default event loop.
  *
  * Thread safety:
- *   - wifi_mgr_init() and wifi_mgr_start() must be called from a single
- *     task during startup (typically app_main).
+ *   - wifi_mgr_init(), wifi_mgr_start(), wifi_mgr_stop() and
+ *     wifi_mgr_deinit() must be called from a single controlling task
+ *     (typically app_main).
  *   - wifi_mgr_is_connected() is safe to call from any task.
  *
- * Internal tasks (created by wifi_mgr_init):
+ * Internal tasks (created by wifi_mgr_init, ended by wifi_mgr_deinit):
  *   - "wifi_reconn" — reconnect with exponential backoff (2.5 KB stack,
- *     priority 3). Sleeps until woken by a disconnect event notification.
+ *     priority 3; services/wifi_reconnect). Sleeps until woken by a
+ *     disconnect event notification.
  */
 
 #pragma once
@@ -52,6 +54,7 @@ extern "C" {
  *         PORTUNUS_ERR_ALREADY_INIT if called more than once.
  *         PORTUNUS_ERR_TASK_CREATE if the reconnect task could not start.
  *         PORTUNUS_FAIL on ESP-IDF error.
+ *         On any failure, everything this call created is released again.
  */
 portunus_err_t wifi_mgr_init(const portunus_device_config_t *cfg);
 
@@ -69,17 +72,34 @@ portunus_err_t wifi_mgr_init(const portunus_device_config_t *cfg);
  * @return PORTUNUS_OK            Connected and IP obtained.
  *         PORTUNUS_ERR_TIMEOUT   Timed out waiting for IP.
  *         PORTUNUS_ERR_NOT_INIT  wifi_mgr_init() was not called.
+ *         PORTUNUS_FAIL          the driver rejected the config or start.
  */
 portunus_err_t wifi_mgr_start(void);
 
 /**
- * @brief Stop the WiFi driver and release resources.
+ * @brief Disconnect and stop the WiFi driver.
  *
- * Disconnects from the AP and stops the WiFi driver.  After this call,
- * wifi_mgr_is_connected() returns false and no reconnection attempts
- * will be made until wifi_mgr_start() is called again.
+ * Reconnects are suspended first, so the disconnect this causes (and any
+ * reconnect already waiting out its backoff) makes no further attempt.
+ * After this call wifi_mgr_is_connected() returns false and no reconnection
+ * attempts are made until wifi_mgr_start() is called again. Resources stay
+ * allocated; wifi_mgr_deinit() releases them.
  */
 void wifi_mgr_stop(void);
+
+/**
+ * @brief Stop WiFi and release everything wifi_mgr_init() created (D-T9).
+ *
+ * Unregisters the event handlers (waiting out one in progress), ends the
+ * reconnect task cooperatively, deinitialises the driver, and destroys the
+ * station netif and event group. The default event loop and esp_netif are
+ * shared and left in place. wifi_mgr_init() may be called again afterwards.
+ *
+ * @return PORTUNUS_OK (also if not initialised), or PORTUNUS_ERR_TIMEOUT if
+ *         the reconnect task is stuck in esp_wifi_connect(): nothing past
+ *         the handlers is released, and deinit may be called again.
+ */
+portunus_err_t wifi_mgr_deinit(void);
 
 /**
  * @brief Check whether the station has an IP address.

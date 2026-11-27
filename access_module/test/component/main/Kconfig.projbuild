@@ -13,6 +13,12 @@ menu "Portunus component tests"
         bool "Heartbeat service test app"
         default n
 
+    # Build test_wifi_reconnect_main.cpp against the real WifiReconnect task
+    # (sdkconfig.defaults.wifi).
+    config PORTUNUS_TEST_WIFI_RECONNECT
+        bool "WiFi reconnect task test app"
+        default n
+
     # Compiles test-only entry points such as event_bus_reset_for_test().
     # Defined here and nowhere in main/Kconfig.projbuild, so no firmware
     # build can enable it (decision D-T2).

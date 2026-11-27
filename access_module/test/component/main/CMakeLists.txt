@@ -13,6 +13,8 @@ elseif(PORTUNUS_TEST_NVS)
     set(_test_src "test_nvs_main.cpp")
 elseif(CONFIG_PORTUNUS_TEST_HEARTBEAT)
     set(_test_src "test_heartbeat_main.cpp")
+elseif(CONFIG_PORTUNUS_TEST_WIFI_RECONNECT)
+    set(_test_src "test_wifi_reconnect_main.cpp")
 elseif(CONFIG_PORTUNUS_MODULE_TYPE_PROVISIONING_CONSOLE)
     set(_test_src "test_peu_main.cpp")
 else()
@@ -31,6 +33,7 @@ idf_component_register(
         system_fsm
         provisioning_fsm
         heartbeat_service
+        wifi_reconnect
         linux_time_shim
         wifi_mgr            # the stub, for wifi_mgr_fake_set_connected
         event_bus
