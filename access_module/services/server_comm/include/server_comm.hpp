@@ -124,6 +124,10 @@ portunus_err_t server_comm_deinit(void);
 /* How long server_comm_deinit() waits for the comm task; <= 0 restores the
  * default. Reset by server_comm_reset_for_test(). */
 void server_comm_set_stop_timeout_for_test(int ms);
+/* Length of one keepalive idle tick (the comm task's empty queue wait); <= 0
+ * restores the 1 s default. The PING still needs 30 ticks. Reset by
+ * server_comm_reset_for_test(). */
+void server_comm_set_idle_tick_ms_for_test(int ms);
 void server_comm_reset_for_test(void);
 
 /**

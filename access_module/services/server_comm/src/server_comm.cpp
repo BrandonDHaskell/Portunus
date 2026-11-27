@@ -191,9 +191,13 @@ static uint16_t s_grpc_port;
 static char   s_hmac_secret[PORTUNUS_NVS_HMAC_SECRET_LEN];
 static size_t s_hmac_secret_len;
 #endif
-/* Idle-tick counter for keepalive PINGs (1 tick ≈ 1 s). */
+/* Idle-tick counter for keepalive PINGs. A tick is one empty queue wait of
+ * s_idle_tick_ms (1 s; a test hook shortens it so SC-16 runs in under a
+ * second instead of 30). */
 static int s_idle_ticks = 0;
 #define GRPC_PING_INTERVAL_TICKS 30
+#define COMM_IDLE_TICK_MS        1000
+static int s_idle_tick_ms = COMM_IDLE_TICK_MS;
 
 /* ── HMAC helper ───────────────────────────────────────────────────────────── */
 
@@ -834,7 +838,7 @@ static void comm_task(void *arg)
     ESP_LOGI(TAG, "Server comm task started");
 
     while (!s_stop_requested) {
-        if (xQueueReceive(s_comm_queue, &event, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        if (xQueueReceive(s_comm_queue, &event, pdMS_TO_TICKS(s_idle_tick_ms)) != pdTRUE) {
             if (++s_idle_ticks >= GRPC_PING_INTERVAL_TICKS) {
                 s_idle_ticks = 0;
                 if (s_grpc_handle != NULL && grpc_client_is_connected(s_grpc_handle)) {
@@ -1111,9 +1115,15 @@ void server_comm_set_stop_timeout_for_test(int ms)
     s_stop_timeout_ms = ms > 0 ? ms : COMM_STOP_TIMEOUT_MS;
 }
 
+void server_comm_set_idle_tick_ms_for_test(int ms)
+{
+    s_idle_tick_ms = ms > 0 ? ms : COMM_IDLE_TICK_MS;
+}
+
 void server_comm_reset_for_test(void)
 {
     s_stop_timeout_ms = COMM_STOP_TIMEOUT_MS;
+    s_idle_tick_ms    = COMM_IDLE_TICK_MS;
     if (server_comm_deinit() != PORTUNUS_OK) {
         /* Last resort for a wedged test: the forced path deinit avoids. */
         if (s_comm_task != NULL) {

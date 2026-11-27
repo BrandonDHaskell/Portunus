@@ -43,3 +43,9 @@ void grpc_fake_release(void);
 size_t grpc_fake_call_count(void);
 bool   grpc_fake_get_call(size_t i, grpc_fake_call *out);
 int    grpc_fake_live_clients(void);   /* inits minus destroys */
+
+/** What grpc_client_is_connected() reports (default true). */
+void grpc_fake_set_connected(bool connected);
+/** Keepalive PINGs sent since reset, and what the next ones return. */
+int  grpc_fake_ping_count(void);
+void grpc_fake_set_ping_result(portunus_err_t err);

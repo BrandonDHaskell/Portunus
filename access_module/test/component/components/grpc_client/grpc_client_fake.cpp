@@ -17,6 +17,9 @@ std::map<std::string, std::deque<Scripted>>        g_replies;
 std::vector<grpc_fake_call>                        g_calls;
 int                                                g_live = 0;
 volatile bool                                      g_hold = false;
+volatile bool                                      g_connected   = true;
+int                                                g_pings       = 0;
+portunus_err_t                                     g_ping_result = PORTUNUS_OK;
 
 SemaphoreHandle_t entered_sem() { static SemaphoreHandle_t s = xSemaphoreCreateCounting(64, 0); return s; }
 SemaphoreHandle_t release_sem() { static SemaphoreHandle_t s = xSemaphoreCreateBinary(); return s; }
@@ -38,6 +41,9 @@ void grpc_fake_reset(void) {
     g_calls.clear();
     g_live = 0;
     g_hold = false;
+    g_connected   = true;
+    g_pings       = 0;
+    g_ping_result = PORTUNUS_OK;
     while (xSemaphoreTake(entered_sem(), 0) == pdTRUE) {}
     while (xSemaphoreTake(release_sem(), 0) == pdTRUE) {}
 }
@@ -80,6 +86,18 @@ int grpc_fake_live_clients(void) {
     return g_live;
 }
 
+void grpc_fake_set_connected(bool connected) { g_connected = connected; }
+
+int grpc_fake_ping_count(void) {
+    Guard g;
+    return g_pings;
+}
+
+void grpc_fake_set_ping_result(portunus_err_t err) {
+    Guard g;
+    g_ping_result = err;
+}
+
 extern "C" {
 
 portunus_err_t grpc_client_init(const grpc_client_config_t *cfg, grpc_client_handle_t *handle) {
@@ -98,8 +116,13 @@ void grpc_client_destroy(grpc_client_handle_t handle) {
 
 portunus_err_t grpc_client_connect(grpc_client_handle_t) { return PORTUNUS_OK; }
 void           grpc_client_disconnect(grpc_client_handle_t) {}
-bool           grpc_client_is_connected(grpc_client_handle_t) { return true; }
-portunus_err_t grpc_client_send_ping(grpc_client_handle_t) { return PORTUNUS_OK; }
+bool           grpc_client_is_connected(grpc_client_handle_t) { return g_connected; }
+
+portunus_err_t grpc_client_send_ping(grpc_client_handle_t) {
+    Guard g;
+    ++g_pings;
+    return g_ping_result;
+}
 
 portunus_err_t grpc_client_unary_call(grpc_client_handle_t handle, const char *service_method,
                                       const uint8_t *req_buf, size_t req_len,
