@@ -35,6 +35,12 @@
  */
 class SystemFSM {
 public:
+    /** Event ids start() subscribes to. Public so main.cpp can check the
+     *  event bus subscriber budget at compile time (COMP-01). */
+    static constexpr portunus_event_id_t kSubscribedEvents[] = {
+        EVENT_CREDENTIAL_READ, EVENT_ACCESS_GRANTED, EVENT_ACCESS_DENIED,
+    };
+
     /**
      * @brief Construct the FSM with injected module dependencies.
      *

@@ -988,6 +988,8 @@ portunus_err_t server_comm_init(const portunus_device_config_t *cfg)
         { EVENT_PROVISION_REQUEST,           on_provision_event },
 #endif
     };
+    static_assert(sizeof(subs) / sizeof(subs[0]) == SERVER_COMM_SUBSCRIPTION_COUNT,
+                  "update SERVER_COMM_SUBSCRIPTION_COUNT in server_comm.hpp");
     for (const auto &sub : subs) {
         portunus_err_t sub_err = event_bus_subscribe(sub.id, sub.handler, NULL);
         if (sub_err != PORTUNUS_OK) {

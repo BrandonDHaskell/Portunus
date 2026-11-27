@@ -70,6 +70,25 @@
 
 #include <inttypes.h>
 #include <string.h>
+#include <iterator>
+
+/* COMP-01: every event bus subscriber this variant starts must fit, with a
+ * slot to spare. A subscription the bus refuses makes that component's
+ * start fail at boot (F12), so catch an over-budget configuration here, the
+ * one place that knows which subscribers a variant wires. */
+#ifdef CONFIG_PORTUNUS_MODULE_TYPE_ACCESS_POINT
+static constexpr size_t kFsmSubscriptions = std::size(SystemFSM::kSubscribedEvents);
+#else
+static constexpr size_t kFsmSubscriptions = std::size(ProvisioningFSM::kSubscribedEvents);
+#endif
+#ifdef CONFIG_PORTUNUS_ENABLE_WIFI
+static constexpr size_t kCommSubscriptions = SERVER_COMM_SUBSCRIPTION_COUNT;
+#else
+static constexpr size_t kCommSubscriptions = 0;
+#endif
+static_assert(kFsmSubscriptions + kCommSubscriptions < MAX_EVENT_SUBSCRIBERS,
+              "event bus subscribers exceed CONFIG_PORTUNUS_MAX_EVENT_SUBSCRIBERS "
+              "minus one spare slot: raise it in menuconfig");
 
 static const char *TAG = "portunus";
 

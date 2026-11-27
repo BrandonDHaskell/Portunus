@@ -111,6 +111,9 @@ jobs:
 
       # idf.py is called directly (as in the Firmware job): the Taskfile's
       # IDF_PYTHON default points at a developer-machine venv path.
+      - name: Test Kconfig overrides are allowlisted (COMP-05)
+        run: access_module/test/component/check_kconfig_overrides.sh
+
       # Each build keeps its own sdkconfig; SDKCONFIG must be absolute.
       - name: Component tier, access point (fake event bus)
         run: |

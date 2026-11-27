@@ -45,6 +45,13 @@ void tearDown(void) {
 
 static constexpr uint32_t INTERVAL_MS = HEARTBEAT_INTERVAL_MS;
 
+/* Kconfig silently replaces an out-of-range value with the 10 s default, and
+ * every test here waits a few intervals: fail the build rather than run for
+ * minutes. */
+static_assert(INTERVAL_MS <= 1000,
+              "heartbeat variant needs a short interval: check sdkconfig.defaults.hb "
+              "against the HEARTBEAT_INTERVAL_MS range in main/Kconfig.projbuild");
+
 static void wait_ms(uint32_t ms) { vTaskDelay(pdMS_TO_TICKS(ms)); }
 
 /* Heartbeats recorded so far, copied out under the fake bus's lock. */

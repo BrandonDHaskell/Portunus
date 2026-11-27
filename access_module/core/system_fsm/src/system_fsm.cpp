@@ -154,10 +154,7 @@ portunus_err_t SystemFSM::start()
     /* ── Subscribe to event bus events ──────────────────────────────────── */
     /* A missing subscription would silently stop grants or card reads from
      * reaching the FSM, so treat any failure as fatal. */
-    static const portunus_event_id_t kEvents[] = {
-        EVENT_CREDENTIAL_READ, EVENT_ACCESS_GRANTED, EVENT_ACCESS_DENIED,
-    };
-    for (portunus_event_id_t id : kEvents) {
+    for (portunus_event_id_t id : kSubscribedEvents) {
         portunus_err_t err = event_bus_subscribe(id, on_event_bus_event, this);
         if (err != PORTUNUS_OK) {
             ESP_LOGE(TAG, "Subscribe to event 0x%04x failed (0x%" PRIx32 ")",
