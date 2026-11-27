@@ -19,6 +19,7 @@ import (
 	"log"
 
 	pb "github.com/BrandonDHaskell/Portunus/server/api/portunus/v1"
+	"github.com/BrandonDHaskell/Portunus/server/internal/devicesig"
 	"github.com/BrandonDHaskell/Portunus/server/internal/pbconvert"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/types"
@@ -141,7 +142,7 @@ func (s *Server) RequestAccess(ctx context.Context, req *pb.AccessRequest) (*pb.
 		ServerTime: resp.ServerTime,
 	}
 
-	if sig := AccessResponseSig(s.hmacSecret, domainReq.ModuleID, domainReq.CredentialID, resp.Granted); sig != "" {
+	if sig := devicesig.AccessResponseSig(s.hmacSecret, domainReq.ModuleID, domainReq.CredentialID, domainReq.Nonce, resp.Granted); sig != "" {
 		grpc.SetTrailer(ctx, metadata.Pairs(hmacHeaderKey, sig))
 	}
 

@@ -102,3 +102,11 @@ target_include_directories(test_event_bus_core PRIVATE
     ${AM}/components/portunus_types/include)
 target_link_libraries(test_event_bus_core PRIVATE unity)
 add_test(NAME event_bus_core COMMAND test_event_bus_core)
+
+add_executable(test_access_projection
+    test_access_projection.cpp
+    ${AM}/services/server_comm/src/access_projection.cpp)
+target_include_directories(test_access_projection PRIVATE
+    ${AM}/services/server_comm/include)
+target_link_libraries(test_access_projection PRIVATE unity)
+add_test(NAME access_projection COMMAND test_access_projection)
