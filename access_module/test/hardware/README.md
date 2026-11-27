@@ -102,5 +102,5 @@ Not yet automated:
 
 | ID | Date | Firmware commit | Variant | Result | Notes |
 |---|---|---|---|---|---|
-| HW-01/02, 03, 04, 05, 10 | | | active_high | | |
-| HW-01/02, 03, 04, 05, 10 | | | active_low | | |
+| HW-01/02, 03, 04, 05, 10 | 2026-11-27 | 85c3714 | active_high | pass (7 pass, 1 ignored) | HW-04 card check ignored: no card resting on the reader. Free heap unchanged (374,256 bytes). |
+| HW-01/02, 03, 04, 05, 10 | 2026-11-27 | 85c3714 | active_low | pass (7 pass, 1 ignored) | As above. Powered-down reader returned 0x3002 (timeout) on every poll. |
