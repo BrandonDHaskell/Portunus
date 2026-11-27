@@ -222,23 +222,30 @@ void test_strike_relocks_after_hold_expires(void) {
 /* Timer retry: if re-lock fails, timer remains energized for retry. */
 void test_relock_failure_retries_on_next_tick(void) {
     FakeAccessPoint access;
+    FakeFeedback    fb;
     FakeClock       clk;
 
-    SystemFSM fsm(nullptr, &access, nullptr, &clk);
+    SystemFSM fsm(nullptr, &access, &fb, &clk);
     TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
     SystemFSMTestFixture fix(fsm);
 
     inject_decision(fix, make_grant());
     access.lock_result = PORTUNUS_FAIL;  /* set AFTER unlock so grant succeeds */
+    fb.reset();                          /* the offline card read showed an error */
 
     clk.advance(UNLOCK_HOLD_MS);
     fix.tick_unlock_timer();
-    TEST_ASSERT_TRUE(fix.strike_energized());  /* still armed — retry next tick */
+    TEST_ASSERT_TRUE(fix.strike_energized());  /* still armed, retry next tick */
+    fix.tick_unlock_timer();
+    TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_ERROR, fb.last());   /* shown once */
+    TEST_ASSERT_EQUAL(1, fb.count_of(feedback_type_t::SYSTEM_ERROR));
 
     access.lock_result = PORTUNUS_OK;
     fix.tick_unlock_timer();
     TEST_ASSERT_FALSE(fix.strike_energized());
     TEST_ASSERT_TRUE(access.locked);
+    TEST_ASSERT_FALSE(fix.lock_fault());
+    TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_READY, fb.last());
 }
 
 /* A grant with no pending card read (late or unsolicited) never unlocks. */
@@ -448,10 +455,54 @@ void test_close_during_hold_relocks_early(void) {
     TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_count_of(EVENT_FSM_UNLOCK_TIMEOUT));
 }
 
-/* FSM-15: if the early re-lock fails the timer stays armed with its original
- * deadline; the timer path retries at that deadline and publishes
- * UNLOCK_TIMEOUT once. */
-void test_early_relock_failure_falls_back_to_timer(void) {
+/* FSM-15: if the early re-lock fails, the FSM retries on every poll until
+ * lock() succeeds, without waiting for the hold to expire. While it fails
+ * the LED shows SYSTEM_ERROR (the door may be stuck unlocked); once locked
+ * it returns to SYSTEM_READY. The hold was cut short, so no UNLOCK_TIMEOUT. */
+void test_early_relock_failure_retries_every_poll(void) {
+    FakeAccessPoint access;
+    FakeFeedback    fb;
+    FakeClock       clk;
+    SystemFSM fsm(nullptr, &access, &fb, &clk);
+    TEST_ASSERT_EQUAL(PORTUNUS_OK, fsm.init());
+    SystemFSMTestFixture fix(fsm);
+
+    grant_and_open(fix, access);
+    fb.reset();                                   /* the offline card read showed an error */
+    access.lock_result = PORTUNUS_ERR_GPIO_INIT;
+    access.door_open   = false;
+    fix.poll_reed();
+    TEST_ASSERT_TRUE(fix.strike_energized());
+    TEST_ASSERT_TRUE(fix.relock_retry());
+    TEST_ASSERT_TRUE(fix.lock_fault());
+    TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_ERROR, fb.last());
+    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_DOOR_CLOSED));
+
+    for (int i = 0; i < 3; ++i) {                 /* still failing: no repeat error */
+        clk.advance(100);
+        fix.tick_relock_retry();
+        TEST_ASSERT_TRUE(fix.strike_energized());
+    }
+    TEST_ASSERT_EQUAL(1, fb.count_of(feedback_type_t::SYSTEM_ERROR));
+
+    access.lock_result = PORTUNUS_OK;
+    clk.advance(100);                             /* well inside the hold */
+    fix.tick_relock_retry();
+    TEST_ASSERT_EQUAL(1, access.locks);
+    TEST_ASSERT_FALSE(fix.strike_energized());
+    TEST_ASSERT_FALSE(fix.relock_retry());
+    TEST_ASSERT_FALSE(fix.lock_fault());
+    TEST_ASSERT_EQUAL(feedback_type_t::SYSTEM_READY, fb.last());
+
+    clk.advance(UNLOCK_HOLD_MS);
+    fix.tick_unlock_timer();
+    TEST_ASSERT_EQUAL(1, access.locks);
+    TEST_ASSERT_EQUAL_size_t(0, event_bus_fake_count_of(EVENT_FSM_UNLOCK_TIMEOUT));
+}
+
+/* A new grant while a re-lock retry is pending unlocks on purpose: the retry
+ * stops and the hold timer governs the next re-lock. */
+void test_new_grant_cancels_relock_retry(void) {
     FakeAccessPoint access;
     FakeClock       clk;
     SystemFSM fsm(nullptr, &access, nullptr, &clk);
@@ -459,24 +510,17 @@ void test_early_relock_failure_falls_back_to_timer(void) {
     SystemFSMTestFixture fix(fsm);
 
     grant_and_open(fix, access);
-    const int64_t deadline = fix.unlock_deadline();
     access.lock_result = PORTUNUS_ERR_GPIO_INIT;
     access.door_open   = false;
     fix.poll_reed();
-    TEST_ASSERT_TRUE(fix.strike_energized());
-    TEST_ASSERT_EQUAL_INT64(deadline, fix.unlock_deadline());
-    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_DOOR_CLOSED));
+    TEST_ASSERT_TRUE(fix.relock_retry());
 
     access.lock_result = PORTUNUS_OK;
-    clk.set(deadline - 1);
-    fix.tick_unlock_timer();                  /* not yet: no early retry */
+    inject_decision(fix, make_grant());
+    TEST_ASSERT_FALSE(fix.relock_retry());
+    TEST_ASSERT_TRUE(fix.strike_energized());
+    fix.tick_relock_retry();                      /* no-op now */
     TEST_ASSERT_EQUAL(0, access.locks);
-    clk.set(deadline);
-    fix.tick_unlock_timer();
-    TEST_ASSERT_EQUAL(1, access.locks);
-    TEST_ASSERT_FALSE(fix.strike_energized());
-    fix.tick_unlock_timer();
-    TEST_ASSERT_EQUAL_size_t(1, event_bus_fake_count_of(EVENT_FSM_UNLOCK_TIMEOUT));
 }
 
 /* FSM-16: a door closing while the strike is not energized never calls lock(). */
@@ -827,7 +871,8 @@ extern "C" void app_main(void) {
     RUN_TEST(test_initial_door_state_read_at_init);
     RUN_TEST(test_door_open_close_events_with_timestamps);
     RUN_TEST(test_close_during_hold_relocks_early);
-    RUN_TEST(test_early_relock_failure_falls_back_to_timer);
+    RUN_TEST(test_early_relock_failure_retries_every_poll);
+    RUN_TEST(test_new_grant_cancels_relock_retry);
     RUN_TEST(test_close_while_locked_does_not_lock);
     RUN_TEST(test_second_grant_extends_hold);
     RUN_TEST(test_bridge_drops_ninth_event);

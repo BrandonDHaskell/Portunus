@@ -23,6 +23,9 @@ public:
     /* One hold-timer check (run() step 4); call after advancing FakeClock. */
     void tick_unlock_timer() { if (m_fsm.m_strike_energized) m_fsm.check_unlock_timer(); }
 
+    /* One re-lock retry (run() step 3b), as run() calls it. */
+    void tick_relock_retry() { if (m_fsm.m_relock_retry) m_fsm.retry_relock(); }
+
     /* One decision-timeout check (run() step 5); call after advancing FakeClock. */
     void tick_decision_timeout() { m_fsm.check_decision_timeout(); }
 
@@ -34,6 +37,8 @@ public:
     int64_t unlock_deadline()  const { return m_fsm.m_unlock_deadline_ms; }
     int     pending_decisions() const { return m_fsm.m_pending_decisions; }
     bool    last_door_open()   const { return m_fsm.m_last_door_open; }
+    bool    relock_retry()     const { return m_fsm.m_relock_retry; }
+    bool    lock_fault()       const { return m_fsm.m_lock_fault; }
 
 private:
     SystemFSM &m_fsm;

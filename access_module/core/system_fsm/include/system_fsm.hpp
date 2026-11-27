@@ -109,6 +109,12 @@ private:
     /* ── Unlock timer state ───────────────────────────────────────────────── */
     bool    m_strike_energized = false;
     int64_t m_unlock_deadline_ms = 0;  /**< esp_timer timestamp when hold expires */
+    /** An early re-lock (door closed during the hold) failed: retry every
+     *  poll until lock() succeeds, without waiting for the hold to expire. */
+    bool    m_relock_retry = false;
+    /** lock() has failed and not yet succeeded since: the door may be stuck
+     *  unlocked, so SYSTEM_ERROR is shown until it locks. */
+    bool    m_lock_fault = false;
 
     /* ── Reed switch tracking ─────────────────────────────────────────────── */
     bool m_last_door_open = false;
@@ -135,6 +141,8 @@ private:
     void process_event(const portunus_event_t &event);
     void poll_reed_switch();
     void check_unlock_timer();
+    void retry_relock();
+    void note_lock_result(bool locked);
     void start_unlock_timer();
     void cancel_unlock_timer();
     void check_decision_timeout();
