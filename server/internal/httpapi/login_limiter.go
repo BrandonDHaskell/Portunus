@@ -17,6 +17,7 @@ type loginLimiter struct {
 	window    time.Duration
 	threshold int
 	entries   map[string][]time.Time // key → slice of recent failure timestamps
+	now       func() time.Time       // injectable so tests can move time
 }
 
 func newLoginLimiter(window time.Duration, threshold int) *loginLimiter {
@@ -24,6 +25,7 @@ func newLoginLimiter(window time.Duration, threshold int) *loginLimiter {
 		window:    window,
 		threshold: threshold,
 		entries:   make(map[string][]time.Time),
+		now:       time.Now,
 	}
 }
 
@@ -41,7 +43,7 @@ func loginKey(username, remoteAddr string) string {
 // It does NOT record a new attempt; call RecordFailure after a confirmed
 // authentication failure and Reset after a success.
 func (l *loginLimiter) Allow(username, remoteAddr string) bool {
-	now := time.Now().UTC()
+	now := l.now().UTC()
 	key := loginKey(username, remoteAddr)
 
 	l.mu.Lock()
@@ -53,7 +55,7 @@ func (l *loginLimiter) Allow(username, remoteAddr string) bool {
 
 // RecordFailure records a failed attempt for the given username + IP.
 func (l *loginLimiter) RecordFailure(username, remoteAddr string) {
-	now := time.Now().UTC()
+	now := l.now().UTC()
 	key := loginKey(username, remoteAddr)
 
 	l.mu.Lock()
