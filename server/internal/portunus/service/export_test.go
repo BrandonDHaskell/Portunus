@@ -8,3 +8,6 @@ func SwapCompareHash(f func(hash, password []byte) error) (restore func()) {
 	compareHashAndPassword = f
 	return func() { compareHashAndPassword = orig }
 }
+
+// DummyHash exposes the decoy hash compared on the unknown-username path.
+func DummyHash() []byte { return getDummyHash() }

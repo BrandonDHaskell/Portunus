@@ -86,7 +86,8 @@ func NewServer(d Dependencies) *Server {
 		credentialHashSecret: d.CredentialHashSecret,
 		hmacSecret:           d.HMACSecret,
 		replayStore:          d.ReplayStore,
-		// 5 failures per username+IP within 60 seconds triggers a 429.
+		// 5 failures from one client host within 60 seconds triggers a 429,
+		// whatever usernames were tried.
 		loginLimiter: newLoginLimiter(60*time.Second, 5),
 		tlsEnabled:   d.TLSEnabled,
 	}

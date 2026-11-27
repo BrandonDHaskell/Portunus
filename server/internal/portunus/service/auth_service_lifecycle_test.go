@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store"
 	sqlitestore "github.com/BrandonDHaskell/Portunus/server/internal/portunus/store/sqlite"
@@ -283,5 +285,44 @@ func TestAuth_ChangePassword_SuccessAndLimits(t *testing.T) {
 	}
 	if _, err := f.svc.Login(ctx, "erin", newPass); err != nil {
 		t.Errorf("new password rejected: %v", err)
+	}
+}
+
+// An unknown username is compared against a decoy hash. If the decoy's bcrypt
+// cost differed from real password hashes, the two paths would take
+// measurably different time and leak which usernames exist (F-2).
+func TestAuth_DecoyHashCostMatchesRealHashes(t *testing.T) {
+	decoy, err := bcrypt.Cost(service.DummyHash())
+	if err != nil {
+		t.Fatalf("decoy hash: %v", err)
+	}
+
+	f := newAuthFixture(t)
+	ctx := context.Background()
+	if err := f.svc.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.user(t, "uuid-cost", "frank", "admin")
+	if err := f.svc.ChangePassword(ctx, "uuid-cost", lifecyclePass, "a-new-valid-password"); err != nil {
+		t.Fatal(err)
+	}
+	adminSvc := service.NewAdminUserService(f.users, f.roles, nil)
+	created, err := adminSvc.CreateUser(ctx, "uuid-cost", "grace", "a-valid-password-1", "operator")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	for _, who := range []string{"admin", "frank", created.Username} {
+		rec, err := f.users.GetAdminUserByUsername(ctx, who)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := bcrypt.Cost([]byte(rec.PasswordHash))
+		if err != nil {
+			t.Fatalf("%s hash: %v", who, err)
+		}
+		if got != decoy {
+			t.Errorf("%s password hash cost %d, decoy cost %d: unknown-username timing would differ", who, got, decoy)
+		}
 	}
 }

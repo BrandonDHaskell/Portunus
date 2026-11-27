@@ -25,7 +25,7 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.loginLimiter.Allow(body.Username, r.RemoteAddr) {
+	if !s.loginLimiter.Allow(r.RemoteAddr) {
 		writeError(w, http.StatusTooManyRequests, "too_many_attempts", "too many failed login attempts, try again later")
 		return
 	}
@@ -33,7 +33,7 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 	sessionID, err := s.authService.Login(r.Context(), body.Username, body.Password)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidCredentials) || errors.Is(err, service.ErrAccountDisabled) {
-			s.loginLimiter.RecordFailure(body.Username, r.RemoteAddr)
+			s.loginLimiter.RecordFailure(r.RemoteAddr)
 			writeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid username or password")
 			return
 		}
@@ -42,7 +42,7 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.loginLimiter.Reset(body.Username, r.RemoteAddr)
+	s.loginLimiter.Reset(r.RemoteAddr)
 	setSessionCookie(w, sessionID, s.tlsEnabled)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

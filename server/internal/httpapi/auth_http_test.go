@@ -166,3 +166,41 @@ func TestChangePassword_AllowedWhileMustChange(t *testing.T) {
 		t.Fatalf("must-change session blocked from changing password: %d", resp.StatusCode)
 	}
 }
+
+// One source cycling through usernames (real and made up) and passwords is
+// still locked out after five failures.
+func TestLoginLimiter_REST_RotatingUsernamesStillLocked(t *testing.T) {
+	h := newHarness(t, harnessOptions{})
+	for i, u := range []string{"admin", "root", "alice", "admin2", "operator"} {
+		if resp := h.restLogin(u, "guess-"+u); resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("attempt %d (%s): status %d, want 401", i+1, u, resp.StatusCode)
+		}
+	}
+	for _, u := range []string{"admin", "someone-new"} {
+		if resp := h.restLogin(u, testAdminPassword); resp.StatusCode != http.StatusTooManyRequests {
+			t.Errorf("%s after 5 failures from this source: status %d, want 429", u, resp.StatusCode)
+		}
+	}
+}
+
+// Failed logins and lockouts must look the same for real and made-up
+// usernames, so neither response reveals whether an account exists.
+func TestLogin_ResponsesDoNotRevealUsernames(t *testing.T) {
+	h := newHarness(t, harnessOptions{})
+	read := func(resp *http.Response) string {
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
+
+	real, fake := h.restLogin("admin", "wrong-password-x"), h.restLogin("no-such-user", "wrong-password-x")
+	if real.StatusCode != fake.StatusCode || read(real) != read(fake) {
+		t.Errorf("failed login differs: real=%d fake=%d", real.StatusCode, fake.StatusCode)
+	}
+	for i := 0; i < 3; i++ {
+		h.restLogin("no-such-user", "wrong-password-x")
+	}
+	real, fake = h.restLogin("admin", "wrong-password-x"), h.restLogin("no-such-user", "wrong-password-x")
+	if real.StatusCode != http.StatusTooManyRequests || real.StatusCode != fake.StatusCode || read(real) != read(fake) {
+		t.Errorf("lockout differs: real=%d fake=%d", real.StatusCode, fake.StatusCode)
+	}
+}
