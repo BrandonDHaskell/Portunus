@@ -22,7 +22,7 @@
  *   - wifi_mgr_is_connected() is safe to call from any task.
  *
  * Internal tasks (created by wifi_mgr_init, ended by wifi_mgr_deinit):
- *   - "wifi_reconn" — reconnect with exponential backoff (2.5 KB stack,
+ *   - "wifi_reconn": reconnect with exponential backoff (3.5 KB stack,
  *     priority 3; services/wifi_reconnect). Sleeps until woken by a
  *     disconnect event notification.
  */

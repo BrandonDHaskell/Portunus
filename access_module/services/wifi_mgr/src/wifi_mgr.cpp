@@ -56,7 +56,9 @@ static char s_wifi_psk[PORTUNUS_NVS_WIFI_PSK_LEN];
 /* ── Reconnect task ────────────────────────────────────────────────────────── */
 static const uint32_t RECONNECT_CEILING_MS = 60000;   /* 60 s hard ceiling */
 
-#define RECONNECT_TASK_STACK_SIZE  2560
+/* HW-09 measured 560 bytes free of 2560 normally, but 244 on the path where
+ * esp_wifi_connect() fails and logs (ESP_LOGW and esp_err_to_name). */
+#define RECONNECT_TASK_STACK_SIZE  3584
 #define RECONNECT_TASK_PRIORITY    3     /* Below event dispatcher (5) */
 /* The task is either waiting (ends at once) or inside esp_wifi_connect(),
  * which only queues a request to the driver task. */
