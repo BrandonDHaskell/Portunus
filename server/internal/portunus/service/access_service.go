@@ -278,6 +278,15 @@ func (s *AccessService) decideMemberAccess(
 	if !member.Enabled {
 		return false, "member_disabled", "", nil
 	}
+	// Approval is where expiry and inactivity policy are applied, so a member
+	// that has not been approved never opens a door, whatever rows it holds.
+	switch member.ProvisioningStatus {
+	case store.ProvisioningStatusActive:
+	case store.ProvisioningStatusPendingAuthorization:
+		return false, "member_pending", "", nil
+	default:
+		return false, "member_not_provisioned", "", nil
+	}
 
 	auth, err := s.moduleAuthStore.GetAuthorization(ctx, member.UUID, moduleID)
 	if err != nil {

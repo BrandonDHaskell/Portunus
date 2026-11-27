@@ -279,6 +279,8 @@ func TestAccessReasonCodes_FitNanopbBound(t *testing.T) {
 		"member_suspended",
 		"member_archived",
 		"member_disabled",
+		"member_pending",
+		"member_not_provisioned",
 		"credential_not_authorized",
 		"authorization_revoked",
 		"authorization_expired",

@@ -1,12 +1,15 @@
 package httpapi_test
 
 import (
+	"context"
 	"encoding/hex"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
+	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store"
 )
 
 // Hazard #1 cross-path tests for the two admin enrollment paths. Each side
@@ -75,5 +78,36 @@ func TestAdminREST_AttachCredential_RejectsBadInput(t *testing.T) {
 				t.Fatalf("status %d, want 400", resp.StatusCode)
 			}
 		})
+	}
+}
+
+func TestGrantToPendingMember_RefusedOverRESTAndUI(t *testing.T) {
+	h := newHarness(t, harnessOptions{})
+	h.seedKnownModule("door-p")
+	const member = "dddddddd-0000-4000-8000-0000000000aa"
+	if err := h.Members.CreateMember(context.Background(), member, "", store.ProvisioningStatusPendingAuthorization, nil, nil); err != nil {
+		t.Fatalf("CreateMember: %v", err)
+	}
+
+	resp := do(t, adminReq(t, http.MethodPost, h.TS.URL+"/admin/v1/modules/door-p/authorizations",
+		map[string]string{"member_uuid": member}, h.Admin))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("REST grant: status %d, want 409", resp.StatusCode)
+	}
+
+	for _, path := range []string{
+		"/admin/ui/members/" + member + "/authorizations",
+		"/admin/ui/modules/door-p/authorizations",
+	} {
+		resp := h.postForm(path, url.Values{"module_id": {"door-p"}, "member_uuid": {member}}, h.Admin)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "approve") {
+			t.Errorf("UI grant %s: status %d location %q, want 303 with an approval flash", path, resp.StatusCode, resp.Header.Get("Location"))
+		}
+	}
+
+	if _, err := h.ModuleAuths.GetAuthorization(context.Background(), member, "door-p"); err == nil {
+		t.Fatal("an authorization was written for a pending member")
 	}
 }

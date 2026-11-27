@@ -444,7 +444,7 @@ type AccessResponse struct {
 	//
 	//	| "credential_not_found"
 	//	| "member_expired" | "member_suspended" | "member_archived"
-	//	| "member_disabled"
+	//	| "member_disabled" | "member_pending" | "member_not_provisioned"
 	//	| "credential_not_authorized"
 	//	| "authorization_revoked" | "authorization_expired"
 	//

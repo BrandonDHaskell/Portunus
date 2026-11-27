@@ -335,3 +335,35 @@ func TestModuleAuthService_Revoke_NoPermission(t *testing.T) {
 		t.Fatalf("expected ErrGrantOutOfScope for actor with no permissions, got: %v", err)
 	}
 }
+
+// ── grants to unapproved members ──────────────────────────────────────────────
+
+func TestModuleAuthService_Grant_PendingMemberRefused(t *testing.T) {
+	dbConn, writer := openSvcTestDB(t)
+	ms := sqlitestore.NewMemberAccessStore(dbConn, writer)
+	as := sqlitestore.NewModuleAuthorizationStore(dbConn, writer)
+	audit := sqlitestore.NewAuditStore(dbConn, writer)
+	svc := service.NewModuleAuthorizationService(as, ms, audit)
+	ctx := context.Background()
+	seedModule(t, dbConn, "woodshop")
+
+	if err := ms.CreateMember(ctx, "pending-1", "", store.ProvisioningStatusPendingAuthorization, nil, nil); err != nil {
+		t.Fatalf("CreateMember: %v", err)
+	}
+	err := svc.GrantAuthorization(ctx, anyActor(), "pending-1", "woodshop", nil, "")
+	if !errors.Is(err, service.ErrMemberNotApproved) {
+		t.Fatalf("got %v, want ErrMemberNotApproved", err)
+	}
+	if _, err := as.GetAuthorization(ctx, "pending-1", "woodshop"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("authorization row written for a pending member (err=%v)", err)
+	}
+	requireAuditEntry(t, audit, "module_auth.granted", "woodshop")
+}
+
+func TestModuleAuthService_Grant_UnknownMember(t *testing.T) {
+	svc, _, _ := newModuleAuthSvc(t)
+	err := svc.GrantAuthorization(context.Background(), anyActor(), "no-such-member", "woodshop", nil, "")
+	if !errors.Is(err, service.ErrMemberNotFound) {
+		t.Fatalf("got %v, want ErrMemberNotFound", err)
+	}
+}

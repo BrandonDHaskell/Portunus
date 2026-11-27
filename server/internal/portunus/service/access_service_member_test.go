@@ -728,3 +728,54 @@ func TestAccessService_FailOpen_UnauthorizedModuleIsDenied(t *testing.T) {
 		t.Errorf("expected reason=credential_not_authorized, got %q — wiring regression?", resp.Reason)
 	}
 }
+
+// ── pending (unapproved) members ──────────────────────────────────────────────
+
+// A card captured by a PEU is pending until an admin approves it; approval is
+// what applies expiry and inactivity policy. Even if an authorization row
+// exists (granted before the grant guard, or written directly), the door must
+// stay shut until approval.
+func TestAccessService_PendingMember_DeniedUntilApproved(t *testing.T) {
+	ctx := context.Background()
+	dbConn, writer := openSvcTestDB(t)
+	maStore := sqlitestore.NewMemberAccessStore(dbConn, writer)
+	moStore := sqlitestore.NewModuleAuthorizationStore(dbConn, writer)
+	const moduleID, memberUUID = "module-pend", "ffffffff-0000-4000-8000-000000000001"
+	secret := []byte("pending-test-secret")
+
+	seedModule(t, dbConn, moduleID)
+	if err := maStore.CreateMember(ctx, memberUUID, "", store.ProvisioningStatusPendingAuthorization, nil, nil); err != nil {
+		t.Fatalf("CreateMember: %v", err)
+	}
+	if err := maStore.AttachCredential(ctx, memberUUID, service.HashCredentialID([]byte{0x04, 0x11, 0x22, 0x33}, secret)); err != nil {
+		t.Fatalf("AttachCredential: %v", err)
+	}
+	if err := moStore.GrantAuthorization(ctx, memberUUID, moduleID, "", nil, ""); err != nil {
+		t.Fatalf("GrantAuthorization: %v", err)
+	}
+
+	svc := service.NewAccessService(service.NewDeviceRegistry(memory.NewDeviceStore([]string{moduleID})), service.AccessPolicy{}, memory.NewAccessEventStore())
+	svc.SetMemberAccessStore(maStore)
+	svc.SetModuleAuthStore(moStore)
+	svc.SetCredentialHashSecret(secret)
+	tap := types.AccessRequest{ModuleID: moduleID, CredentialID: "04:11:22:33"}
+
+	resp, err := svc.Decide(ctx, tap)
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if resp.Granted || resp.Reason != "member_pending" {
+		t.Fatalf("pending member: granted=%v reason=%q, want denied member_pending", resp.Granted, resp.Reason)
+	}
+
+	if err := maStore.ApprovePending(ctx, memberUUID, "", nil, intPtr(30)); err != nil {
+		t.Fatalf("ApprovePending: %v", err)
+	}
+	resp, err = svc.Decide(ctx, tap)
+	if err != nil {
+		t.Fatalf("Decide after approval: %v", err)
+	}
+	if !resp.Granted {
+		t.Fatalf("approved member denied: reason=%q", resp.Reason)
+	}
+}

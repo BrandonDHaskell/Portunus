@@ -19,6 +19,9 @@ var (
 	// The specific reason is recorded in the audit log; the error itself is
 	// intentionally uninformative so UI messages stay uninformative to the caller.
 	ErrGrantOutOfScope = errors.New("grant out of scope")
+	// ErrMemberNotApproved is returned when granting door access to a member
+	// whose provisioning is not active (for example still pending approval).
+	ErrMemberNotApproved = errors.New("member has not been approved")
 )
 
 // GrantActor carries the acting admin's identity and permissions for scope
@@ -83,6 +86,22 @@ func (s *ModuleAuthorizationService) GrantAuthorization(
 			moduleID, "failure",
 			fmt.Sprintf(`{"reason":"no_grant_permission","member_uuid":%q}`, memberUUID))
 		return ErrGrantOutOfScope
+	}
+
+	// A pending member has not been through approval, which is where expiry and
+	// inactivity policy are applied. Door access waits for approval.
+	target, err := s.memberStore.GetMember(ctx, memberUUID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return ErrMemberNotFound
+		}
+		return fmt.Errorf("grant authorization: load member: %w", err)
+	}
+	if target.ProvisioningStatus != store.ProvisioningStatusActive {
+		s.recordAudit(ctx, actor.AdminUUID, "module_auth.granted", "module_authorization",
+			moduleID, "failure",
+			fmt.Sprintf(`{"reason":"member_not_approved","member_uuid":%q}`, memberUUID))
+		return ErrMemberNotApproved
 	}
 
 	if err := s.authStore.GrantAuthorization(ctx, memberUUID, moduleID, actor.AdminUUID, expiresAt, timeRestriction); err != nil {

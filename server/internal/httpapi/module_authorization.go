@@ -57,6 +57,10 @@ func (s *Server) handleAdminGrantModuleAuthorization(w http.ResponseWriter, r *h
 			writeError(w, http.StatusConflict, "authorization_exists", "an active authorization already exists for this member and module")
 		case errors.Is(err, service.ErrGrantOutOfScope):
 			writeError(w, http.StatusForbidden, "grant_out_of_scope", "actor's linked member does not hold access to this module")
+		case errors.Is(err, service.ErrMemberNotApproved):
+			writeError(w, http.StatusConflict, "member_not_approved", "approve the member before granting door access")
+		case errors.Is(err, service.ErrMemberNotFound):
+			writeError(w, http.StatusNotFound, "not_found", "member not found")
 		case errors.Is(err, service.ErrMemberUUIDRequired):
 			writeError(w, http.StatusBadRequest, "missing_member_uuid", err.Error())
 		case errors.Is(err, service.ErrModuleIDRequired):

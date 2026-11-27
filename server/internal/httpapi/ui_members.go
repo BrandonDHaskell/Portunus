@@ -417,6 +417,10 @@ func (s *Server) handleUIGrantAuthorization(w http.ResponseWriter, r *http.Reque
 			msg = "An active authorization already exists for that module."
 		case errors.Is(err, service.ErrGrantOutOfScope):
 			msg = "Your linked member does not currently hold access to that module."
+		case errors.Is(err, service.ErrMemberNotApproved):
+			msg = "This member must be approved before granting door access."
+		case errors.Is(err, service.ErrMemberNotFound):
+			msg = "Member not found."
 		case errors.Is(err, service.ErrMemberUUIDRequired), errors.Is(err, service.ErrModuleIDRequired):
 			msg = "Member UUID and module are required."
 		default:

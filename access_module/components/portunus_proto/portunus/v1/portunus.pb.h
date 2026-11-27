@@ -119,7 +119,7 @@ typedef struct _portunus_v1_AccessResponse {
  Deny:  "denied" | "unknown_module" | "invalid_credential_format"
         | "credential_not_found"
         | "member_expired" | "member_suspended" | "member_archived"
-        | "member_disabled"
+        | "member_disabled" | "member_pending" | "member_not_provisioned"
         | "credential_not_authorized"
         | "authorization_revoked" | "authorization_expired"
  Longest value: "invalid_credential_format" | "credential_not_authorized" (25 chars).
