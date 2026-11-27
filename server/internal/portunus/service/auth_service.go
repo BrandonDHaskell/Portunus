@@ -31,6 +31,9 @@ var (
 	dummyHash     []byte
 )
 
+// compareHashAndPassword is a variable so tests can count comparisons.
+var compareHashAndPassword = bcrypt.CompareHashAndPassword
+
 func getDummyHash() []byte {
 	dummyHashOnce.Do(func() {
 		h, _ := bcrypt.GenerateFromPassword([]byte("portunus-timing-dummy-constant"), bcryptCost)
@@ -159,10 +162,16 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (str
 			// Run a dummy bcrypt compare so that a missing username takes the
 			// same wall-clock time as a present-but-wrong-password attempt,
 			// preventing username enumeration via response timing (F-2).
-			_ = bcrypt.CompareHashAndPassword(getDummyHash(), []byte(password))
+			_ = compareHashAndPassword(getDummyHash(), []byte(password))
 			return "", ErrInvalidCredentials
 		}
 		return "", fmt.Errorf("login: %w", err)
+	}
+
+	// Compare before any account-state check so disabled, expired and
+	// role-less accounts cost the same bcrypt work as a wrong password (F-2).
+	if err := compareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+		return "", ErrInvalidCredentials
 	}
 
 	if !user.Enabled {
@@ -170,10 +179,6 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (str
 	}
 
 	if user.ExpiresAt != nil && time.Now().UTC().After(*user.ExpiresAt) {
-		return "", ErrInvalidCredentials
-	}
-
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return "", ErrInvalidCredentials
 	}
 

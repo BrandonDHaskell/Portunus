@@ -204,3 +204,76 @@ func TestAuthService_NullRole_SessionNotResolved(t *testing.T) {
 		t.Fatalf("got %v, want store.ErrNotFound", err)
 	}
 }
+
+// ── Login: every path pays the bcrypt cost (F-2) ──────────────────────────────
+
+// Each rejection path must run a bcrypt comparison so response time does not
+// reveal whether a username exists, is disabled, is expired, or has no role.
+func TestAuthService_Login_AllRejectionPathsRunBcrypt(t *testing.T) {
+	conn, writer := openSvcTestDB(t)
+	us := sqlitestore.NewAdminUserStore(conn, writer)
+	svc := service.NewAuthService(us, sqlitestore.NewSessionStore(conn, writer), sqlitestore.NewRoleStore(conn, writer), log.Default())
+	ctx := context.Background()
+	const pass = "correct-horse-battery"
+
+	mk := func(uuid, name string) {
+		if err := us.CreateAdminUser(ctx, uuid, name, hashPW(t, pass), "admin"); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+	}
+	mk("uuid-dis", "disabled")
+	if err := us.SetAdminUserEnabled(ctx, "uuid-dis", false); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	mk("uuid-exp", "expired")
+	past := time.Now().Add(-time.Hour)
+	if err := us.SetAdminUserExpiry(ctx, "uuid-exp", &past); err != nil {
+		t.Fatalf("expire: %v", err)
+	}
+	mk("uuid-ok", "valid")
+	nullRoleUser(t, conn, us, "uuid-nr", "norole", pass)
+
+	cases := []struct{ name, user, pw string }{
+		{"unknown user", "nobody", pass},
+		{"wrong password", "valid", "wrong-password-xx"},
+		{"disabled", "disabled", pass},
+		{"disabled wrong password", "disabled", "wrong-password-xx"},
+		{"expired", "expired", pass},
+		{"no role", "norole", pass},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			restore := service.SwapCompareHash(func(h, p []byte) error {
+				calls++
+				return bcrypt.CompareHashAndPassword(h, p)
+			})
+			defer restore()
+
+			if _, err := svc.Login(ctx, tc.user, tc.pw); err == nil {
+				t.Fatal("Login succeeded, want rejection")
+			}
+			if calls != 1 {
+				t.Errorf("bcrypt comparisons = %d, want 1", calls)
+			}
+		})
+	}
+}
+
+// A correct password on a disabled account must not reveal more than a wrong
+// one: both are rejected, and the HTTP layer maps both to the same message.
+func TestAuthService_Login_DisabledAccountRejected(t *testing.T) {
+	svc, us, _ := newAuthSvcWithStores(t)
+	ctx := context.Background()
+	const pass = "correct-horse-battery"
+	if err := us.CreateAdminUser(ctx, "uuid-dis-2", "disabled2", hashPW(t, pass), "admin"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := us.SetAdminUserEnabled(ctx, "uuid-dis-2", false); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	_, err := svc.Login(ctx, "disabled2", pass)
+	if !errors.Is(err, service.ErrAccountDisabled) && !errors.Is(err, service.ErrInvalidCredentials) {
+		t.Fatalf("got %v, want ErrAccountDisabled or ErrInvalidCredentials", err)
+	}
+}
