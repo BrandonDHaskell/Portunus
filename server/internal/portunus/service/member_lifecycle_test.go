@@ -30,16 +30,16 @@ type doorDecision struct {
 
 func TestMemberLifecycle_DisableEnable(t *testing.T) {
 	f := newBranchFixture(t)
-	ms := service.NewMemberAccessService(f.ma)
+	ms := service.NewMemberAccessService(f.ma, nil)
 	ctx := context.Background()
 
-	if err := ms.Disable(ctx, f.member); err != nil {
+	if err := ms.Disable(ctx, f.member, "test-admin"); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
 	if d := f.door(t); d.granted || d.reason != "member_disabled" {
 		t.Fatalf("disabled member at door: %+v", d)
 	}
-	if err := ms.Enable(ctx, f.member); err != nil {
+	if err := ms.Enable(ctx, f.member, "test-admin"); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	if d := f.door(t); !d.granted {
@@ -49,7 +49,7 @@ func TestMemberLifecycle_DisableEnable(t *testing.T) {
 
 func TestMemberLifecycle_ArchiveIsPermanentAtTheDoor(t *testing.T) {
 	f := newBranchFixture(t)
-	ms := service.NewMemberAccessService(f.ma)
+	ms := service.NewMemberAccessService(f.ma, nil)
 	ctx := context.Background()
 
 	if err := ms.Archive(ctx, f.member, "admin-1"); err != nil {
@@ -67,10 +67,10 @@ func TestMemberLifecycle_ArchiveIsPermanentAtTheDoor(t *testing.T) {
 	}
 
 	// Neither enabling nor a policy edit brings an archived member back.
-	if err := ms.Enable(ctx, f.member); err != nil {
+	if err := ms.Enable(ctx, f.member, "test-admin"); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
-	if err := ms.UpdateMemberPolicy(ctx, f.member, nil, intPtr(365)); err != nil {
+	if err := ms.UpdateMemberPolicy(ctx, f.member, nil, intPtr(365), "test-admin"); err != nil {
 		t.Fatalf("UpdateMemberPolicy: %v", err)
 	}
 	if d := f.door(t); d.granted {
@@ -80,11 +80,11 @@ func TestMemberLifecycle_ArchiveIsPermanentAtTheDoor(t *testing.T) {
 
 func TestMemberLifecycle_UpdateMemberPolicy(t *testing.T) {
 	f := newBranchFixture(t)
-	ms := service.NewMemberAccessService(f.ma)
+	ms := service.NewMemberAccessService(f.ma, nil)
 	ctx := context.Background()
 
 	exp := time.Now().Add(48 * time.Hour).UTC().Truncate(time.Millisecond)
-	if err := ms.UpdateMemberPolicy(ctx, f.member, &exp, intPtr(14)); err != nil {
+	if err := ms.UpdateMemberPolicy(ctx, f.member, &exp, intPtr(14), "test-admin"); err != nil {
 		t.Fatalf("UpdateMemberPolicy: %v", err)
 	}
 	rec, _ := ms.GetMember(ctx, f.member)
@@ -92,7 +92,7 @@ func TestMemberLifecycle_UpdateMemberPolicy(t *testing.T) {
 		t.Fatalf("policy not stored: expires=%v inactivity=%v", rec.ExpiresAt, rec.InactivityLimitDays)
 	}
 
-	if err := ms.UpdateMemberPolicy(ctx, f.member, nil, nil); err != nil {
+	if err := ms.UpdateMemberPolicy(ctx, f.member, nil, nil, "test-admin"); err != nil {
 		t.Fatalf("clear policy: %v", err)
 	}
 	rec, _ = ms.GetMember(ctx, f.member)
@@ -103,18 +103,18 @@ func TestMemberLifecycle_UpdateMemberPolicy(t *testing.T) {
 
 func TestMemberLifecycle_ErrorMapping(t *testing.T) {
 	f := newBranchFixture(t)
-	ms := service.NewMemberAccessService(f.ma)
+	ms := service.NewMemberAccessService(f.ma, nil)
 	ctx := context.Background()
 
 	calls := map[string]func(uuid string) error{
-		"Disable": func(u string) error { return ms.Disable(ctx, u) },
-		"Enable":  func(u string) error { return ms.Enable(ctx, u) },
+		"Disable": func(u string) error { return ms.Disable(ctx, u, "test-admin") },
+		"Enable":  func(u string) error { return ms.Enable(ctx, u, "test-admin") },
 		"Archive": func(u string) error { return ms.Archive(ctx, u, "") },
 		"UpdateMemberPolicy": func(u string) error {
-			return ms.UpdateMemberPolicy(ctx, u, nil, nil)
+			return ms.UpdateMemberPolicy(ctx, u, nil, nil, "test-admin")
 		},
 		"AttachCredential": func(u string) error {
-			return ms.AttachCredential(ctx, u, service.HashCredentialID([]byte{0x09, 0x09}, branchSecret))
+			return ms.AttachCredential(ctx, u, service.HashCredentialID([]byte{0x09, 0x09}, branchSecret), "test-admin")
 		},
 	}
 	for name, call := range calls {
@@ -129,14 +129,14 @@ func TestMemberLifecycle_ErrorMapping(t *testing.T) {
 	if _, err := ms.GetMember(ctx, "no-such-member"); !errors.Is(err, service.ErrMemberNotFound) {
 		t.Errorf("GetMember(unknown): got %v", err)
 	}
-	if err := ms.AttachCredential(ctx, f.member, nil); !errors.Is(err, service.ErrCredentialHashRequired) {
+	if err := ms.AttachCredential(ctx, f.member, nil, "test-admin"); !errors.Is(err, service.ErrCredentialHashRequired) {
 		t.Errorf("AttachCredential(nil hash): got %v", err)
 	}
 }
 
 func TestMemberLifecycle_ProvisionAndLists(t *testing.T) {
 	f := newBranchFixture(t)
-	ms := service.NewMemberAccessService(f.ma)
+	ms := service.NewMemberAccessService(f.ma, nil)
 	ctx := context.Background()
 
 	rec, err := ms.ProvisionMember(ctx, "admin-1", nil, intPtr(30))
@@ -161,7 +161,7 @@ func TestMemberLifecycle_ProvisionAndLists(t *testing.T) {
 // still pending (a stale capture, or one an admin rejected).
 func TestMemberLifecycle_ApproveRefusesArchived(t *testing.T) {
 	f := newBranchFixture(t)
-	ms := service.NewMemberAccessService(f.ma)
+	ms := service.NewMemberAccessService(f.ma, nil)
 	ctx := context.Background()
 
 	const pend = "abababab-0000-4000-8000-0000000000a2"

@@ -84,7 +84,7 @@ func newHarness(t *testing.T, opts harnessOptions) *harness {
 		t.Fatalf("access Validate: %v", err)
 	}
 
-	authSvc := service.NewAuthService(adminUserStore, sessionStore, roleStore, logger)
+	authSvc := service.NewAuthService(adminUserStore, sessionStore, roleStore, logger, auditStore)
 	if err := authSvc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
@@ -103,13 +103,12 @@ func newHarness(t *testing.T, opts harnessOptions) *harness {
 		HeartbeatService:     heartbeatSvc,
 		AccessService:        accessSvc,
 		ProvisionService:     provisionSvc,
-		AdminService:         service.NewAdminService(moduleAdminStore, testCredentialHashSecret),
+		AdminService:         service.NewAdminService(moduleAdminStore, testCredentialHashSecret, auditStore),
 		AuthService:          authSvc,
 		AdminUserService:     service.NewAdminUserService(adminUserStore, roleStore, auditStore),
 		RoleService:          service.NewRoleService(roleStore),
-		MemberAccessService:  service.NewMemberAccessService(memberStore),
+		MemberAccessService:  service.NewMemberAccessService(memberStore, auditStore),
 		ModuleAuthService:    service.NewModuleAuthorizationService(moduleAuthStore, memberStore, auditStore),
-		AuditStore:           auditStore,
 		HMACSecret:           opts.HMACSecret,
 		ReplayStore:          replayStore,
 		CredentialHashSecret: testCredentialHashSecret,

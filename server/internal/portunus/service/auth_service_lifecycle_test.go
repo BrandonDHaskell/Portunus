@@ -39,7 +39,7 @@ func newAuthFixture(t *testing.T) authFixture {
 		members: sqlitestore.NewMemberAccessStore(conn, w),
 		log:     &bytes.Buffer{},
 	}
-	f.svc = service.NewAuthService(f.users, f.sess, f.roles, log.New(f.log, "", 0))
+	f.svc = service.NewAuthService(f.users, f.sess, f.roles, log.New(f.log, "", 0), nil)
 	return f
 }
 

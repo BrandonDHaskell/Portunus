@@ -319,24 +319,14 @@ func (s *AdminUserService) loadTargetWithinCaller(ctx context.Context, uuid stri
 }
 
 func (s *AdminUserService) recordAudit(ctx context.Context, actorUUID, action, resourceID, result, details string) {
-	if s.auditStore == nil {
-		return
-	}
-	e := store.AuditEntry{
+	writeAudit(ctx, s.auditStore, store.AuditEntry{
 		ActorUUID:    actorUUID,
-		ActorType:    store.ActorTypeAdmin,
 		Action:       action,
 		ResourceType: "admin_user",
 		ResourceID:   resourceID,
 		Result:       result,
 		Details:      details,
-	}
-	if actorUUID == "" {
-		e.ActorType = store.ActorTypeSystem
-	}
-	if err := s.auditStore.RecordAuditEntry(ctx, e); err != nil {
-		_ = err
-	}
+	})
 }
 
 func adminUserRecordToInfo(r *store.AdminUserRecord) AdminUserInfo {

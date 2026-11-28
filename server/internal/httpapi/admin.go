@@ -56,7 +56,7 @@ func (s *Server) handleAdminRegisterModule(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	info, err := s.adminService.RegisterModule(r.Context(), req)
+	info, err := s.adminService.RegisterModule(r.Context(), req, actorOf(r))
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrModuleIDRequired):
@@ -83,7 +83,7 @@ func (s *Server) handleAdminRevokeModule(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := s.adminService.RevokeModule(r.Context(), moduleID); err != nil {
+	if err := s.adminService.RevokeModule(r.Context(), moduleID, actorOf(r)); err != nil {
 		if errors.Is(err, service.ErrModuleNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "module not found")
 			return
@@ -104,7 +104,7 @@ func (s *Server) handleAdminDeleteModule(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := s.adminService.DeleteModule(r.Context(), moduleID); err != nil {
+	if err := s.adminService.DeleteModule(r.Context(), moduleID, actorOf(r)); err != nil {
 		if errors.Is(err, service.ErrModuleNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "module not found")
 			return
@@ -141,7 +141,7 @@ func (s *Server) handleAdminRegisterDoor(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	info, err := s.adminService.RegisterDoor(r.Context(), req)
+	info, err := s.adminService.RegisterDoor(r.Context(), req, actorOf(r))
 	if err != nil {
 		if errors.Is(err, service.ErrDoorIDRequired) || errors.Is(err, service.ErrDoorNameRequired) {
 			writeError(w, http.StatusBadRequest, "validation_error", err.Error())
@@ -163,7 +163,7 @@ func (s *Server) handleAdminDeleteDoor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.adminService.DeleteDoor(r.Context(), doorID); err != nil {
+	if err := s.adminService.DeleteDoor(r.Context(), doorID, actorOf(r)); err != nil {
 		if errors.Is(err, service.ErrDoorNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "door not found")
 			return

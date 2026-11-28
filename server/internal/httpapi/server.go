@@ -14,7 +14,6 @@ import (
 	"github.com/BrandonDHaskell/Portunus/server/internal/devicesig"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/permissions"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
-	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/store"
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/types"
 	"github.com/BrandonDHaskell/Portunus/server/internal/replay"
 )
@@ -31,7 +30,6 @@ type Dependencies struct {
 	RoleService         *service.RoleService
 	MemberAccessService *service.MemberAccessService
 	ModuleAuthService   *service.ModuleAuthorizationService
-	AuditStore          store.AuditStore
 	// HMACSecret is the pre-shared key for X-Portunus-Sig verification.
 	// Leave empty to disable HMAC enforcement (not recommended for production).
 	HMACSecret string
@@ -59,7 +57,6 @@ type Server struct {
 	roleService          *service.RoleService
 	memberAccessService  *service.MemberAccessService
 	moduleAuthService    *service.ModuleAuthorizationService
-	auditStore           store.AuditStore
 	credentialHashSecret []byte
 	hmacSecret           string
 	replayStore          *replay.Store
@@ -82,7 +79,6 @@ func NewServer(d Dependencies) *Server {
 		roleService:          d.RoleService,
 		memberAccessService:  d.MemberAccessService,
 		moduleAuthService:    d.ModuleAuthService,
-		auditStore:           d.AuditStore,
 		credentialHashSecret: d.CredentialHashSecret,
 		hmacSecret:           d.HMACSecret,
 		replayStore:          d.ReplayStore,
@@ -208,6 +204,7 @@ func NewServer(d Dependencies) *Server {
 	} else {
 		d.Logger.Printf("HMAC request signing enforcement: DISABLED (set PORTUNUS_HMAC_SECRET to enable)")
 	}
+	handler = requestIPMiddleware(handler)
 	handler = loggingMiddleware(d.Logger, handler)
 
 	s.httpServer = &http.Server{
@@ -221,28 +218,21 @@ func NewServer(d Dependencies) *Server {
 
 func (s *Server) Handler() http.Handler { return s.httpServer.Handler }
 
-// audit records one audit_log entry, sourcing the actor from the request
-// session. Best-effort: errors are logged but do not affect the response.
-func (s *Server) audit(r *http.Request, action, resourceType, resourceID, result, details string) {
-	if s.auditStore == nil {
-		return
-	}
-	e := store.AuditEntry{
-		Action:       action,
-		ResourceType: resourceType,
-		ResourceID:   resourceID,
-		Result:       result,
-		Details:      details,
-		IPAddress:    r.RemoteAddr,
-		ActorType:    store.ActorTypeSystem,
-	}
+// actorOf returns the acting admin's UUID for audit attribution, or "" when
+// the request carries no session.
+func actorOf(r *http.Request) string {
 	if sess := sessionFromContext(r.Context()); sess != nil {
-		e.ActorUUID = sess.AdminUUID
-		e.ActorType = store.ActorTypeAdmin
+		return sess.AdminUUID
 	}
-	if err := s.auditStore.RecordAuditEntry(r.Context(), e); err != nil {
-		s.logger.Printf("WARN audit write failed (action=%s): %v", action, err)
-	}
+	return ""
+}
+
+// requestIPMiddleware records the client address in the request context so
+// audit entries written in the service layer say where an action came from.
+func requestIPMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(service.WithRequestIP(r.Context(), r.RemoteAddr)))
+	})
 }
 
 // Start starts the server in plain HTTP mode.

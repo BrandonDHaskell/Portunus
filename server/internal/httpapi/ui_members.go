@@ -172,7 +172,7 @@ func (s *Server) handleUIMembersAttachCredential(w http.ResponseWriter, r *http.
 		return
 	}
 
-	if err := s.memberAccessService.AttachCredential(r.Context(), memberUUID, credHash); err != nil {
+	if err := s.memberAccessService.AttachCredential(r.Context(), memberUUID, credHash, actorOf(r)); err != nil {
 		msg := "Failed to attach credential."
 		switch {
 		case errors.Is(err, service.ErrMemberNotFound):
@@ -308,7 +308,7 @@ func (s *Server) handleUIMembersUpdate(w http.ResponseWriter, r *http.Request) {
 		inactivityDays = &n
 	}
 
-	if err := s.memberAccessService.UpdateMemberPolicy(r.Context(), memberUUID, expiresAt, inactivityDays); err != nil {
+	if err := s.memberAccessService.UpdateMemberPolicy(r.Context(), memberUUID, expiresAt, inactivityDays, actorOf(r)); err != nil {
 		if errors.Is(err, service.ErrMemberNotFound) {
 			http.NotFound(w, r)
 			return
@@ -325,7 +325,7 @@ func (s *Server) handleUIMembersUpdate(w http.ResponseWriter, r *http.Request) {
 // handleUIMembersDisable handles POST /admin/ui/members/{member_uuid}/disable.
 func (s *Server) handleUIMembersDisable(w http.ResponseWriter, r *http.Request) {
 	memberUUID := r.PathValue("member_uuid")
-	if err := s.memberAccessService.Disable(r.Context(), memberUUID); err != nil {
+	if err := s.memberAccessService.Disable(r.Context(), memberUUID, actorOf(r)); err != nil {
 		if errors.Is(err, service.ErrMemberNotFound) {
 			http.NotFound(w, r)
 			return
@@ -341,7 +341,7 @@ func (s *Server) handleUIMembersDisable(w http.ResponseWriter, r *http.Request) 
 // handleUIMembersEnable handles POST /admin/ui/members/{member_uuid}/enable.
 func (s *Server) handleUIMembersEnable(w http.ResponseWriter, r *http.Request) {
 	memberUUID := r.PathValue("member_uuid")
-	if err := s.memberAccessService.Enable(r.Context(), memberUUID); err != nil {
+	if err := s.memberAccessService.Enable(r.Context(), memberUUID, actorOf(r)); err != nil {
 		if errors.Is(err, service.ErrMemberNotFound) {
 			http.NotFound(w, r)
 			return

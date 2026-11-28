@@ -103,7 +103,7 @@ func main() {
 	accessSvc.SetLogger(logger)
 
 	// Member access + module authorization services.
-	memberAccessSvc := service.NewMemberAccessService(memberAccessStore)
+	memberAccessSvc := service.NewMemberAccessService(memberAccessStore, auditStore)
 	moduleAuthSvc := service.NewModuleAuthorizationService(moduleAuthStore, memberAccessStore, auditStore)
 
 	// Enable member_access + module_authorizations path in the access service.
@@ -125,10 +125,10 @@ func main() {
 	provisionSvc := service.NewProvisionService(registry, memberAccessStore, accessEventStore, credentialHashSecret, auditStore)
 
 	// Admin service for module and door management via REST API.
-	adminSvc := service.NewAdminService(moduleAdminStore, credentialHashSecret)
+	adminSvc := service.NewAdminService(moduleAdminStore, credentialHashSecret, auditStore)
 
 	// Auth service: session-based admin authentication.
-	authSvc := service.NewAuthService(adminUserStore, sessionStore, roleStore, logger)
+	authSvc := service.NewAuthService(adminUserStore, sessionStore, roleStore, logger, auditStore)
 	// Write the first-run admin password to a private file instead of the log
 	// stream (F-9).  Skip for in-memory DBs used in dev/test.
 	if cfg.DBPath != ":memory:" && !strings.Contains(cfg.DBPath, "mode=memory") {
@@ -188,7 +188,6 @@ func main() {
 		RoleService:          roleSvc,
 		MemberAccessService:  memberAccessSvc,
 		ModuleAuthService:    moduleAuthSvc,
-		AuditStore:           auditStore,
 		HMACSecret:           cfg.HMACSecret,
 		ReplayStore:          sharedReplayStore,
 		CredentialHashSecret: credentialHashSecret,

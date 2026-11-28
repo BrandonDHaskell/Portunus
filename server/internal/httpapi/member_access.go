@@ -94,7 +94,6 @@ func (s *Server) handleAdminProvisionMember(w http.ResponseWriter, r *http.Reque
 	}
 
 	s.logger.Printf("admin: provisioned member uuid=%s", rec.UUID)
-	s.audit(r, "member.create", "member", rec.UUID, "success", "")
 	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "member": memberRecordToInfo(rec)})
 }
 
@@ -145,7 +144,6 @@ func (s *Server) handleAdminApprovePending(w http.ResponseWriter, r *http.Reques
 	}
 
 	s.logger.Printf("admin: approved pending member %s by %s", memberUUID, approvedByUUID)
-	s.audit(r, "member.approve", "member", memberUUID, "success", "")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "member_uuid": memberUUID})
 }
 
@@ -169,7 +167,7 @@ func (s *Server) handleAdminAttachCredential(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if err := s.memberAccessService.AttachCredential(r.Context(), memberUUID, credHash); err != nil {
+	if err := s.memberAccessService.AttachCredential(r.Context(), memberUUID, credHash, actorOf(r)); err != nil {
 		switch {
 		case errors.Is(err, service.ErrMemberNotFound):
 			writeError(w, http.StatusNotFound, "not_found", "member not found")
@@ -196,7 +194,7 @@ func (s *Server) handleAdminDisableMember(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "missing_member_uuid", "member_uuid path parameter is required")
 		return
 	}
-	if err := s.memberAccessService.Disable(r.Context(), memberUUID); err != nil {
+	if err := s.memberAccessService.Disable(r.Context(), memberUUID, actorOf(r)); err != nil {
 		if errors.Is(err, service.ErrMemberNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "member not found")
 			return

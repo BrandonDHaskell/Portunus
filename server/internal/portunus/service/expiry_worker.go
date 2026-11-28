@@ -94,6 +94,7 @@ func (w *ExpiryWorker) sweep(ctx context.Context) {
 		w.logger.Printf("expiry worker: hard-deadline sweep error: %v", err)
 	} else if n > 0 {
 		w.logger.Printf("expiry worker: expired %d member(s) by hard deadline", n)
+		w.auditExpiry(ctx, n, "hard_deadline")
 	}
 
 	n, err = w.store.ExpireByInactivity(ctx, now)
@@ -101,6 +102,7 @@ func (w *ExpiryWorker) sweep(ctx context.Context) {
 		w.logger.Printf("expiry worker: inactivity sweep error: %v", err)
 	} else if n > 0 {
 		w.logger.Printf("expiry worker: expired %d member(s) by inactivity", n)
+		w.auditExpiry(ctx, n, "inactivity")
 	}
 
 	if w.pendingTTLDays == 0 {
@@ -128,4 +130,14 @@ func (w *ExpiryWorker) sweep(ctx context.Context) {
 			w.logger.Printf("expiry worker: audit write error: %v", err)
 		}
 	}
+}
+
+// auditExpiry records members deactivated automatically, so every loss of
+// access shows up in the audit log, not only admin actions.
+func (w *ExpiryWorker) auditExpiry(ctx context.Context, count int, reason string) {
+	writeAudit(ctx, w.auditStore, store.AuditEntry{
+		Action:       "member.expire",
+		ResourceType: "member_access",
+		Details:      auditDetails(map[string]any{"count": count, "reason": reason}),
+	})
 }

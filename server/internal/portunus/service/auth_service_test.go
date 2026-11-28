@@ -23,7 +23,7 @@ func newAuthSvcWithStores(t *testing.T) (*service.AuthService, *sqlitestore.Admi
 	us := sqlitestore.NewAdminUserStore(dbConn, writer)
 	ss := sqlitestore.NewSessionStore(dbConn, writer)
 	rs := sqlitestore.NewRoleStore(dbConn, writer)
-	svc := service.NewAuthService(us, ss, rs, log.Default())
+	svc := service.NewAuthService(us, ss, rs, log.Default(), nil)
 	return svc, us, ss
 }
 
@@ -174,7 +174,7 @@ func nullRoleUser(t *testing.T, conn *sql.DB, us *sqlitestore.AdminUserStore, uu
 func TestAuthService_NullRole_LoginRejected(t *testing.T) {
 	conn, writer := openSvcTestDB(t)
 	us := sqlitestore.NewAdminUserStore(conn, writer)
-	svc := service.NewAuthService(us, sqlitestore.NewSessionStore(conn, writer), sqlitestore.NewRoleStore(conn, writer), log.Default())
+	svc := service.NewAuthService(us, sqlitestore.NewSessionStore(conn, writer), sqlitestore.NewRoleStore(conn, writer), log.Default(), nil)
 
 	const pass = "correct-horse-battery"
 	nullRoleUser(t, conn, us, "uuid-norole-1", "norole1", pass)
@@ -188,7 +188,7 @@ func TestAuthService_NullRole_SessionNotResolved(t *testing.T) {
 	conn, writer := openSvcTestDB(t)
 	us := sqlitestore.NewAdminUserStore(conn, writer)
 	ss := sqlitestore.NewSessionStore(conn, writer)
-	svc := service.NewAuthService(us, ss, sqlitestore.NewRoleStore(conn, writer), log.Default())
+	svc := service.NewAuthService(us, ss, sqlitestore.NewRoleStore(conn, writer), log.Default(), nil)
 	ctx := context.Background()
 
 	nullRoleUser(t, conn, us, "uuid-norole-2", "norole2", "correct-horse-battery")
@@ -212,7 +212,7 @@ func TestAuthService_NullRole_SessionNotResolved(t *testing.T) {
 func TestAuthService_Login_AllRejectionPathsRunBcrypt(t *testing.T) {
 	conn, writer := openSvcTestDB(t)
 	us := sqlitestore.NewAdminUserStore(conn, writer)
-	svc := service.NewAuthService(us, sqlitestore.NewSessionStore(conn, writer), sqlitestore.NewRoleStore(conn, writer), log.Default())
+	svc := service.NewAuthService(us, sqlitestore.NewSessionStore(conn, writer), sqlitestore.NewRoleStore(conn, writer), log.Default(), nil)
 	ctx := context.Background()
 	const pass = "correct-horse-battery"
 

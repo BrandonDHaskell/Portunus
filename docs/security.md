@@ -322,6 +322,17 @@ Access is default-deny at every step: a missing credential, inactive member, or 
 
 The access-event write path stores the HMAC-SHA256 hash in `access_events.credential_hash` when a credential ID is present. Raw IDs are never written to audit records.
 
+Administrative changes are recorded in `audit_log` by the service layer, so the admin UI and the REST API produce identical entries. Each entry carries the acting admin (or `system`), the client address, the result (`success` or `failure`) and, for a refused action, a machine-readable reason. Recorded actions:
+
+| Area | Actions |
+|------|---------|
+| Members | `member.create`, `member.credential_attach`, `member.approve`, `member.policy_update`, `member.disable`, `member.enable`, `member.archive`, `member.expire` (system: hard deadline or inactivity), `member.capture` (PEU), `archive_stale_pending` (system) |
+| Modules and doors | `module.register`, `module.revoke`, `module.delete`, `door.register`, `door.delete` |
+| Door access | `module_auth.granted`, `module_auth.revoked` |
+| Console accounts | `admin_user.created`, `admin_user.role_assigned`, `admin_user.enabled`, `admin_user.disabled`, `admin_user.expiry_set`, `admin_user.member_linked`, `admin_user.password_change` (revokes all sessions), `admin_user.logout` |
+
+Audit writes are best-effort: a failed write never blocks the action, matching the availability-first policy for access events. Credential hashes are never written to `audit_log`.
+
 ### Remaining limitation
 
 Keyed HMAC prevents offline dictionary attacks against a stolen database, but RFID UID cloning at the physical layer is still a risk. The server cannot distinguish a cloned credential from the original. For the current Portunus threat model, physical card cloning remains the more practical attack surface.

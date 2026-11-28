@@ -559,7 +559,7 @@ func TestMemberAccessService_AttachCredential_DuplicateActive(t *testing.T) {
 	dbConn, writer := openSvcTestDB(t)
 	maStore := sqlitestore.NewMemberAccessStore(dbConn, writer)
 
-	svc := service.NewMemberAccessService(maStore)
+	svc := service.NewMemberAccessService(maStore, nil)
 
 	// Provision first member and attach a credential.
 	m1, err := svc.ProvisionMember(ctx, "", nil, nil)
@@ -567,7 +567,7 @@ func TestMemberAccessService_AttachCredential_DuplicateActive(t *testing.T) {
 		t.Fatalf("ProvisionMember m1: %v", err)
 	}
 	credHash := service.HashCredentialID([]byte{0x04, 0x01, 0x00, 0x08}, nil)
-	if err := svc.AttachCredential(ctx, m1.UUID, credHash); err != nil {
+	if err := svc.AttachCredential(ctx, m1.UUID, credHash, "test-admin"); err != nil {
 		t.Fatalf("AttachCredential m1: %v", err)
 	}
 	// Approve so the member is fully active (approval is the only activation path).
@@ -580,7 +580,7 @@ func TestMemberAccessService_AttachCredential_DuplicateActive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProvisionMember m2: %v", err)
 	}
-	err = svc.AttachCredential(ctx, m2.UUID, credHash)
+	err = svc.AttachCredential(ctx, m2.UUID, credHash, "test-admin")
 	if err == nil {
 		t.Fatal("expected duplicate credential error, got nil")
 	}
@@ -594,14 +594,14 @@ func TestMemberAccessService_AttachCredential_DuplicateInactive(t *testing.T) {
 	dbConn, writer := openSvcTestDB(t)
 	maStore := sqlitestore.NewMemberAccessStore(dbConn, writer)
 
-	svc := service.NewMemberAccessService(maStore)
+	svc := service.NewMemberAccessService(maStore, nil)
 
 	m1, err := svc.ProvisionMember(ctx, "", nil, nil)
 	if err != nil {
 		t.Fatalf("ProvisionMember: %v", err)
 	}
 	credHash := service.HashCredentialID([]byte{0x04, 0x01, 0x00, 0x09}, nil)
-	if err := svc.AttachCredential(ctx, m1.UUID, credHash); err != nil {
+	if err := svc.AttachCredential(ctx, m1.UUID, credHash, "test-admin"); err != nil {
 		t.Fatalf("AttachCredential: %v", err)
 	}
 	// Expire the first member.
@@ -613,7 +613,7 @@ func TestMemberAccessService_AttachCredential_DuplicateInactive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProvisionMember m2: %v", err)
 	}
-	err = svc.AttachCredential(ctx, m2.UUID, credHash)
+	err = svc.AttachCredential(ctx, m2.UUID, credHash, "test-admin")
 	if err != service.ErrDuplicateCredentialInactive {
 		t.Errorf("expected ErrDuplicateCredentialInactive, got %v", err)
 	}

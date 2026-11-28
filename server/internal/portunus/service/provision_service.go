@@ -157,12 +157,7 @@ func (s *ProvisionService) recordProvisionAttempt(ctx context.Context, moduleID 
 // recordAudit writes an audit entry. Errors are swallowed — the primary
 // operation must not fail because of audit logging.
 func (s *ProvisionService) recordAudit(ctx context.Context, e store.AuditEntry) {
-	if s.auditStore == nil {
-		return
-	}
-	if err := s.auditStore.RecordAuditEntry(ctx, e); err != nil {
-		_ = err
-	}
+	writeAudit(ctx, s.auditStore, e)
 }
 
 // provisionDuplicateStatus maps an existing member record to the appropriate

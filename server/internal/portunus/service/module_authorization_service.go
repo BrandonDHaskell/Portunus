@@ -236,23 +236,12 @@ func (s *ModuleAuthorizationService) recordAudit(
 	ctx context.Context,
 	actorUUID, action, resourceType, resourceID, result, details string,
 ) {
-	if s.auditStore == nil {
-		return
-	}
-	e := store.AuditEntry{
+	writeAudit(ctx, s.auditStore, store.AuditEntry{
 		ActorUUID:    actorUUID,
-		ActorType:    store.ActorTypeAdmin,
 		Action:       action,
 		ResourceType: resourceType,
 		ResourceID:   resourceID,
 		Result:       result,
 		Details:      details,
-	}
-	if actorUUID == "" {
-		e.ActorType = store.ActorTypeSystem
-	}
-	if err := s.auditStore.RecordAuditEntry(ctx, e); err != nil {
-		// Best-effort; primary operation must not fail due to audit failures.
-		_ = err
-	}
+	})
 }
