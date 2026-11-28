@@ -570,9 +570,9 @@ func TestMemberAccessService_AttachCredential_DuplicateActive(t *testing.T) {
 	if err := svc.AttachCredential(ctx, m1.UUID, credHash); err != nil {
 		t.Fatalf("AttachCredential m1: %v", err)
 	}
-	// Mark as active provisioning status to pass the active check.
-	if err := maStore.SetProvisioningStatus(ctx, m1.UUID, store.ProvisioningStatusActive); err != nil {
-		t.Fatalf("SetProvisioningStatus: %v", err)
+	// Approve so the member is fully active (approval is the only activation path).
+	if err := maStore.ApprovePending(ctx, m1.UUID, "", nil, intPtr(30)); err != nil {
+		t.Fatalf("ApprovePending: %v", err)
 	}
 
 	// Provision second member and try to attach the same credential.

@@ -151,20 +151,6 @@ func (s *MemberAccessService) Archive(ctx context.Context, memberUUID, archivedB
 	return nil
 }
 
-// SetProvisioningStatus updates the provisioning workflow state.
-func (s *MemberAccessService) SetProvisioningStatus(ctx context.Context, memberUUID string, status store.ProvisioningStatus) error {
-	if strings.TrimSpace(memberUUID) == "" {
-		return ErrMemberUUIDRequired
-	}
-	if err := s.memberStore.SetProvisioningStatus(ctx, memberUUID, status); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return ErrMemberNotFound
-		}
-		return fmt.Errorf("set provisioning status: %w", err)
-	}
-	return nil
-}
-
 // GetMember returns a member by UUID.
 func (s *MemberAccessService) GetMember(ctx context.Context, memberUUID string) (*store.MemberAccessRecord, error) {
 	rec, err := s.memberStore.GetMember(ctx, strings.TrimSpace(memberUUID))

@@ -131,17 +131,6 @@ func (s *MemberAccessStore) AttachCredential(ctx context.Context, uuid string, c
 	})
 }
 
-func (s *MemberAccessStore) SetProvisioningStatus(ctx context.Context, uuid string, status store.ProvisioningStatus) error {
-	return s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx,
-			`UPDATE member_access SET provisioning_status = ? WHERE uuid = ?;`, string(status), uuid)
-		if err != nil {
-			return fmt.Errorf("SetProvisioningStatus: %w", err)
-		}
-		return requireOneRow(res, "SetProvisioningStatus")
-	})
-}
-
 func (s *MemberAccessStore) UpdateLastAccess(ctx context.Context, uuid string, t time.Time) error {
 	ms := t.UTC().UnixMilli()
 	return s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
