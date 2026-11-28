@@ -15,7 +15,7 @@ Before starting, confirm the following are installed or available. Each is cover
 | Go | 1.24+ | Build and run the server | [Install Go](#install-go) |
 | Task | 3.x | Task runner (build, test, lint commands) | [Install Task](#install-task) |
 | protoc | 3.21+ | Regenerate protobuf code (only if `.proto` files change) | [Protobuf tooling](#protobuf-tooling-optional) |
-| protoc-gen-go / protoc-gen-go-grpc | latest | Go code generation from `.proto` | [Protobuf tooling](#protobuf-tooling-optional) |
+| protoc-gen-go / protoc-gen-go-grpc | pinned in `server/go.mod` | Go code generation from `.proto` | [Protobuf tooling](#protobuf-tooling-optional) |
 | openssl | 1.1.1+ | Generate TLS certificates | [TLS certificate setup](#tls-certificate-setup) |
 | Git | any | Clone the repository | Usually pre-installed on Debian |
 
@@ -243,12 +243,10 @@ Protobuf code generation is only needed if you modify `proto/portunus/v1/portunu
 If you do need to regenerate:
 
 ```bash
-# Install protoc (the protobuf compiler)
+# Install protoc (the protobuf compiler). It must match the version recorded
+# in the committed stubs (Debian trixie and Ubuntu 24.04 both ship 3.21.12);
+# proto_gen.py refuses a mismatch.
 sudo apt install -y protobuf-compiler
-
-# Install Go protobuf plugins
-go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
 
 # Regenerate both Go and Nanopb stubs
 task proto:gen
@@ -261,7 +259,9 @@ task proto:gen:nanopb
 task proto:check
 ```
 
-The Nanopb generator (`nanopb_generator` or `protoc-gen-nanopb`) must also be installed for ESP32 stub generation. See the firmware setup guide for Nanopb installation.
+Nothing else needs installing for Go: `protoc-gen-go` and `protoc-gen-go-grpc` are `tool` directives in `server/go.mod`, and `proto_gen.py` builds them from there with the Go toolchain `go.mod` names (Go downloads it if needed). The toolchain is pinned because the plugins format their output with the Go that built them, and that layout changes between Go releases.
+
+The Nanopb generator (`nanopb_generator`, from `pip install nanopb` at the version pinned in `.github/workflows/ci.yml`) must also be installed for ESP32 stub generation. The ESP-IDF venv is the usual place for it.
 
 ---
 
