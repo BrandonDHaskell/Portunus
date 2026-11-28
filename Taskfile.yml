@@ -397,7 +397,11 @@ tasks:
     dir: "{{.FIRMWARE_DIR}}"
     deps: [sbom:firmware]
     cmds:
-      - PYTHONPATH="$PWD/build/sbom-tool-{{.ESP_IDF_SBOM_VERSION}}" {{.IDF_PYTHON}} -m esp_idf_sbom check build/sbom/portunus_access_module.cdx.json
+      # sbom/portunus.openvex.json records CVEs assessed as not affecting this
+      # image, each with its justification; review it on every component bump.
+      - >-
+        PYTHONPATH="$PWD/build/sbom-tool-{{.ESP_IDF_SBOM_VERSION}}" {{.IDF_PYTHON}} -m esp_idf_sbom check
+        --vex sbom/portunus.openvex.json build/sbom/portunus_access_module.cdx.json
 
   firmware:nvs:gen:
     desc: Generate NVS binary from nvs_config.csv (copy nvs_config.example.csv first)

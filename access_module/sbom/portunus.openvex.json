@@ -1,0 +1,24 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/BrandonDHaskell/Portunus/blob/main/access_module/sbom/portunus.openvex.json",
+  "author": "Portunus maintainers",
+  "timestamp": "2026-11-28T00:00:00Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": { "name": "CVE-2026-58055" },
+      "products": [
+        {
+          "@id": "pkg:github/nghttp2/nghttp2@1.68.1",
+          "identifiers": {
+            "purl": "pkg:github/nghttp2/nghttp2@1.68.1",
+            "cpe23": "cpe:2.3:a:nghttp2:nghttp2:1.68.1:*:*:*:*:*:*:*"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "The flaw is in nghttpx, nghttp2's reverse proxy program (src/shrpx_*). The espressif/nghttp component compiles only the library (nghttp2/lib/*.c), and the firmware link map contains no shrpx symbols. The statement names version 1.68.1 so a component bump forces a fresh assessment."
+    }
+  ]
+}
