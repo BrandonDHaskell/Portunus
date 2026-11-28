@@ -18,8 +18,7 @@ type HeartbeatPruner struct {
 	retention time.Duration
 	interval  time.Duration
 	logger    *log.Logger
-	cancel    context.CancelFunc
-	done      chan struct{}
+	bg        bgLoop
 }
 
 // PrunerConfig holds the parameters for NewHeartbeatPruner.
@@ -45,7 +44,6 @@ func NewHeartbeatPruner(s store.HeartbeatStore, cfg PrunerConfig, logger *log.Lo
 		retention: time.Duration(cfg.RetentionDays) * 24 * time.Hour,
 		interval:  interval,
 		logger:    logger,
-		done:      make(chan struct{}),
 	}
 }
 
@@ -55,13 +53,12 @@ func NewHeartbeatPruner(s store.HeartbeatStore, cfg PrunerConfig, logger *log.Lo
 func (p *HeartbeatPruner) Start(ctx context.Context) {
 	if p.retention <= 0 {
 		p.logger.Printf("heartbeat pruner disabled (retention=0)")
-		close(p.done)
 		return
 	}
 
-	ctx, p.cancel = context.WithCancel(ctx)
-
-	go p.loop(ctx)
+	if !p.bg.start(ctx, p.loop) {
+		return
+	}
 
 	p.logger.Printf("heartbeat pruner started (retention=%dd, interval=%dh)",
 		int(p.retention.Hours()/24), int(p.interval.Hours()))
@@ -69,14 +66,10 @@ func (p *HeartbeatPruner) Start(ctx context.Context) {
 
 // Stop signals the pruner to exit and waits for it to finish.
 func (p *HeartbeatPruner) Stop() {
-	if p.cancel != nil {
-		p.cancel()
-	}
-	<-p.done
+	p.bg.stop()
 }
 
 func (p *HeartbeatPruner) loop(ctx context.Context) {
-	defer close(p.done)
 
 	// Run immediately on startup to clean up any backlog.
 	p.prune(ctx)

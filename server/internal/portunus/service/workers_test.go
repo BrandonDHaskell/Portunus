@@ -153,3 +153,55 @@ func TestExpiryWorker_FailedStepDoesNotSkipTheRest(t *testing.T) {
 		}
 	}
 }
+
+// Each background worker must tolerate Stop without Start, Stop twice, and a
+// second Start, so shutdown code cannot hang or panic on an unexpected order.
+func TestWorkers_StartStopOrderingIsSafe(t *testing.T) {
+	quiet := log.New(&syncBuffer{}, "", 0)
+	type worker interface {
+		Start(context.Context)
+		Stop()
+	}
+	makers := map[string]func() worker{
+		"session sweeper": func() worker { return service.NewSessionSweeper(failingSessionStore{}, time.Hour, quiet) },
+		"heartbeat pruner": func() worker {
+			return service.NewHeartbeatPruner(failingHeartbeatStore{}, service.PrunerConfig{RetentionDays: 7}, quiet)
+		},
+		"heartbeat pruner (disabled)": func() worker {
+			return service.NewHeartbeatPruner(failingHeartbeatStore{}, service.PrunerConfig{RetentionDays: 0}, quiet)
+		},
+		"expiry worker": func() worker {
+			return service.NewExpiryWorker(&expiryStub{}, nil, service.ExpiryWorkerConfig{}, quiet)
+		},
+	}
+	within := func(t *testing.T, what string, f func()) {
+		t.Helper()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("%s panicked: %v", what, r)
+				}
+			}()
+			f()
+		}()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s hung", what)
+		}
+	}
+	for name, mk := range makers {
+		t.Run(name, func(t *testing.T) {
+			within(t, "Stop without Start", func() { mk().Stop() })
+			w := mk()
+			within(t, "Start twice, Stop twice", func() {
+				w.Start(context.Background())
+				w.Start(context.Background())
+				w.Stop()
+				w.Stop()
+			})
+		})
+	}
+}
