@@ -181,8 +181,15 @@ func (s *Server) handleAdminDeleteDoor(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAdminHealth(w http.ResponseWriter, r *http.Request) {
 	audit := s.accessService.AuditHealth()
+	failures := s.deviceAuthMonitor.Snapshot()
+	if failures == nil {
+		failures = []service.DeviceAuthFailure{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":    audit.ConsecutiveFailures == 0,
 		"audit": audit,
+		// Modules whose requests failed HMAC verification, most recent
+		// first. Ids are as claimed by the (unauthenticated) requests.
+		"device_auth_failures": failures,
 	})
 }

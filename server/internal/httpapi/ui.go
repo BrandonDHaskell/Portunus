@@ -49,7 +49,10 @@ type UIPageData struct {
 	// Module and door management pages.
 	Modules []types.ModuleInfo
 	Module  *types.ModuleInfo
-	Doors   []types.DoorInfo
+	// DeviceAuthFailure is set when the module's requests have been failing
+	// HMAC verification (its NVS secret likely differs from the server's).
+	DeviceAuthFailure *service.DeviceAuthFailure
+	Doors             []types.DoorInfo
 }
 
 // UIAccessEventInfo is a display-ready view of a single access event.

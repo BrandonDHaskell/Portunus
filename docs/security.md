@@ -333,6 +333,10 @@ Administrative changes are recorded in `audit_log` by the service layer, so the 
 
 Audit writes are best-effort: a failed write never blocks the action, matching the availability-first policy for access events. Credential hashes are never written to `audit_log`.
 
+### Device signature failures
+
+A device request whose HMAC signature is missing or does not verify (on either transport) is rejected and recorded against the `module_id` the request claims: a `WARN device auth failure module=… peer=… transport=… reason=…` log line, a per-module counter on `GET /admin/v1/health` (`device_auth_failures`), and a warning banner on that module's admin UI page. The usual cause is a module whose NVS `hmac_secret` no longer matches `PORTUNUS_HMAC_SECRET`; compare SHA-256 fingerprints and re-flash NVS. The claimed id is unauthenticated, so at most 256 ids are tracked (least recent evicted) and neither secret nor signature is ever logged.
+
 ### Remaining limitation
 
 Keyed HMAC prevents offline dictionary attacks against a stolen database, but RFID UID cloning at the physical layer is still a risk. The server cannot distinguish a cloned credential from the original. For the current Portunus threat model, physical card cloning remains the more practical attack surface.

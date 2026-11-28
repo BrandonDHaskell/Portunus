@@ -154,6 +154,11 @@ func main() {
 		sharedReplayStore = replay.NewStore(60 * time.Second)
 	}
 
+	// Shared record of device requests whose HMAC signature was missing or
+	// wrong, per claimed module id, from either transport. Surfaces a module
+	// whose NVS hmac_secret no longer matches the server.
+	deviceAuthMonitor := service.NewDeviceAuthMonitor(logger)
+
 	// Acquire the serving certificate once. prod loads it from PEM files; ci
 	// generates an ephemeral self-signed cert in-process. Both the HTTP and the
 	// gRPC listener serve with this same certificate.
@@ -190,6 +195,7 @@ func main() {
 		ModuleAuthService:    moduleAuthSvc,
 		HMACSecret:           cfg.HMACSecret,
 		ReplayStore:          sharedReplayStore,
+		DeviceAuthMonitor:    deviceAuthMonitor,
 		CredentialHashSecret: credentialHashSecret,
 		TLSEnabled:           tlsEnabled,
 	})
@@ -218,7 +224,7 @@ func main() {
 			grpcapi.LoggingInterceptor(logger),
 		}
 		if cfg.HMACSecret != "" {
-			interceptors = append(interceptors, grpcapi.HMACInterceptor(cfg.HMACSecret, sharedReplayStore))
+			interceptors = append(interceptors, grpcapi.HMACInterceptor(cfg.HMACSecret, sharedReplayStore, deviceAuthMonitor))
 			logger.Printf("gRPC HMAC auth: ENABLED (replay window: 60s)")
 		} else {
 			logger.Printf("gRPC HMAC auth: DISABLED (set PORTUNUS_HMAC_SECRET to enable)")

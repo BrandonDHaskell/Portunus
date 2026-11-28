@@ -53,6 +53,7 @@ type harness struct {
 	Auth        *service.AuthService
 	Heartbeat   *service.HeartbeatService
 	Provision   *service.ProvisionService
+	DeviceAuth  *service.DeviceAuthMonitor
 }
 
 func newHarness(t *testing.T, opts harnessOptions) *harness {
@@ -94,6 +95,7 @@ func newHarness(t *testing.T, opts harnessOptions) *harness {
 		replayStore = replay.NewStore(opts.ReplayWindow)
 	}
 
+	deviceAuth := service.NewDeviceAuthMonitor(logger)
 	heartbeatSvc := service.NewHeartbeatService(heartbeatStore, registry)
 	provisionSvc := service.NewProvisionService(registry, memberStore, accessEventStore, testCredentialHashSecret, auditStore)
 
@@ -111,6 +113,7 @@ func newHarness(t *testing.T, opts harnessOptions) *harness {
 		ModuleAuthService:    service.NewModuleAuthorizationService(moduleAuthStore, memberStore, auditStore),
 		HMACSecret:           opts.HMACSecret,
 		ReplayStore:          replayStore,
+		DeviceAuthMonitor:    deviceAuth,
 		CredentialHashSecret: testCredentialHashSecret,
 		TLSEnabled:           opts.TLSEnabled,
 	})
@@ -121,7 +124,7 @@ func newHarness(t *testing.T, opts harnessOptions) *harness {
 		t: t, TS: ts, Conn: conn, Access: accessSvc,
 		AdminUsers: adminUserStore, Roles: roleStore, Members: memberStore,
 		ModuleAuths: moduleAuthStore, Audit: auditStore, Auth: authSvc,
-		Heartbeat: heartbeatSvc, Provision: provisionSvc,
+		Heartbeat: heartbeatSvc, Provision: provisionSvc, DeviceAuth: deviceAuth,
 	}
 	h.Admin = h.loginAs("admin")
 	return h

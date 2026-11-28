@@ -5,11 +5,17 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"log"
 	"net/http"
 	"strings"
 	"time"
+
+	"google.golang.org/protobuf/proto"
+
+	pb "github.com/BrandonDHaskell/Portunus/server/api/portunus/v1"
+	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
 )
 
 func loggingMiddleware(logger *log.Logger, next http.Handler) http.Handler {
@@ -31,7 +37,7 @@ func loggingMiddleware(logger *log.Logger, next http.Handler) http.Handler {
 //
 // Only POST requests to device endpoints are checked; other methods and
 // admin paths pass through unchanged.
-func hmacAuthMiddleware(logger *log.Logger, secret string, next http.Handler) http.Handler {
+func hmacAuthMiddleware(logger *log.Logger, secret string, monitor *service.DeviceAuthMonitor, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Only enforce on POST (the only method ESP32 modules use).
 		if r.Method != http.MethodPost {
@@ -46,22 +52,24 @@ func hmacAuthMiddleware(logger *log.Logger, secret string, next http.Handler) ht
 			return
 		}
 
-		sig := r.Header.Get("X-Portunus-Sig")
-		if sig == "" {
-			logger.Printf("HMAC: missing X-Portunus-Sig from %s %s", r.RemoteAddr, r.URL.Path)
-			writeError(w, http.StatusUnauthorized, "missing_signature",
-				"X-Portunus-Sig header is required")
-			return
-		}
-
-		// Read the body so we can compute the HMAC, then replace it so
-		// downstream handlers can read it normally.
+		// Read the body so we can compute the HMAC (and label a failure with
+		// the module id it claims), then replace it so downstream handlers can
+		// read it normally.
 		body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBody))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "read_error", "could not read request body")
 			return
 		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
+
+		sig := r.Header.Get("X-Portunus-Sig")
+		if sig == "" {
+			logger.Printf("HMAC: missing X-Portunus-Sig from %s %s", r.RemoteAddr, r.URL.Path)
+			monitor.RecordFailure(claimedModuleID(r, body), r.RemoteAddr, "http", service.ReasonMissingSignature)
+			writeError(w, http.StatusUnauthorized, "missing_signature",
+				"X-Portunus-Sig header is required")
+			return
+		}
 
 		// Compute expected HMAC-SHA256.
 		mac := hmac.New(sha256.New, []byte(secret))
@@ -71,6 +79,7 @@ func hmacAuthMiddleware(logger *log.Logger, secret string, next http.Handler) ht
 		// Constant-time compare to prevent timing side-channels.
 		if !hmac.Equal([]byte(sig), []byte(expected)) {
 			logger.Printf("HMAC: invalid signature from %s %s (got %.8s…)", r.RemoteAddr, r.URL.Path, sig)
+			monitor.RecordFailure(claimedModuleID(r, body), r.RemoteAddr, "http", service.ReasonBadSignature)
 			writeError(w, http.StatusUnauthorized, "invalid_signature",
 				"X-Portunus-Sig does not match")
 			return
@@ -78,6 +87,39 @@ func hmacAuthMiddleware(logger *log.Logger, secret string, next http.Handler) ht
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// claimedModuleID extracts the module id a device request names, from either
+// a JSON or a protobuf body. It is unauthenticated and only labels a
+// signature failure; anything unparseable yields "".
+func claimedModuleID(r *http.Request, body []byte) string {
+	if isProtobuf(r) {
+		var m interface {
+			proto.Message
+			GetModuleId() string
+		}
+		switch r.URL.Path {
+		case "/v1/heartbeat":
+			m = &pb.HeartbeatRequest{}
+		case "/v1/access_request":
+			m = &pb.AccessRequest{}
+		case "/v1/provision_credential":
+			m = &pb.ProvisionCredentialRequest{}
+		default:
+			return ""
+		}
+		if proto.Unmarshal(body, m) != nil {
+			return ""
+		}
+		return m.GetModuleId()
+	}
+	var j struct {
+		ModuleID string `json:"module_id"`
+	}
+	if json.Unmarshal(body, &j) != nil {
+		return ""
+	}
+	return j.ModuleID
 }
 
 // requireEitherPermission wraps a handler and enforces that the session holds

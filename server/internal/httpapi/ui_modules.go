@@ -44,6 +44,9 @@ func (s *Server) handleUIModulesDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.Module = mod
+	if f, ok := s.deviceAuthMonitor.ForModule(mod.ModuleID); ok {
+		d.DeviceAuthFailure = &f
+	}
 
 	// Authorizations for this module.
 	if s.moduleAuthService != nil {

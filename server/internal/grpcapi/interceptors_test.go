@@ -6,15 +6,20 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"log"
+	"net"
 	"testing"
 	"time"
 
 	pb "github.com/BrandonDHaskell/Portunus/server/api/portunus/v1"
 	"github.com/BrandonDHaskell/Portunus/server/internal/grpcapi"
+	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
 	"github.com/BrandonDHaskell/Portunus/server/internal/replay"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -80,7 +85,7 @@ func freshAccessRequest(moduleID, credentialID string) *pb.AccessRequest {
 // ── empty secret ─────────────────────────────────────────────────────────────
 
 func TestHMACInterceptor_EmptySecret_Passthrough(t *testing.T) {
-	interceptor := grpcapi.HMACInterceptor("", nil)
+	interceptor := grpcapi.HMACInterceptor("", nil, nil)
 	req := &pb.HeartbeatRequest{ModuleId: "door-001", Sequence: 1}
 
 	_, err := invoke(interceptor, context.Background(), req)
@@ -92,7 +97,7 @@ func TestHMACInterceptor_EmptySecret_Passthrough(t *testing.T) {
 // ── valid signatures ──────────────────────────────────────────────────────────
 
 func TestHMACInterceptor_ValidHeartbeat_Passes(t *testing.T) {
-	interceptor := grpcapi.HMACInterceptor(testHMACSecret, nil)
+	interceptor := grpcapi.HMACInterceptor(testHMACSecret, nil, nil)
 	req := &pb.HeartbeatRequest{ModuleId: "door-001", Sequence: 42}
 
 	ctx := metadata.NewIncomingContext(context.Background(),
@@ -106,7 +111,7 @@ func TestHMACInterceptor_ValidHeartbeat_Passes(t *testing.T) {
 
 func TestHMACInterceptor_ValidAccessRequest_Passes(t *testing.T) {
 	store := replay.NewStore(60 * time.Second)
-	interceptor := grpcapi.HMACInterceptor(testHMACSecret, store)
+	interceptor := grpcapi.HMACInterceptor(testHMACSecret, store, nil)
 	req := freshAccessRequest("door-001", "AABBCCDD")
 
 	ctx := metadata.NewIncomingContext(context.Background(),
@@ -121,7 +126,7 @@ func TestHMACInterceptor_ValidAccessRequest_Passes(t *testing.T) {
 // ── rejection cases ───────────────────────────────────────────────────────────
 
 func TestHMACInterceptor_MissingMetadata_Unauthenticated(t *testing.T) {
-	interceptor := grpcapi.HMACInterceptor(testHMACSecret, nil)
+	interceptor := grpcapi.HMACInterceptor(testHMACSecret, nil, nil)
 	req := &pb.HeartbeatRequest{ModuleId: "door-001", Sequence: 1}
 
 	_, err := invoke(interceptor, context.Background(), req)
@@ -129,7 +134,7 @@ func TestHMACInterceptor_MissingMetadata_Unauthenticated(t *testing.T) {
 }
 
 func TestHMACInterceptor_MissingSignatureHeader_Unauthenticated(t *testing.T) {
-	interceptor := grpcapi.HMACInterceptor(testHMACSecret, nil)
+	interceptor := grpcapi.HMACInterceptor(testHMACSecret, nil, nil)
 	req := &pb.HeartbeatRequest{ModuleId: "door-001", Sequence: 1}
 
 	ctx := metadata.NewIncomingContext(context.Background(),
@@ -139,7 +144,7 @@ func TestHMACInterceptor_MissingSignatureHeader_Unauthenticated(t *testing.T) {
 }
 
 func TestHMACInterceptor_WrongSecret_Unauthenticated(t *testing.T) {
-	interceptor := grpcapi.HMACInterceptor(testHMACSecret, nil)
+	interceptor := grpcapi.HMACInterceptor(testHMACSecret, nil, nil)
 	req := &pb.HeartbeatRequest{ModuleId: "door-001", Sequence: 1}
 
 	ctx := metadata.NewIncomingContext(context.Background(),
@@ -149,7 +154,7 @@ func TestHMACInterceptor_WrongSecret_Unauthenticated(t *testing.T) {
 }
 
 func TestHMACInterceptor_TamperedField_Unauthenticated(t *testing.T) {
-	interceptor := grpcapi.HMACInterceptor(testHMACSecret, nil)
+	interceptor := grpcapi.HMACInterceptor(testHMACSecret, nil, nil)
 
 	// Signature computed for door-001, but request claims door-002.
 	sigReq := &pb.HeartbeatRequest{ModuleId: "door-001", Sequence: 1}
@@ -162,7 +167,7 @@ func TestHMACInterceptor_TamperedField_Unauthenticated(t *testing.T) {
 }
 
 func TestHMACInterceptor_BadHexSignature_Unauthenticated(t *testing.T) {
-	interceptor := grpcapi.HMACInterceptor(testHMACSecret, nil)
+	interceptor := grpcapi.HMACInterceptor(testHMACSecret, nil, nil)
 	req := &pb.HeartbeatRequest{ModuleId: "door-001", Sequence: 1}
 
 	ctx := metadata.NewIncomingContext(context.Background(),
@@ -175,7 +180,7 @@ func TestHMACInterceptor_BadHexSignature_Unauthenticated(t *testing.T) {
 
 func TestHMACInterceptor_ReplayedNonce_Unauthenticated(t *testing.T) {
 	store := replay.NewStore(60 * time.Second)
-	interceptor := grpcapi.HMACInterceptor(testHMACSecret, store)
+	interceptor := grpcapi.HMACInterceptor(testHMACSecret, store, nil)
 	req := freshAccessRequest("door-001", "AABBCCDD")
 
 	ctx := metadata.NewIncomingContext(context.Background(),
@@ -193,7 +198,7 @@ func TestHMACInterceptor_ReplayedNonce_Unauthenticated(t *testing.T) {
 
 func TestHMACInterceptor_FreshNonce_Accepted(t *testing.T) {
 	store := replay.NewStore(60 * time.Second)
-	interceptor := grpcapi.HMACInterceptor(testHMACSecret, store)
+	interceptor := grpcapi.HMACInterceptor(testHMACSecret, store, nil)
 
 	// Two requests with different nonces from the same module should both pass.
 	req1 := freshAccessRequest("door-001", "AABBCCDD")
@@ -218,7 +223,7 @@ func TestHMACInterceptor_FreshNonce_Accepted(t *testing.T) {
 
 func TestHMACInterceptor_StaleTimestamp_Unauthenticated(t *testing.T) {
 	store := replay.NewStore(60 * time.Second)
-	interceptor := grpcapi.HMACInterceptor(testHMACSecret, store)
+	interceptor := grpcapi.HMACInterceptor(testHMACSecret, store, nil)
 
 	req := freshAccessRequest("door-001", "AABBCCDD")
 	// Timestamp 90 seconds in the past — outside the 60s window.
@@ -235,7 +240,7 @@ func TestHMACInterceptor_EmptyTimestamp_Rejected(t *testing.T) {
 	// When HMAC is enabled, a missing requested_at is always rejected (F-5).
 	// Firmware must provide a synchronised clock timestamp.
 	store := replay.NewStore(60 * time.Second)
-	interceptor := grpcapi.HMACInterceptor(testHMACSecret, store)
+	interceptor := grpcapi.HMACInterceptor(testHMACSecret, store, nil)
 
 	req := freshAccessRequest("door-001", "AABBCCDD")
 	req.RequestedAt = "" // clock not synced
@@ -249,7 +254,7 @@ func TestHMACInterceptor_EmptyTimestamp_Rejected(t *testing.T) {
 
 func TestHMACInterceptor_NoStore_NoReplayCheck(t *testing.T) {
 	// When store is nil, replay protection is disabled — same nonce can repeat.
-	interceptor := grpcapi.HMACInterceptor(testHMACSecret, nil)
+	interceptor := grpcapi.HMACInterceptor(testHMACSecret, nil, nil)
 	req := freshAccessRequest("door-001", "AABBCCDD")
 
 	ctx := metadata.NewIncomingContext(context.Background(),
@@ -274,7 +279,7 @@ func TestHMACInterceptor_AccessRequestWithoutNonce_Unauthenticated(t *testing.T)
 			req := freshAccessRequest("door-001", "04:A3:2B:1C")
 			req.Nonce = nil
 			ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(hmacSigHeader, sign(req, testHMACSecret)))
-			_, err := invoke(grpcapi.HMACInterceptor(testHMACSecret, rs), ctx, req)
+			_, err := invoke(grpcapi.HMACInterceptor(testHMACSecret, rs, nil), ctx, req)
 			assertCode(t, err, codes.Unauthenticated)
 		})
 	}
@@ -284,7 +289,47 @@ func TestHMACInterceptor_AccessRequestWithoutNonce_Unauthenticated(t *testing.T)
 func TestHMACInterceptor_HeartbeatNeedsNoNonce(t *testing.T) {
 	req := &pb.HeartbeatRequest{ModuleId: "door-001", Sequence: 9}
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(hmacSigHeader, sign(req, testHMACSecret)))
-	if _, err := invoke(grpcapi.HMACInterceptor(testHMACSecret, replay.NewStore(time.Minute)), ctx, req); err != nil {
+	if _, err := invoke(grpcapi.HMACInterceptor(testHMACSecret, replay.NewStore(time.Minute), nil), ctx, req); err != nil {
 		t.Fatalf("signed heartbeat rejected: %v", err)
+	}
+}
+
+// ── per-module signature failure reporting ───────────────────────────────────
+
+func TestHMACInterceptor_ReportsFailuresPerModule(t *testing.T) {
+	mon := service.NewDeviceAuthMonitor(log.New(io.Discard, "", 0))
+	ic := grpcapi.HMACInterceptor(testHMACSecret, replay.NewStore(time.Minute), mon)
+	peerCtx := func(md metadata.MD) context.Context {
+		ctx := peer.NewContext(context.Background(), &peer.Peer{Addr: &net.TCPAddr{IP: net.IPv4(10, 0, 0, 42), Port: 7000}})
+		if md != nil {
+			ctx = metadata.NewIncomingContext(ctx, md)
+		}
+		return ctx
+	}
+
+	// A module flashed with a different secret.
+	hb := &pb.HeartbeatRequest{ModuleId: "door-stale", Sequence: 1}
+	_, err := invoke(ic, peerCtx(metadata.Pairs(hmacSigHeader, sign(hb, "old-secret"))), hb)
+	assertCode(t, err, codes.Unauthenticated)
+	f, ok := mon.ForModule("door-stale")
+	if !ok || f.Count != 1 || f.LastReason != service.ReasonBadSignature || f.LastTransport != "grpc" || f.LastPeer != "10.0.0.42:7000" {
+		t.Fatalf("bad signature not reported: %+v %v", f, ok)
+	}
+
+	// No signature at all.
+	ar := freshAccessRequest("door-nosig", "04:A3:2B:1C")
+	_, err = invoke(ic, peerCtx(metadata.MD{}), ar)
+	assertCode(t, err, codes.Unauthenticated)
+	if f, ok := mon.ForModule("door-nosig"); !ok || f.LastReason != service.ReasonMissingSignature {
+		t.Fatalf("missing signature not reported: %+v %v", f, ok)
+	}
+
+	// A correctly signed request is not a failure.
+	good := &pb.HeartbeatRequest{ModuleId: "door-ok", Sequence: 2}
+	if _, err := invoke(ic, peerCtx(metadata.Pairs(hmacSigHeader, sign(good, testHMACSecret))), good); err != nil {
+		t.Fatalf("signed request rejected: %v", err)
+	}
+	if _, ok := mon.ForModule("door-ok"); ok {
+		t.Fatal("a valid request was reported as a failure")
 	}
 }

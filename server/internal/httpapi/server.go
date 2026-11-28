@@ -37,6 +37,10 @@ type Dependencies struct {
 	// Must be the same instance used by the gRPC server so nonces are
 	// deduplicated across both transports.  Required when HMACSecret is set.
 	ReplayStore *replay.Store
+	// DeviceAuthMonitor records device requests whose HMAC signature was
+	// missing or invalid, per claimed module id. Shared with the gRPC
+	// interceptor so both transports report into one place. May be nil.
+	DeviceAuthMonitor *service.DeviceAuthMonitor
 	// CredentialHashSecret is the HMAC key used to hash credential UIDs before storage.
 	// Must match the key used by AccessService.  Leave nil only in dev/test.
 	CredentialHashSecret []byte
@@ -61,6 +65,7 @@ type Server struct {
 	hmacSecret           string
 	replayStore          *replay.Store
 	loginLimiter         *loginLimiter
+	deviceAuthMonitor    *service.DeviceAuthMonitor
 	tlsEnabled           bool
 }
 
@@ -82,6 +87,7 @@ func NewServer(d Dependencies) *Server {
 		credentialHashSecret: d.CredentialHashSecret,
 		hmacSecret:           d.HMACSecret,
 		replayStore:          d.ReplayStore,
+		deviceAuthMonitor:    d.DeviceAuthMonitor,
 		// 5 failures from one client host within 60 seconds triggers a 429,
 		// whatever usernames were tried.
 		loginLimiter: newLoginLimiter(60*time.Second, 5),
@@ -199,7 +205,7 @@ func NewServer(d Dependencies) *Server {
 	}
 
 	if d.HMACSecret != "" {
-		handler = hmacAuthMiddleware(d.Logger, d.HMACSecret, handler)
+		handler = hmacAuthMiddleware(d.Logger, d.HMACSecret, d.DeviceAuthMonitor, handler)
 		d.Logger.Printf("HMAC request signing enforcement: ENABLED")
 	} else {
 		d.Logger.Printf("HMAC request signing enforcement: DISABLED (set PORTUNUS_HMAC_SECRET to enable)")

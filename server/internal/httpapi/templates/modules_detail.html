@@ -5,6 +5,16 @@
   <a class="btn btn-secondary" href="/admin/ui/modules">← Modules</a>
 </div>
 
+{{with .DeviceAuthFailure}}
+<div class="flash warn" id="device-auth-failure">
+  <strong>Signature failures:</strong> {{.Count}} request(s) from this module failed HMAC verification
+  since {{.FirstAt.Format "2006-01-02 15:04:05"}} UTC, most recently {{.LastAt.Format "2006-01-02 15:04:05"}} UTC
+  from {{.LastPeer}} over {{.LastTransport}} ({{.LastReason}}).
+  The module's NVS <code>hmac_secret</code> probably does not match the server's
+  <code>PORTUNUS_HMAC_SECRET</code>: compare their SHA-256 fingerprints and re-flash NVS.
+</div>
+{{end}}
+
 {{with .Module}}
 <!-- ── Identity ──────────────────────────────────────────────────────────── -->
 <div class="card" style="margin-bottom:1.5rem">
