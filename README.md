@@ -168,12 +168,10 @@ Portunus/
 ├── scripts/
 │   ├── generate_certs.sh      Private CA + server TLS cert generation
 │   ├── proto_gen.py           Protobuf code generation (Go + Nanopb)
-│   ├── check_fmt.py           Go format checker
-│   └── clean.py               Cross-platform artifact cleanup
+│   └── hw_test.py             On-target hardware test runner (bench board)
 │
 ├── docs/                      Project documentation
-├── Taskfile.yml               Build, test, lint, deploy task runner
-└── project_plan.md            Phased development plan and design rationale
+└── Taskfile.yml               Build, test, lint, deploy task runner
 ```
 
 ---

@@ -1,5 +1,5 @@
 # https://taskfile.dev
-# Install: go install github.com/go-task/task/v3/cmd/task@latest
+# Install: go install github.com/go-task/task/v3/cmd/task@v3.49.1
 #
 # Usage:
 #   task test              — run all tests
@@ -13,11 +13,9 @@
 #   task release           — validate + deploy server + build prod firmware
 #   task clean             — remove build artifacts
 #
-# Cross-platform:
-#   All tasks run on macOS, Linux, and Windows without modification.
-#   Python (required by ESP-IDF) handles file operations that would
-#   otherwise need shell-specific syntax. Go and idf.py commands are
-#   natively cross-platform.
+# Platform:
+#   Tasks assume a POSIX shell with GNU coreutils (Debian/Ubuntu, or the
+#   espressif/idf image in CI). They are not written for Windows.
 #
 # Deployment:
 #   Deploy tasks use SSH to push the server binary to a Raspberry Pi.
@@ -32,24 +30,24 @@ version: "3"
 dotenv: ['.env']
 
 vars:
-  # ── Cross-platform Python resolution ────────────────────────────────────
-  # Windows typically installs Python as 'python'; macOS/Linux use 'python3'.
-  # Override with: task <target> PYTHON=py
-  PYTHON: '{{if eq OS "windows"}}python{{else}}python3{{end}}'
-
   # ── ESP-IDF environment ──────────────────────────────────────────────────
-  # IDF_PATH points to the ESP-IDF installation root.
+  # A plain Taskfile var would override the IDF_PATH that export.sh sets (Task
+  # ranks Taskfile vars above the environment), so read the environment first
+  # and only fall back to the default install location.
   # Override with: task firmware:build IDF_PATH=/path/to/esp-idf
-  IDF_PATH: '{{.HOME}}/esp/esp-idf'
+  IDF_PATH:
+    sh: echo "${IDF_PATH:-$HOME/esp/esp-idf}"
 
-  # The ESP-IDF venv has nanopb and grpcio-tools pre-installed.
-  # Proto generation uses this interpreter so system Python stays unmodified.
+  # The ESP-IDF venv interpreter (it has nanopb and pyserial), so system
+  # Python stays unmodified. export.sh sets IDF_PYTHON_ENV_PATH; without it,
+  # use the newest idf5.5 venv the installer created.
   # Override with: task proto:gen IDF_PYTHON=/path/to/python
-  IDF_PYTHON: '{{.HOME}}/.espressif/python_env/idf5.5_py3.13_env/bin/python'
-
-  # ── Cross-platform executable extension ─────────────────────────────────
-  # Go requires explicit .exe on Windows for 'go build -o'.
-  EXE: '{{if eq OS "windows"}}.exe{{end}}'
+  IDF_PYTHON:
+    sh: |
+      if [ -n "${IDF_PYTHON_ENV_PATH:-}" ]; then echo "$IDF_PYTHON_ENV_PATH/bin/python"; exit 0; fi
+      py=python3
+      for c in "$HOME"/.espressif/python_env/idf5.5_py*_env/bin/python; do [ -x "$c" ] && py="$c"; done
+      echo "$py"
 
   # ── Project paths ───────────────────────────────────────────────────────
   SERVER_DIR: server
@@ -123,7 +121,7 @@ tasks:
     desc: Build the server binary
     dir: "{{.SERVER_DIR}}"
     cmds:
-      - go build -o bin/portunus-server{{.EXE}} ./cmd/portunus-server
+      - go build -o bin/portunus-server ./cmd/portunus-server
 
   build:server:arm64:
     desc: Cross-compile server binary for Raspberry Pi (arm64)
@@ -131,6 +129,8 @@ tasks:
     env:
       GOOS: linux
       GOARCH: arm64
+      # Explicit, not inherited: the Pi target depends on a pure-Go build.
+      CGO_ENABLED: "0"
     cmds:
       - go build -o bin/portunus-server-linux-arm64 ./cmd/portunus-server
 
@@ -160,7 +160,7 @@ tasks:
     dir: "{{.SERVER_DIR}}"
     cmds:
       - go clean ./...
-      - "{{.PYTHON}} ../scripts/clean.py bin coverage.out"
+      - rm -rf bin coverage.out
 
   lint:server:
     desc: Run Go linters (requires golangci-lint)
@@ -178,7 +178,12 @@ tasks:
     desc: Check server code formatting (fails if unformatted)
     dir: "{{.SERVER_DIR}}"
     cmds:
-      - "{{.PYTHON}} ../scripts/check_fmt.py"
+      - |
+        unformatted=$(gofmt -l .)
+        if [ -n "$unformatted" ]; then
+          printf 'Not gofmt-formatted:\n%s\nRun: task fmt:server:fix\n' "$unformatted" >&2
+          exit 1
+        fi
 
   fmt:server:fix:
     desc: Auto-format server code with gofmt
@@ -329,12 +334,15 @@ tasks:
           echo "  Then fill in real values (SSID, PSK, HMAC secret, server host)."
           exit 1
         fi
+        NVS_SIZE=$(awk -F, '{gsub(/[ \t]/,"")} $1=="nvs"{print $5}' partitions.csv)
+        [ -n "$NVS_SIZE" ] || { echo "ERROR: no nvs row in partitions.csv" >&2; exit 1; }
+        mkdir -p build
         {{.IDF_PYTHON}} {{.IDF_PATH}}/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py \
-          generate nvs_config.csv build/nvs.bin 0x6000
+          generate nvs_config.csv build/nvs.bin "$NVS_SIZE"
         echo "Generated build/nvs.bin ($(wc -c < build/nvs.bin) bytes)"
 
   firmware:nvs:flash:
-    desc: Flash NVS binary to the nvs partition (0x11000) — run firmware:nvs:gen first
+    desc: "Flash build/nvs.bin to the nvs partition (offset from partitions.csv); run firmware:nvs:gen first"
     dir: "{{.FIRMWARE_DIR}}"
     env:
       IDF_PATH: "{{.IDF_PATH}}"
@@ -344,8 +352,10 @@ tasks:
           echo "ERROR: build/nvs.bin not found — run 'task firmware:nvs:gen' first"
           exit 1
         fi
+        NVS_OFFSET=$(awk -F, '{gsub(/[ \t]/,"")} $1=="nvs"{print $4}' partitions.csv)
+        [ -n "$NVS_OFFSET" ] || { echo "ERROR: no nvs row in partitions.csv" >&2; exit 1; }
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
-        esptool.py write_flash 0x11000 build/nvs.bin
+        esptool.py write_flash "$NVS_OFFSET" build/nvs.bin
         echo "NVS partition flashed. Now flash firmware with: task firmware:flash"
 
   firmware:flash:
