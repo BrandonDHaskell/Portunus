@@ -109,6 +109,11 @@ func (s *ProvisionService) capture(
 		return types.ProvisionCredentialResponse{}, fmt.Errorf("create pending member: %w", err)
 	}
 	if err := s.memberStore.AttachCredential(ctx, memberUUID, credHash); err != nil {
+		// The member row exists without a credential; archive it so it does
+		// not sit in the pending queue as an approvable empty record.
+		if aerr := s.memberStore.ArchiveMember(ctx, memberUUID, ""); aerr != nil {
+			err = errors.Join(err, fmt.Errorf("archive orphaned capture %s: %w", memberUUID, aerr))
+		}
 		if errors.Is(err, store.ErrMemberCredentialConflict) {
 			return types.ProvisionCredentialResponse{
 				OK:     true,

@@ -156,3 +156,26 @@ func TestMemberLifecycle_ProvisionAndLists(t *testing.T) {
 		t.Fatalf("ListPendingAuthorizations = %+v, err %v; want only the new member", pending, err)
 	}
 }
+
+// Approval must never revive an archived member, even one archived while
+// still pending (a stale capture, or one an admin rejected).
+func TestMemberLifecycle_ApproveRefusesArchived(t *testing.T) {
+	f := newBranchFixture(t)
+	ms := service.NewMemberAccessService(f.ma)
+	ctx := context.Background()
+
+	const pend = "abababab-0000-4000-8000-0000000000a2"
+	if err := f.ma.CreateMember(ctx, pend, "", store.ProvisioningStatusPendingAuthorization, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := ms.Archive(ctx, pend, "admin-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ms.ApprovePending(ctx, pend, "admin-2", nil, intPtr(30)); !errors.Is(err, service.ErrMemberNotPending) {
+		t.Fatalf("approving an archived capture: got %v, want ErrMemberNotPending", err)
+	}
+	rec, _ := ms.GetMember(ctx, pend)
+	if rec.Status != store.MemberStatusArchived {
+		t.Fatalf("archived member's status became %q", rec.Status)
+	}
+}

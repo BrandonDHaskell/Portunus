@@ -74,7 +74,7 @@ func (s *MemberAccessStore) ListMembers(ctx context.Context) ([]store.MemberAcce
 
 func (s *MemberAccessStore) ListPendingAuthorizations(ctx context.Context) ([]store.MemberAccessRecord, error) {
 	rows, err := s.db.QueryContext(ctx,
-		memberAccessSelectSQL+` WHERE provisioning_status = 'pending_authorization' ORDER BY created_at_ms ASC;`)
+		memberAccessSelectSQL+` WHERE provisioning_status = 'pending_authorization' AND status <> 'archived' ORDER BY created_at_ms ASC;`)
 	if err != nil {
 		return nil, fmt.Errorf("ListPendingAuthorizations: %w", err)
 	}
@@ -225,16 +225,19 @@ func (s *MemberAccessStore) ApprovePending(ctx context.Context, uuid, approvedBy
 	}
 	activatedMs := time.Now().UTC().UnixMilli()
 	return s.writer.Do(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		var provStatus string
+		var provStatus, status string
 		err := tx.QueryRowContext(ctx,
-			`SELECT provisioning_status FROM member_access WHERE uuid = ?;`, uuid).Scan(&provStatus)
+			`SELECT provisioning_status, status FROM member_access WHERE uuid = ?;`, uuid).Scan(&provStatus, &status)
 		if err == sql.ErrNoRows {
 			return store.ErrNotFound
 		}
 		if err != nil {
 			return fmt.Errorf("ApprovePending lookup: %w", err)
 		}
-		if provStatus != string(store.ProvisioningStatusPendingAuthorization) {
+		// Approval activates a live capture only. A row in any other lifecycle
+		// state (archived as stale or rejected, expired, suspended) must never
+		// be revived here.
+		if provStatus != string(store.ProvisioningStatusPendingAuthorization) || status != string(store.MemberStatusActive) {
 			return store.ErrMemberNotPending
 		}
 		_, err = tx.ExecContext(ctx, `
@@ -277,6 +280,7 @@ func (s *MemberAccessStore) ArchiveStalePending(ctx context.Context, now time.Ti
 UPDATE member_access
    SET status = 'archived', archived_at_ms = ?, archived_by_uuid = NULL
  WHERE provisioning_status = 'pending_authorization'
+   AND status <> 'archived'
    AND created_at_ms + ? < ?;
 `, nowMs, ttlMs, nowMs)
 		if err != nil {

@@ -616,3 +616,42 @@ func randomHash(t *testing.T) []byte {
 	}
 	return b
 }
+
+// An archived capture is finished business: it leaves the pending queue and
+// the stale-capture sweep does not touch it again.
+func TestMemberAccessStore_ArchivedPendingLeavesQueue(t *testing.T) {
+	conn := openTestDB(t)
+	w := newTestWriter(t, conn)
+	ms := sqlitestore.NewMemberAccessStore(conn, w)
+	ctx := context.Background()
+
+	for _, id := range []string{"p-live", "p-archived"} {
+		if err := ms.CreateMember(ctx, id, "", store.ProvisioningStatusPendingAuthorization, nil, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ms.ArchiveMember(ctx, "p-archived", "admin-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err := ms.ListPendingAuthorizations(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].UUID != "p-live" {
+		t.Fatalf("pending queue = %d entries, want only p-live", len(pending))
+	}
+
+	before, _ := ms.GetMember(ctx, "p-archived")
+	n, err := ms.ArchiveStalePending(ctx, time.Now().Add(365*24*time.Hour), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("stale sweep archived %d rows, want 1 (only p-live)", n)
+	}
+	after, _ := ms.GetMember(ctx, "p-archived")
+	if after.ArchivedByUUID != "admin-1" || !after.ArchivedAt.Equal(*before.ArchivedAt) {
+		t.Errorf("sweep rewrote an existing archive: by %q at %v (was %q at %v)", after.ArchivedByUUID, after.ArchivedAt, before.ArchivedByUUID, before.ArchivedAt)
+	}
+}
