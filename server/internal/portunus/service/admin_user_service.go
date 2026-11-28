@@ -15,6 +15,7 @@ import (
 var (
 	ErrAdminUserNotFound         = errors.New("admin user not found")
 	ErrCannotSelfDisable         = errors.New("cannot disable your own account")
+	ErrCannotSelfLink            = errors.New("cannot change the member link on your own account")
 	ErrLastAdmin                 = errors.New("at least one enabled admin user must retain the admin role")
 	ErrPermissionSubsetViolation = errors.New("cannot grant a permission you do not hold")
 	// ErrTargetOutranksCaller wraps ErrPermissionSubsetViolation: the target
@@ -261,7 +262,18 @@ func (s *AdminUserService) SetExpiry(ctx context.Context, callerUUID string, cal
 
 // SetMemberLink links or unlinks a member_access row to an admin account.
 // Returns ErrMemberAlreadyLinked if the member is already linked to another account.
-func (s *AdminUserService) SetMemberLink(ctx context.Context, callerUUID, uuid string, memberUUID *string) error {
+//
+// The link defines held-scope grant rights (the admin may grant doors the
+// linked member holds), so a caller may not set their own link and may not
+// change the link of an account that outranks them.
+func (s *AdminUserService) SetMemberLink(ctx context.Context, callerUUID string, callerPerms map[string]struct{}, uuid string, memberUUID *string) error {
+	if uuid == callerUUID {
+		s.recordAudit(ctx, callerUUID, "admin_user.member_linked", uuid, "failure", "self_link")
+		return ErrCannotSelfLink
+	}
+	if _, err := s.loadTargetWithinCaller(ctx, uuid, callerPerms); err != nil {
+		return fmt.Errorf("set member link: %w", err)
+	}
 	if err := s.users.SetAdminUserMemberLink(ctx, uuid, memberUUID); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return ErrAdminUserNotFound

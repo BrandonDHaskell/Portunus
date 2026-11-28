@@ -180,9 +180,17 @@ func (s *Server) handleUIUsersSetMemberLink(w http.ResponseWriter, r *http.Reque
 	}
 
 	sess := sessionFromContext(r.Context())
-	if err := s.adminUserService.SetMemberLink(r.Context(), sess.AdminUUID, uuid, memberUUID); err != nil {
+	if err := s.adminUserService.SetMemberLink(r.Context(), sess.AdminUUID, sess.Permissions, uuid, memberUUID); err != nil {
 		if errors.Is(err, service.ErrAdminUserNotFound) {
 			http.NotFound(w, r)
+			return
+		}
+		if errors.Is(err, service.ErrCannotSelfLink) {
+			flashRedirect(w, r, "/admin/ui/users/"+uuid, "You cannot change the member link on your own account. Ask another admin.", "error")
+			return
+		}
+		if errors.Is(err, service.ErrTargetOutranksCaller) {
+			flashRedirect(w, r, "/admin/ui/users/"+uuid, "You cannot change an account that holds permissions you do not.", "error")
 			return
 		}
 		if errors.Is(err, store.ErrMemberAlreadyLinked) {

@@ -272,14 +272,6 @@ func TestAdminUserService_SetEnabled_ExpiredAdminNotCounted(t *testing.T) {
 
 // ── SetMemberLink ─────────────────────────────────────────────────────────────
 
-func TestAdminUserService_SetMemberLink_DuplicateBlocked(t *testing.T) {
-	// The UNIQUE index on member_uuid is enforced at the SQLite store level.
-	// A service-level test requires a real member_access row (the FK must be
-	// satisfied), but this package has no member seeder. Covered in the sqlite
-	// store tests instead.
-	t.Skip("requires live member_access row; covered in store/sqlite tests")
-}
-
 // ── Target privilege guard (no acting on a more-privileged account) ──────────
 
 // limitedPerms is a custom console role that may manage admin accounts but
