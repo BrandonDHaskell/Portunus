@@ -1,41 +1,74 @@
 name: CI
 
+# Every job calls the same Taskfile task that `task ci:all` runs locally, so a
+# local pass predicts a CI pass. Add a check to the Taskfile first, then here.
+#
+# Actions are pinned to commit SHAs and the IDF image to a digest; Dependabot
+# (.github/dependabot.yml) proposes updates. Job names are required status
+# checks on main: renaming one means updating the ruleset too.
+
 on:
   push:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  TASK_VERSION: 3.49.1
+
 jobs:
   server:
     name: Server
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-go@v5
+      # Current stable Go, not go.mod's minimum: tests, vet and govulncheck
+      # should see the standard library the server is actually built with.
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
-          go-version: "1.24"
-          cache: true
+          go-version: stable
           cache-dependency-path: server/go.sum
 
-      - uses: arduino/setup-task@v2
+      - uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
         with:
-          version: 3.x
+          version: ${{ env.TASK_VERSION }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: vet + fmt + test (race detector)
+      - name: vet + fmt + test (race detector) + TLS boot smoke
         run: task ci:server
+
+      - name: go.mod / go.sum tidy
+        run: task tidy:server:check
+
+      - name: Cross-compile for the Pi (linux/arm64, CGO_ENABLED=0)
+        run: task build:server:arm64
+
+      - name: govulncheck
+        run: task vuln:server
 
   proto-check:
     name: Proto drift
-    runs-on: ubuntu-latest
+    # protoc comes from apt and its version is written into the generated Go
+    # stubs: Ubuntu 24.04 ships 3.21.12, the committed version. Moving to a
+    # newer runner image means regenerating with its protoc.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-go@v5
+      # go.mod's version: proto_gen.py builds the plugins with that toolchain,
+      # so installing it here avoids a download.
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
-          go-version: "1.24"
-          cache: true
+          go-version-file: server/go.mod
           cache-dependency-path: server/go.sum
 
       - name: Install protoc
@@ -46,9 +79,9 @@ jobs:
       - name: Install nanopb
         run: pip install nanopb==0.4.9.1
 
-      - uses: arduino/setup-task@v2
+      - uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
         with:
-          version: 3.x
+          version: ${{ env.TASK_VERSION }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check for proto drift
@@ -56,34 +89,38 @@ jobs:
 
   firmware:
     name: Firmware
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     container:
-      image: espressif/idf:v5.5.1
+      image: espressif/idf:v5.5.1@sha256:dfa2d076c796769c07c155eba6c672b9f395aec943b2ba3701b73379b5f9e884
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - name: Build firmware
-        working-directory: access_module
-        env:
-          SDKCONFIG_DEFAULTS: "sdkconfig.defaults;sdkconfig.defaults.ci"
+      - uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
+        with:
+          version: ${{ env.TASK_VERSION }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compile with the CI overlay
         run: |
           . $IDF_PATH/export.sh
-          idf.py build
+          task firmware:compile:ci
 
   firmware-unit:
     name: Firmware unit tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install host toolchain
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q ninja-build gcc-multilib g++-multilib
 
-      - uses: arduino/setup-task@v2
+      - uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
         with:
-          version: 3.x
+          version: ${{ env.TASK_VERSION }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Unit tier (native)
@@ -97,124 +134,56 @@ jobs:
 
   firmware-component:
     name: Firmware component + integration tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     container:
-      image: espressif/idf:v5.5.1
+      image: espressif/idf:v5.5.1@sha256:dfa2d076c796769c07c155eba6c672b9f395aec943b2ba3701b73379b5f9e884
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      # idf.py is called directly (as in the Firmware job): the Taskfile's
-      # IDF_PYTHON default points at a developer-machine venv path.
-      - name: Test Kconfig overrides are allowlisted (COMP-05)
-        run: access_module/test/component/check_kconfig_overrides.sh
+      - uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
+        with:
+          version: ${{ env.TASK_VERSION }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Each build keeps its own sdkconfig; SDKCONFIG must be absolute.
-      - name: Component tier, access point (fake event bus)
+      # Includes the Kconfig override allowlist check (COMP-05).
+      - name: Component tier (all variants)
         run: |
           . $IDF_PATH/export.sh
-          APP=$PWD/access_module/test/component
-          idf.py --preview -C $APP -B $APP/build/fake -D SDKCONFIG=$APP/build/fake/sdkconfig \
-            set-target linux build
-          $APP/build/fake/portunus_host_tests.elf
-
-      - name: Component tier, provisioning console (fake event bus)
-        run: |
-          . $IDF_PATH/export.sh
-          APP=$PWD/access_module/test/component
-          idf.py --preview -C $APP -B $APP/build/peu -D SDKCONFIG=$APP/build/peu/sdkconfig \
-            -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.peu" set-target linux build
-          $APP/build/peu/portunus_host_tests.elf
-
-      - name: Component tier, heartbeat service (fake event bus)
-        run: |
-          . $IDF_PATH/export.sh
-          APP=$PWD/access_module/test/component
-          idf.py --preview -C $APP -B $APP/build/hb -D SDKCONFIG=$APP/build/hb/sdkconfig \
-            -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.hb" set-target linux build
-          $APP/build/hb/portunus_host_tests.elf
-
-      - name: Component tier, WiFi reconnect task (fake callbacks)
-        run: |
-          . $IDF_PATH/export.sh
-          APP=$PWD/access_module/test/component
-          idf.py --preview -C $APP -B $APP/build/wifi -D SDKCONFIG=$APP/build/wifi/sdkconfig \
-            -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.wifi" set-target linux build
-          $APP/build/wifi/portunus_host_tests.elf
-
-      - name: Component tier, server_comm (access point, no-HMAC dev, PEU)
-        run: |
-          . $IDF_PATH/export.sh
-          APP=$PWD/access_module/test/component
-          for V in "sc:sdkconfig.defaults;sdkconfig.defaults.sc" \
-                   "sc-nohmac:sdkconfig.defaults;sdkconfig.defaults.sc;sdkconfig.defaults.sc_nohmac" \
-                   "sc-peu:sdkconfig.defaults;sdkconfig.defaults.sc;sdkconfig.defaults.peu"; do
-            N=${V%%:*}; D=${V#*:}
-            idf.py --preview -C $APP -B $APP/build/$N -D SDKCONFIG=$APP/build/$N/sdkconfig \
-              -D "SDKCONFIG_DEFAULTS=$D" -DPORTUNUS_TEST_SERVER_COMM=ON set-target linux build
-            $APP/build/$N/portunus_host_tests.elf
-          done
-
-      - name: Component tier, portunus_nvs (emulated flash)
-        run: |
-          . $IDF_PATH/export.sh
-          APP=$PWD/access_module/test/component
-          idf.py --preview -C $APP -B $APP/build/nvs -D SDKCONFIG=$APP/build/nvs/sdkconfig \
-            -DPORTUNUS_TEST_NVS=ON set-target linux build
-          $APP/build/nvs/portunus_host_tests.elf
-
-      # The hardware tier runs on a bench board (task test:firmware:hardware);
-      # CI only compiles it so it cannot rot.
-      - name: Hardware tier app (compile only, both variants)
-        run: |
-          . $IDF_PATH/export.sh
-          APP=$PWD/access_module/test/hardware
-          for V in "active_high:sdkconfig.defaults" \
-                   "active_low:sdkconfig.defaults;sdkconfig.defaults.active_low"; do
-            N=${V%%:*}; D=${V#*:}
-            idf.py -C $APP -B $APP/build/$N -D SDKCONFIG=$APP/build/$N/sdkconfig \
-              -D "SDKCONFIG_DEFAULTS=$D" build
-          done
-
-      # The network app pins a CA at build time; the runner makes a throwaway
-      # one. CI compiles against a throwaway of its own (the key is discarded).
-      - name: Hardware tier network app (compile only)
-        run: |
-          . $IDF_PATH/export.sh
-          APP=$PWD/access_module/test/hardware/net
-          mkdir -p $APP/certs
-          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
-            -keyout /tmp/ci-compile-ca.key -out $APP/certs/ca_cert.pem -days 1 \
-            -subj "/CN=ci-compile-only" 2>/dev/null
-          idf.py -C $APP -B $APP/build/net -D SDKCONFIG=$APP/build/net/sdkconfig build
+          task test:firmware:component
 
       - name: Integration tier (real event bus)
         run: |
           . $IDF_PATH/export.sh
-          APP=$PWD/access_module/test/component
-          idf.py --preview -C $APP -B $APP/build/real -D SDKCONFIG=$APP/build/real/sdkconfig \
-            -DPORTUNUS_TEST_REAL_BUS=ON set-target linux build
-          $APP/build/real/portunus_host_tests.elf
+          task test:firmware:integration
+
+      # The hardware tier runs on a bench board (task test:firmware:hardware);
+      # CI only compiles it so it cannot rot.
+      - name: Hardware tier apps (compile only)
+        run: |
+          . $IDF_PATH/export.sh
+          task test:firmware:hardware:compile
 
   firmware-prod-compile:
     name: Firmware compile (prod profile, HMAC + pinned CA)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     container:
-      image: espressif/idf:v5.5.1
+      image: espressif/idf:v5.5.1@sha256:dfa2d076c796769c07c155eba6c672b9f395aec943b2ba3701b73379b5f9e884
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
+        with:
+          version: ${{ env.TASK_VERSION }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       # Throwaway CA so the CONFIG_PORTUNUS_TLS_USE_CUSTOM_CA embed succeeds.
       # Compile-only: this image is never flashed.
       - name: Generate throwaway CA
         run: bash scripts/generate_certs.sh --ip 127.0.0.1
 
-      - name: Build with prod overlay
-        working-directory: access_module
-        env:
-          SDKCONFIG_DEFAULTS: "sdkconfig.defaults;sdkconfig.defaults.prod"
+      - name: Compile with the prod overlay and assert it is deployable
         run: |
           . $IDF_PATH/export.sh
-          idf.py build
-
-      - name: Assert the prod image is deployable
-        run: bash scripts/assert_secure_build.sh --prod access_module/build/config/sdkconfig.h
+          task firmware:compile:prod

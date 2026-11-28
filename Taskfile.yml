@@ -191,6 +191,20 @@ tasks:
     cmds:
       - gofmt -w .
 
+  tidy:server:check:
+    desc: Fail if go.mod/go.sum are not tidy
+    dir: "{{.SERVER_DIR}}"
+    cmds:
+      - go mod tidy -diff
+
+  vuln:server:
+    desc: Scan for known vulnerabilities reachable from server code (govulncheck)
+    dir: "{{.SERVER_DIR}}"
+    cmds:
+      # go run @version rather than a go.mod tool directive: govulncheck's own
+      # dependencies would otherwise join (and could bump) the server's build list.
+      - go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
+
   # ─── Protobuf ─────────────────────────────────────────────────────────────
 
   proto:gen:
@@ -307,6 +321,34 @@ tasks:
         # The overlay is trusted to be secure; this proves the compiled image is.
         bash ../scripts/assert_secure_build.sh --prod build/config/sdkconfig.h
         idf.py -D SDKCONFIG_DEFAULTS="$DEFAULTS" reconfigure > /dev/null 2>&1 || true
+
+  # Compile-only checks in their own build directories, so they never touch
+  # the working sdkconfig or build/. Their sdkconfig is regenerated every run:
+  # IDF applies defaults only to symbols an existing sdkconfig lacks.
+  firmware:_compile:
+    internal: true
+    dir: "{{.FIRMWARE_DIR}}"
+    env:
+      IDF_PATH: "{{.IDF_PATH}}"
+    cmds:
+      - |
+        eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
+        B="$PWD/build/{{.NAME}}"
+        rm -f "$B/sdkconfig"
+        idf.py -B "$B" -D SDKCONFIG="$B/sdkconfig" -D SDKCONFIG_DEFAULTS="{{.DEFAULTS}}" build
+
+  firmware:compile:ci:
+    desc: Compile check with the CI overlay (dev mode, no secrets; not deployable)
+    cmds:
+      - task: firmware:_compile
+        vars: { NAME: ci, DEFAULTS: "sdkconfig.defaults;sdkconfig.defaults.ci" }
+
+  firmware:compile:prod:
+    desc: Compile check with the prod overlay, then assert the image is deployable (needs access_module/certs/ca_cert.pem)
+    cmds:
+      - task: firmware:_compile
+        vars: { NAME: ci-prod, DEFAULTS: "sdkconfig.defaults;sdkconfig.defaults.prod" }
+      - bash scripts/assert_secure_build.sh --prod {{.FIRMWARE_DIR}}/build/ci-prod/config/sdkconfig.h
 
   firmware:nvs:gen:
     desc: Generate NVS binary from nvs_config.csv (copy nvs_config.example.csv first)
@@ -513,6 +555,34 @@ tasks:
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
         {{.IDF_PYTHON}} scripts/hw_test.py --port "{{.PORT}}" --net {{if .SERVER_IP}}--server-ip "{{.SERVER_IP}}"{{end}}
 
+  # The hardware-tier apps run on a bench board; this only compiles them so
+  # they cannot rot. The network app pins a CA at build time: if none exists
+  # yet, a throwaway is made (hw_test.py replaces it with its own CA-A).
+  test:firmware:hardware:compile:
+    desc: "Compile the hardware-tier apps (both strike variants + network), no board needed"
+    env:
+      IDF_PATH: "{{.IDF_PATH}}"
+    cmds:
+      - |
+        eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
+        APP="$PWD/{{.FIRMWARE_DIR}}/test/hardware"
+        for V in "active_high:sdkconfig.defaults" \
+                 "active_low:sdkconfig.defaults;sdkconfig.defaults.active_low"; do
+          N=${V%%:*}; D=${V#*:}
+          idf.py -C "$APP" -B "$APP/build/$N" -D SDKCONFIG="$APP/build/$N/sdkconfig" \
+            -D "SDKCONFIG_DEFAULTS=$D" build
+        done
+        NET="$APP/net"
+        if [ ! -f "$NET/certs/ca_cert.pem" ]; then
+          mkdir -p "$NET/certs"
+          KEY=$(mktemp)
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+            -keyout "$KEY" -out "$NET/certs/ca_cert.pem" -days 1 \
+            -subj "/CN=ci-compile-only" 2>/dev/null
+          rm -f "$KEY"
+        fi
+        idf.py -C "$NET" -B "$NET/build/net" -D SDKCONFIG="$NET/build/net/sdkconfig" build
+
   # ─── Deploy ────────────────────────────────────────────────────────────────
   # Requires SSH key-based auth to the Pi. Configure target in .env:
   #   DEPLOY_HOST=pi@192.168.1.100
@@ -604,15 +674,23 @@ tasks:
       - task: test:server:race
       - task: ci:server:smoke
 
+  # Mirrors .github/workflows/ci.yml job for job, so a local pass predicts a
+  # CI pass. Keep the two in step.
   ci:all:
-    desc: "Full CI: server checks, proto drift, firmware tests, firmware compile"
+    desc: "Full CI locally: server checks, proto drift, all firmware tiers, CI and prod compiles"
     cmds:
       - task: ci:server
+      - task: tidy:server:check
+      - task: vuln:server
+      - task: build:server:arm64
       - task: proto:check
       - task: test:firmware
+      - task: test:firmware:unit
+        vars: { PRESET: host-asan }
       - task: test:firmware:unit:m32
-      - task: firmware:build
-        vars: { ALLOW_INSECURE: "1" }
+      - task: test:firmware:hardware:compile
+      - task: firmware:compile:ci
+      - task: firmware:compile:prod
 
   release:
     desc: Full release — validate, deploy server, build prod firmware
