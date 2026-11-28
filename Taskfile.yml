@@ -238,35 +238,21 @@ tasks:
       ALLOW_INSECURE: '{{.ALLOW_INSECURE | default "0"}}'
     cmds:
       - |
-        refuse() {
-          echo "ERROR: $1 has an insecure config:" >&2
-          printf '%s\n' "$2" | sed 's/^/  /' >&2
-          echo "  Prod image:      task firmware:build:prod" >&2
-          echo "  Dev image:       task firmware:build:dev" >&2
-          echo "  Compile check:   task firmware:build ALLOW_INSECURE=1" >&2
-          exit 1
-        }
+        # Cheap early refusal before a long build; the authoritative check
+        # runs on the compiled header afterwards.
         if [ "{{.ALLOW_INSECURE}}" != "1" ] && [ -f sdkconfig ]; then
           bad=$(grep -E '^CONFIG_PORTUNUS_(ENV_DEV|TLS_SKIP_VERIFY)=y|^# CONFIG_PORTUNUS_(USE_TLS|HMAC_ENABLED) is not set' sdkconfig || true)
-          if [ -n "$bad" ]; then refuse sdkconfig "$bad"; fi
+          if [ -n "$bad" ]; then
+            printf 'ERROR: sdkconfig has an insecure config:\n%s\n' "$bad" >&2
+            echo "  Use firmware:build:prod / firmware:build:dev, or ALLOW_INSECURE=1 for a compile check." >&2
+            exit 1
+          fi
         fi
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
         idf.py build
-        # Re-check what was actually compiled: cached CMake defaults can differ
-        # from the sdkconfig that existed before the build.
         if [ "{{.ALLOW_INSECURE}}" != "1" ]; then
-          h=build/config/sdkconfig.h
-          bad=""
-          has() { grep -qE "^#define CONFIG_PORTUNUS_$1 1" "$h"; }
-          if has ENV_DEV; then bad="${bad}ENV_DEV on"$'\n'; fi
-          if has TLS_SKIP_VERIFY; then bad="${bad}TLS_SKIP_VERIFY on"$'\n'; fi
-          if has ENABLE_WIFI; then
-            if ! has USE_TLS; then bad="${bad}USE_TLS off"$'\n'; fi
-            if ! has HMAC_ENABLED; then bad="${bad}HMAC_ENABLED off"$'\n'; fi
-          fi
-          if [ -n "$bad" ]; then refuse "$h (image in build/ is NOT deployable)" "${bad%$'\n'}"; fi
+          bash ../scripts/assert_secure_build.sh build/config/sdkconfig.h
         fi
-        exit 0
 
   # Both profile builds delete sdkconfig so the profile overlay always wins,
   # which would also discard the per-device hardware settings set in
@@ -316,12 +302,11 @@ tasks:
       - |
         rm -f sdkconfig
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
-        idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.local;sdkconfig.defaults.prod" build
-        BUILD_STATUS=$?
-        if [ $BUILD_STATUS -eq 0 ]; then
-          idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.local;sdkconfig.defaults.prod" reconfigure > /dev/null 2>&1 || true
-        fi
-        exit $BUILD_STATUS
+        DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.local;sdkconfig.defaults.prod"
+        idf.py -D SDKCONFIG_DEFAULTS="$DEFAULTS" build
+        # The overlay is trusted to be secure; this proves the compiled image is.
+        bash ../scripts/assert_secure_build.sh --prod build/config/sdkconfig.h
+        idf.py -D SDKCONFIG_DEFAULTS="$DEFAULTS" reconfigure > /dev/null 2>&1 || true
 
   firmware:nvs:gen:
     desc: Generate NVS binary from nvs_config.csv (copy nvs_config.example.csv first)
