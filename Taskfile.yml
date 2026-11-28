@@ -46,7 +46,11 @@ vars:
     sh: |
       if [ -n "${IDF_PYTHON_ENV_PATH:-}" ]; then echo "$IDF_PYTHON_ENV_PATH/bin/python"; exit 0; fi
       py=python3
-      for c in "$HOME"/.espressif/python_env/idf5.5_py*_env/bin/python; do [ -x "$c" ] && py="$c"; done
+      # if/fi, not &&: with no venv the glob stays literal, and a failing
+      # test as the loop's last command would fail the whole Taskfile.
+      for c in "$HOME"/.espressif/python_env/idf5.5_py*_env/bin/python; do
+        if [ -x "$c" ]; then py="$c"; fi
+      done
       echo "$py"
 
   # ── Project paths ───────────────────────────────────────────────────────
