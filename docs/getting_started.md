@@ -31,7 +31,7 @@ Individual hardware features can be disabled in `menuconfig` if you want to benc
 
 | Tool | Purpose | Install guide |
 |---|---|---|
-| Go 1.24+ | Build and run the server | [setup_server.md — Install Go](setup_server.md#install-go) |
+| Go 1.26+ | Build and run the server | [setup_server.md — Install Go](setup_server.md#install-go) |
 | Task 3.x | Build runner used throughout both setups | [setup_firmware.md — Install Task](setup_firmware.md#install-task) |
 | ESP-IDF 5.x | ESP32 toolchain (2–5 GB, 10–30 min install) | [setup_firmware.md — Install ESP-IDF](setup_firmware.md#install-esp-idf) |
 | OpenSSL | TLS certificate generation (production) | Usually pre-installed on Debian |
@@ -57,7 +57,7 @@ Follow [Install Go](setup_server.md#install-go) and [Install Task](setup_server.
 Verify:
 
 ```bash
-go version    # should print go1.24 or newer
+go version    # should print go1.26 or newer
 task --version
 ```
 

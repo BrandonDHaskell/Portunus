@@ -25,7 +25,7 @@ The server uses **modernc.org/sqlite** (a pure-Go SQLite implementation), so the
 
 ## Install Go
 
-The server requires Go 1.24 or newer. The version in Debian's default apt repositories is typically outdated, so install from the official tarball.
+The server requires Go 1.26 or newer (`go.mod`). Use the latest patch release: release binaries are built on your machine, so standard-library security fixes only reach the Pi when your Go is current. The version in Debian's default apt repositories is typically outdated, so install from the official tarball.
 
 Check if Go is already installed and at the right version:
 
@@ -33,18 +33,18 @@ Check if Go is already installed and at the right version:
 go version
 ```
 
-If missing or below 1.24, install from the official release:
+If missing or below 1.26, install from the official release:
 
 ```bash
-# Download (adjust version as needed — check https://go.dev/dl/)
-wget https://go.dev/dl/go1.24.1.linux-amd64.tar.gz
+# Download the latest release (check https://go.dev/dl/)
+wget https://go.dev/dl/go1.27.4.linux-amd64.tar.gz
 
 # For Raspberry Pi 5 (arm64):
-# wget https://go.dev/dl/go1.24.1.linux-arm64.tar.gz
+# wget https://go.dev/dl/go1.27.4.linux-arm64.tar.gz
 
 # Remove any prior install and extract
 sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.24.1.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.27.4.linux-amd64.tar.gz
 
 # Add to PATH (append to ~/.bashrc or ~/.profile for persistence)
 export PATH=$PATH:/usr/local/go/bin

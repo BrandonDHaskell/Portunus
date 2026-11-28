@@ -85,7 +85,7 @@ ACCESS_POINT runtime flow:
 
 ### Server
 
-Requires Go 1.24+ and [Task](https://taskfile.dev).
+Requires Go 1.26+ and [Task](https://taskfile.dev).
 
 ```bash
 git clone https://github.com/BrandonDHaskell/Portunus.git
