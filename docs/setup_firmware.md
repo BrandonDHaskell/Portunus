@@ -292,13 +292,35 @@ access_module/main/Kconfig.projbuild
 
 The root `Taskfile.yml` defines:
 
-- `task firmware:build` — plain build using `sdkconfig` as edited by `menuconfig`
-- `task firmware:build:dev` — applies `sdkconfig.defaults` + `sdkconfig.defaults.dev` overlays
-- `task firmware:build:prod` — applies `sdkconfig.defaults` + `sdkconfig.defaults.prod` overlays; additionally injects `PORTUNUS_HMAC_SECRET` read from the repo-root `.env` file into a temporary `sdkconfig.defaults.secret` at build time
+- `task firmware:build:dev`: `sdkconfig.defaults` + your saved hardware settings (`sdkconfig.defaults.local`) + `sdkconfig.defaults.dev`
+- `task firmware:build:prod`: `sdkconfig.defaults` + `sdkconfig.defaults.local` + `sdkconfig.defaults.prod`, then `scripts/assert_secure_build.sh --prod` checks the compiled `build/config/sdkconfig.h` and fails if the image is not deployable (dev mode, skipped cert verification, TLS or HMAC off, CA not pinned)
+- `task firmware:build`: plain build of whatever `sdkconfig` is in the tree; refuses an insecure config unless `ALLOW_INSECURE=1`
 
-All four overlay files (`sdkconfig.defaults`, `sdkconfig.defaults.dev`, `sdkconfig.defaults.prod`, `sdkconfig.defaults.ci`) are committed in `access_module/`. The `firmware:build:prod` task reads `PORTUNUS_HMAC_SECRET` from `.env` via the Taskfile `dotenv` mechanism so the secret never needs to be committed to source control.
+Both profile builds delete `sdkconfig` first so the overlay always wins, after saving your per-device hardware settings (pins, polarity, module type, feature switches, timing) into `sdkconfig.defaults.local` (gitignored). No clean is needed when switching profiles.
 
-Before running the prod build, the repo-root `.env` must contain `PORTUNUS_HMAC_SECRET`. The build injects it at build time and fails with an explicit error if it is missing. Create it as described in [getting_started.md › Post-Clone Setup](getting_started.md#post-clone-setup), using the same value as the server.
+The overlay files (`sdkconfig.defaults`, `.dev`, `.prod`, `.ci`) are committed in `access_module/`. None of them, and no build, contains a secret: device identity and secrets live in NVS (next section).
+
+### Device configuration and secrets (NVS)
+
+The module ID, WiFi credentials, server host, gRPC port and HMAC secret are read at boot from the `portunus` NVS namespace, not from Kconfig. Building or flashing the app does **not** change them.
+
+```bash
+cd access_module
+cp nvs_config.example.csv nvs_config.csv   # gitignored; fill in real values
+cd ..
+task firmware:nvs:gen      # nvs_config.csv -> access_module/build/nvs.bin
+task firmware:nvs:flash    # writes it to the nvs partition (offset from partitions.csv)
+```
+
+| NVS key | Type | Meaning |
+|---|---|---|
+| `module_id` | string | Must match the module registered on the server |
+| `wifi_ssid`, `wifi_psk` | string | WiFi network |
+| `server_host` | string | Server LAN IP or name; must be covered by the server cert's SAN |
+| `grpc_port` | u16 | Server gRPC port (default deployment: 50051) |
+| `hmac_secret` | string | Same value as the server's `PORTUNUS_HMAC_SECRET` |
+
+A prod image halts at boot if NVS is missing. Only a dev image falls back to the `CONFIG_PORTUNUS_DEV_*` values under **Development / NVS fallback**. `nvs.bin` and `nvs_config.csv` hold the secret in plain text: keep them off shared drives, and never print or hex-dump them. To check a module's secret against the server's, compare SHA-256 fingerprints.
 
 ---
 
@@ -353,44 +375,31 @@ This matters at build time because `main/CMakeLists.txt` conditionally pulls in 
 The current security-related options include:
 
 - `PORTUNUS_USE_TLS`
-- `PORTUNUS_TLS_SERVER_PORT`
 - `PORTUNUS_TLS_SKIP_VERIFY`
 - `PORTUNUS_TLS_USE_CUSTOM_CA`
 - `PORTUNUS_HMAC_ENABLED`
-- `PORTUNUS_HMAC_SECRET`
 
 Current behavior:
 
 - TLS is supported today.
-- You can pin to a custom CA cert embedded in the firmware.
+- You can pin to a custom CA cert embedded in the firmware (the prod profile requires it).
 - You can fall back to the ESP-IDF Mozilla CA bundle when not using a custom CA.
-- HMAC signing is implemented today and must match the server-side shared secret.
+- HMAC signing is implemented today. The secret itself is the `hmac_secret` NVS key, not a Kconfig option.
 
 ### Transport Configuration
 
-The transport options currently implemented are:
-
-- `PORTUNUS_USE_GRPC`
-- `PORTUNUS_GRPC_SERVER_PORT`
-
-Current behavior:
-
-- when `PORTUNUS_USE_GRPC=n`, the firmware uses the HTTP path in `services/server_comm/`
-- when `PORTUNUS_USE_GRPC=y`, the firmware uses the `grpc_client` path
-- gRPC currently depends on TLS being enabled
+There is no transport option: the firmware always talks gRPC over TLS (`services/grpc_client`). The server still accepts the HTTP/1.1 + protobuf device path, but current firmware does not use it. The server host and gRPC port come from NVS.
 
 ### Network Configuration
 
-The key network settings currently exposed are:
+The network menu holds timing only:
 
-- `PORTUNUS_MODULE_ID`
-- `PORTUNUS_WIFI_SSID`
-- `PORTUNUS_WIFI_PASSWORD`
 - `PORTUNUS_WIFI_CONNECT_TIMEOUT_MS`
 - `PORTUNUS_WIFI_RECONNECT_INTERVAL_MS`
-- `PORTUNUS_SERVER_HOST`
-- `PORTUNUS_SERVER_PORT`
 - `PORTUNUS_SERVER_REQUEST_TIMEOUT_MS`
+- `PORTUNUS_SERVER_RECONNECT_MIN_MS`, `PORTUNUS_SERVER_RECONNECT_MAX_MS`
+
+The module ID, WiFi credentials, server host and port are NVS keys (see [Device configuration and secrets](#device-configuration-and-secrets-nvs)).
 
 ### Hardware and timing configuration
 
@@ -489,10 +498,12 @@ openssl rand -hex 32
 
 Set that same value in:
 
-- firmware `menuconfig` under `PORTUNUS_HMAC_SECRET`
-- server environment as `PORTUNUS_HMAC_SECRET`
+- the module's NVS as `hmac_secret` (`nvs_config.csv`, then `task firmware:nvs:gen` and `task firmware:nvs:flash`)
+- the server environment as `PORTUNUS_HMAC_SECRET`
 
-Current-state caveat: the shared secret is stored in the firmware image / flash. The repo does **not** currently implement encrypted secret storage on the device.
+A mismatch shows up as gRPC `Unauthenticated` on the module and as a device auth failure on the server's admin health page. Compare SHA-256 fingerprints of the two values; never print them.
+
+Current-state caveat: the secret is stored in the NVS partition in flash. Unless flash encryption is enabled, anyone with physical access to the module can read it.
 
 ---
 

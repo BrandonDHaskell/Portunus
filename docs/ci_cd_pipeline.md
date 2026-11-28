@@ -1,329 +1,185 @@
-# Portunus — CI/CD Pipeline
+# Portunus: CI/CD Pipeline
 
-Local build, test, and deployment pipeline for the Portunus server and access module firmware.
+How Portunus is validated, built, deployed and rolled back.
 
-**Last updated:** April 2026
+**Last updated:** November 2026
 
 ---
 
 ## Overview
 
-Portunus runs on two machines with a single ESP32 that targets either:
+| Machine | Role | Architecture |
+|---|---|---|
+| GitHub Actions | CI on every pull request and every push to `main` | x86_64 |
+| Dev machine (Debian) | Local validation, builds, deploys, firmware flashing | x86_64 |
+| Raspberry Pi 5 | Production server (systemd) | arm64 |
+| ESP32-S3 | Door access module | Xtensa LX7 |
 
-| Machine | Role | OS | Architecture |
-|---|---|---|---|
-| Dev desktop | Development, testing, building, firmware flashing | Debian Linux | x86_64 (amd64) |
-| Raspberry Pi 5 | Production server | Debian Linux (Raspberry Pi OS) | aarch64 (arm64) |
-| ESP32-S3 | Door access module | — | Xtensa LX7 |
+Everything is driven by [Task](https://taskfile.dev) targets in `Taskfile.yml`. CI (`.github/workflows/ci.yml`) calls the same tasks, so `task ci:all` on the dev machine runs the same checks as CI. The Pi never compiles anything: it receives a cross-compiled binary over SSH. Modules are flashed from the dev machine over USB.
 
-All builds happen on the dev machine. The Pi receives pre-built binaries — it does not compile anything. The ESP32 is always flashed from the dev machine via USB.
-
-The pipeline is driven entirely by [Task](https://taskfile.dev) targets defined in `Taskfile.yml`. There is no hosted CI service (GitHub Actions, etc.) at this time. The pipeline runs locally and deploys over SSH.
+```
+  pull request ──► GitHub Actions (same tasks as ci:all) ──► merge to main
+                                                                 │
+  dev machine:  task release  (clean tree only)                  ▼
+     1. task ci:all                    validate
+     2. task firmware:build:prod       build + secure-build assertion
+     3. task deploy:server             arm64 build ──SSH──► Pi (snapshot, install, health check)
+  then:  task firmware:flash           ──USB──► ESP32  (and NVS if device config changed)
+```
 
 ---
 
-## Pipeline stages
+## Continuous integration
 
-```
-  ┌─────────────────────────────────────────────────────────────┐
-  │                      Dev Machine                            │
-  │                                                             │
-  │  1. VALIDATE        task ci:all                             │
-  │     go vet, gofmt, tests (race), proto drift check,         │
-  │     firmware compile check                                  │
-  │                          │                                  │
-  │  2. BUILD               ▼                                   │
-  │     task build:server              (native x86_64)          │
-  │     task build:server:arm64        (cross-compile for Pi)   │
-  │     task firmware:build:prod       (ESP32 prod firmware)    │
-  │                          │                                  │
-  │  3. DEPLOY SERVER        ▼                                  │
-  │     task deploy:server   ──── SSH/SCP ────►  Raspberry Pi   │
-  │                                              (systemd       │
-  │  4. FLASH FIRMWARE                            restart)      │
-  │     task firmware:flash  ──── USB ────────►  ESP32          │
-  │                                                             │
-  └─────────────────────────────────────────────────────────────┘
-```
+`.github/workflows/ci.yml` runs six jobs. Their names are required status checks on `main`, so renaming a job means updating the branch ruleset too.
 
-Each stage is independent and can be run in isolation, but the typical flow runs them in order: validate → build → deploy → flash.
+| Job | Task(s) | Catches |
+|---|---|---|
+| Server | `ci:server`, `tidy:server:check`, `build:server:arm64`, `vuln:server` | vet, gofmt, tests with the race detector, TLS boot smoke, untidy `go.mod`, a CGo dependency that breaks the Pi build, known vulnerabilities reachable from server code |
+| Proto drift | `proto:check` | generated Go or Nanopb code that does not match `portunus.proto` (including new, uncommitted generated files) |
+| Firmware | `firmware:compile:ci` | firmware that does not compile |
+| Firmware unit tests | `test:firmware:unit` (native, ASan+UBSan, 32-bit) | unit-tier failures, memory errors, ILP32 data-model bugs |
+| Firmware component + integration tests | `test:firmware:component`, `test:firmware:integration`, `test:firmware:hardware:compile` | component/integration failures on the IDF linux target; hardware-tier apps that no longer compile |
+| Firmware compile (prod profile) | `firmware:compile:prod` | a prod image that does not compile, or whose compiled config is not deployable (dev mode, skipped cert verification, TLS/HMAC off, CA not pinned) |
+
+Pinning, so CI results are reproducible:
+
+- Actions are pinned to commit SHAs, the `espressif/idf` image to a digest, Task to an exact version, and the runner to `ubuntu-24.04`. Dependabot (`.github/dependabot.yml`) proposes action and Go module updates. Bump the IDF image digest by hand when moving ESP-IDF.
+- The protoc plugins are `tool` directives in `server/go.mod`, built by `proto_gen.py` with the Go toolchain `go.mod` names. protoc itself must match the version recorded in the committed stubs (3.21.12, what Ubuntu 24.04 and Debian trixie ship). A Dependabot bump of a plugin changes generated code: run `task proto:gen` on that branch and commit the result.
+- The Server job uses the current stable Go, so tests, vet and govulncheck see the standard library the server is actually built with. Keep the dev machine's Go current too: release binaries are built there.
 
 ---
 
 ## Prerequisites
 
-Before using the pipeline, both machines need their base setup completed:
-
-- **Dev machine:** Go 1.24+, ESP-IDF 5.5.1, Task 3.x — see [Server Setup](setup_server.md) and [Firmware Setup](setup_firmware.md)
-- **Raspberry Pi:** The Portunus systemd service installed and the `portunus` user created — see [Server Setup — Running as a systemd service](setup_server.md#running-as-a-systemd-service)
-- **SSH access** from the dev machine to the Pi without a password prompt (key-based auth)
-
-### Setting up SSH key-based auth
-
-If you haven't already:
+- **Dev machine:** Go (current stable), ESP-IDF 5.5.1, Task 3.x. See [Server Setup](setup_server.md) and [Firmware Setup](setup_firmware.md).
+- **Raspberry Pi:** the systemd service and the `portunus` user, per [Server Setup: Running as a systemd service](setup_server.md#running-as-a-systemd-service).
+- **SSH key auth and passwordless `sudo`** from the dev machine to the Pi (the deploy runs its remote steps with `sudo`).
 
 ```bash
-# On the dev machine — generate a key pair (skip if you already have one)
-ssh-keygen -t ed25519 -C "portunus-deploy"
-
-# Copy the public key to the Pi
-ssh-copy-id pi@<PI_IP>
-
-# Verify passwordless login
-ssh pi@<PI_IP> "echo ok"
+ssh-keygen -t ed25519 -C "portunus-deploy"    # skip if you have a key
+ssh-copy-id <user>@<PI_IP>
+ssh <user>@<PI_IP> "sudo -n true && echo ok"  # must print ok without a prompt
 ```
 
-### Pipeline configuration
+The deploy target lives in the repo-root `.env` (gitignored, loaded by the Taskfile), or pass it on the command line (`task deploy:server DEPLOY_HOST=user@host`). There is no default host: the deploy tasks refuse to run without one.
 
-The deploy tasks need the Pi's address (`DEPLOY_HOST` / `DEPLOY_DIR` / `DEPLOY_SERVICE`) and the prod firmware build needs the shared `PORTUNUS_HMAC_SECRET`. Both live in the repo-root `.env`, documented in [getting_started.md › Post-Clone Setup](getting_started.md#post-clone-setup).
+```bash
+# .env (repo root)
+DEPLOY_HOST=pi@192.168.1.100
+DEPLOY_DIR=/opt/portunus           # default
+DEPLOY_SERVICE=portunus-server     # default
+```
 
 ---
 
 ## Stage 1: Validate
 
-Run the full validation suite before building or deploying. This catches issues early and costs seconds.
-
 ```bash
 task ci:all
 ```
 
-This runs the following checks in sequence:
+This runs every CI job's tasks in sequence: the server checks, tidy and vulnerability checks, the arm64 cross-compile, the proto drift check, every firmware test tier (including ASan and 32-bit), the hardware-tier compile, and the CI and prod firmware compiles. The compile checks use their own build directories (`access_module/build/ci`, `build/ci-prod`), so they never touch your working `sdkconfig` or `build/`. The prod compile needs `access_module/certs/ca_cert.pem` (your CA, from `task certs:generate`).
 
-| Check | What it does | Fails when |
-|---|---|---|
-| `vet:server` | Go static analysis | Suspicious code constructs found |
-| `fmt:server` | gofmt formatting check | Any `.go` file is not formatted |
-| `test:server:race` | All server tests with race detector | Test failure or data race detected |
-| `proto:check` | Regenerate protobuf stubs and diff | Generated code doesn't match committed files |
-| `firmware:build` | Compile firmware (default config) | Firmware doesn't compile |
-
-If any check fails, the pipeline stops. Fix the issue before proceeding.
-
-For faster iteration during development, you can run individual checks:
+Faster loops while developing:
 
 ```bash
-task test:server              # tests only, no race detector (faster)
-task test:server:service      # just the service-layer tests
-task vet:server               # just go vet
+task test:server              # server tests, no race detector
+task test:server:service      # service layer only
+task test:firmware:unit       # firmware unit tier, no ESP-IDF needed
 ```
 
 ---
 
 ## Stage 2: Build
 
-### Server binary (native — for dev machine)
-
 ```bash
-task build:server
+task build:server             # server/bin/portunus-server (dev machine)
+task build:server:arm64       # server/bin/portunus-server-linux-arm64 (Pi), CGO_ENABLED=0
+task firmware:build:prod      # access_module/build/, prod overlay
+task firmware:build:dev       # dev overlay
 ```
 
-Produces `server/bin/portunus-server` (x86_64 Linux).
+`firmware:build:prod` and `firmware:build:dev` always start from their overlay (they delete `sdkconfig` first, after saving your per-device hardware settings to `sdkconfig.defaults.local`), so no clean is needed when switching. `firmware:build:prod` then runs `scripts/assert_secure_build.sh --prod` on the compiled `sdkconfig.h` and fails if the image is not deployable.
 
-### Server binary (cross-compile — for Raspberry Pi)
-
-```bash
-task build:server:arm64
-```
-
-Produces `server/bin/portunus-server-linux-arm64`. Go's built-in cross-compilation handles this without any extra toolchains — the pure-Go SQLite driver (`modernc.org/sqlite`) means no CGo and no C cross-compiler.
-
-### Firmware (production)
-
-```bash
-# Source ESP-IDF environment first
-. ~/esp/esp-idf/export.sh
-
-task firmware:build:prod
-```
-
-Produces the firmware binary in `access_module/build/`. The task reads `PORTUNUS_HMAC_SECRET` from `.env` and injects it into the sdkconfig at build time so the secret is never stored in a committed file. The prod overlay (`sdkconfig.defaults.prod`) applies minimal logging and strict TLS settings.
-
-**Module variant:** The firmware builds as one variant at a time — `ACCESS_POINT` or `PROVISIONING_CONSOLE` — set via `PORTUNUS_MODULE_TYPE` in the sdkconfig overlay. If your deployment uses both module types, build and flash each variant separately: build one, flash all devices of that type, then rebuild for the other type.
-
-For dev firmware:
-
-```bash
-task firmware:build:dev
-```
-
-**Important:** When switching between dev and prod firmware builds, always clean first:
-
-```bash
-task firmware:clean
-task firmware:build:prod
-```
+No secret is compiled into the firmware. The module ID, WiFi credentials, server host, gRPC port and HMAC secret are read from NVS at boot (see [Firmware Setup: Device configuration and secrets](setup_firmware.md#device-configuration-and-secrets-nvs)).
 
 ---
 
-## Stage 3: Deploy server to Raspberry Pi
+## Stage 3: Deploy the server
 
 ```bash
 task deploy:server
 ```
 
-This task:
+The steps are in `scripts/deploy_server.sh` (dev machine) and `scripts/deploy_remote.sh` (runs on the Pi as root):
 
-1. Cross-compiles the server for arm64 (if not already built)
-2. Copies the binary to the Pi via SCP
-3. Restarts the systemd service on the Pi via SSH
+1. Cross-compiles the arm64 binary and records its git version (`git describe --dirty`).
+2. Copies it to a private `mktemp -d` directory on the Pi and verifies its SHA-256 there.
+3. If the running service is healthy, keeps its binary as the rollback target (`bin/portunus-server.prev`). A binary that is not running healthily never replaces the rollback target, so two bad deploys in a row keep the last good one.
+4. Stops the service and snapshots the database (the file plus `-wal`/`-shm`) to `<db dir>/backups/pre-deploy-<timestamp>-<version>/`. The DB path is `PORTUNUS_DB_PATH` from the unit's `EnvironmentFile`; override with `DEPLOY_DB`.
+5. Installs the binary as root, records the version in `/opt/portunus/deploy/version`, starts the service.
+6. Health check: the service must stay active with the same main PID for 10 seconds (`HEALTH_SECONDS`). If it does not, the previous binary goes back automatically and the deploy fails, showing the last journal lines.
 
-The deployment is zero-downtime for the database — SQLite WAL mode allows the new process to pick up where the old one left off. Schema migrations run automatically on startup.
+The server is down from step 4 until it is back up (a few seconds), so doors cannot get decisions during a deploy. Schema migrations run on startup.
 
-### What gets deployed
+Only the binary is deployed. The database, TLS certs, `/etc/portunus/portunus.env` and the unit file stay on the Pi.
 
-Only the server binary is deployed. The database, TLS certificates, environment file, and systemd service file already live on the Pi and persist across deployments. This means:
+Snapshots accumulate in `<db dir>/backups/`. They are small, but prune old ones by hand now and then.
 
-- Database contents survive deployments (no data loss)
-- TLS certs don't need to be re-deployed unless they're rotated
-- Environment variables (secrets, config) are managed on the Pi in `/etc/portunus/portunus.env`
-
-### Manual deployment (if you prefer)
-
-```bash
-# Build
-GOOS=linux GOARCH=arm64 go build -o server/bin/portunus-server-linux-arm64 ./server/cmd/portunus-server
-
-# Copy
-scp server/bin/portunus-server-linux-arm64 pi@192.168.1.100:/tmp/portunus-server
-
-# SSH in and swap
-ssh pi@192.168.1.100 << 'EOF'
-  sudo systemctl stop portunus-server
-  sudo cp /tmp/portunus-server /opt/portunus/bin/portunus-server
-  sudo chmod 755 /opt/portunus/bin/portunus-server
-  sudo systemctl start portunus-server
-  sudo systemctl status portunus-server --no-pager
-EOF
-```
-
-### Verifying a deployment
-
-After deploying, verify the server is running and responsive:
+### Checking a deployment
 
 ```bash
-# Check systemd status
-ssh pi@192.168.1.100 "sudo systemctl status portunus-server --no-pager"
-
-# Check the server responds (from the dev machine)
-curl -sk https://192.168.1.100:8443/v1/heartbeat \
-  -X POST \
-  -H "Content-Type: application/json" \
-  -d '{"module_id":"healthcheck"}' | jq .
+task deploy:server:status     # systemd status + deployed version
+task deploy:server:logs       # follow the journal
+curl -sS --cacert certs/ca.pem -o /dev/null -w '%{http_code}\n' https://<PI_IP>:8443/admin/ui/login   # 200
 ```
-
-A healthy server returns a JSON response (even if the module is unknown — the `known: false` response confirms the server is processing requests).
 
 ---
 
 ## Stage 4: Flash firmware
 
-Connect the ESP32 to the dev machine via USB.
-
-### Flash production firmware
-
-```bash
-task firmware:flash
-```
-
-Or flash and immediately open the serial monitor to verify boot:
-
 ```bash
 task firmware:flash-monitor
 ```
 
-### Switching the ESP32 between dev and prod
+If the module's device config (WiFi, server host, module ID, HMAC secret) is new or changed, write NVS first: `task firmware:nvs:gen` then `task firmware:nvs:flash`. Flashing the app does not touch NVS.
 
-Since a single ESP32 targets both environments, the firmware must be rebuilt and reflashed when switching. The key differences are server address, HMAC secret, and TLS certificate.
+Verify on the serial monitor: WiFi connects, heartbeat succeeds with `known=1`, and a card tap produces a decision (ACCESS_POINT) or a pending authorization (PROVISIONING_CONSOLE).
 
-**Switching to production:**
-
-```bash
-# 1. Ensure the prod CA cert is embedded (if server IP changed)
-task certs:generate -- --ip <PROD_PI_IP>
-
-# 2. Clean and rebuild with prod overlay
-task firmware:clean
-task firmware:build:prod
-
-# 3. Verify Kconfig values match production
-#    (server host, HMAC secret, TLS settings)
-task firmware:menuconfig
-
-# 4. Flash
-task firmware:flash
-```
-
-**Switching back to dev:**
-
-```bash
-# 1. Re-embed the dev CA cert (if dev server IP differs)
-task certs:generate -- --ip <DEV_MACHINE_IP>
-
-# 2. Clean and rebuild with dev overlay
-task firmware:clean
-task firmware:build:dev
-
-# 3. Flash
-task firmware:flash
-```
-
-The clean step is essential when switching overlays. Without it, stale sdkconfig values from the previous build leak into the new one.
+The dev and prod profiles differ in compiled security settings only; which server a module talks to is its NVS config. To move a module between environments, rebuild with the other profile and write that environment's NVS image.
 
 ---
 
-## Full deployment workflow
-
-Here's the complete sequence for deploying a new version to production:
+## Full release
 
 ```bash
-# 0. Source ESP-IDF (needed for firmware steps)
-. ~/esp/esp-idf/export.sh
-
-# 1. Validate everything
-task ci:all
-
-# 2. Deploy the server to the Pi
-task deploy:server
-
-# 3. Build and flash production firmware
-task firmware:clean
-task firmware:build:prod
-task firmware:flash-monitor
-
-# 4. Verify in the serial monitor:
-#    - WiFi connects
-#    - Heartbeat OK with known=1
-#    - ACCESS_POINT: credential tap produces access granted/denied
-#    - PROVISIONING_CONSOLE: credential tap produces a pending_authorization result
+task release
 ```
+
+Refuses to run with uncommitted or untracked changes (so the deployed version names a real commit) and without a `DEPLOY_HOST`. Then: `ci:all`, a clean prod firmware build with the secure-build assertion, and only then `deploy:server`. A firmware failure therefore stops the release before the server changes. Flash modules afterwards with `task firmware:flash`.
 
 ---
 
 ## Rollback
 
-### Server rollback
-
-If a deployment breaks the server, roll back by deploying the previous binary. Keep the last known-good binary on the Pi:
+### Server
 
 ```bash
-# The deploy task saves the previous binary automatically.
-# To roll back manually:
-ssh pi@192.168.1.100 << 'EOF'
-  sudo systemctl stop portunus-server
-  sudo cp /opt/portunus/bin/portunus-server.prev /opt/portunus/bin/portunus-server
-  sudo systemctl start portunus-server
-EOF
+task deploy:server:rollback               # previous binary
+task deploy:server:rollback RESTORE_DB=1  # previous binary + pre-deploy DB snapshot
 ```
 
-Database migrations are forward-only — they add tables, columns, and indexes but never drop or rename. This means a rollback to an older server binary still works with a database that has had newer migrations applied. The older binary simply ignores columns and tables it doesn't know about.
+Migrations are not all additive: several drop or rebuild tables (for example `0016_drop_credentials_table`, `0018_drop_admin_user_credentials`, and the rebuilds in 0022 to 0024). An older binary on a newer schema may fail or misbehave. When the version you are rolling back ran a migration, use `RESTORE_DB=1`. That restores the snapshot taken just before that deploy and **discards every write made since** (member changes, audit log). The current files are moved aside as `*.rolled-back-<timestamp>`, not deleted.
 
-### Firmware rollback
+A failed deploy already put the previous binary back on its own, but it does not restore the database. If the failed version got as far as migrating, follow up with `RESTORE_DB=1`.
 
-There is no over-the-air rollback for the ESP32 at this stage (OTA is a planned future feature). To roll back firmware, rebuild the previous version from its git commit and reflash:
+### Firmware
+
+There is no OTA rollback yet. Rebuild the previous version from git and reflash:
 
 ```bash
 git checkout <previous-commit>
-task firmware:clean
 task firmware:build:prod
 task firmware:flash
 git checkout main
@@ -331,166 +187,41 @@ git checkout main
 
 ---
 
-## Secret management
+## Secrets and certificates
 
-Three secrets must be coordinated between the server and firmware:
-
-| Secret | Server config | Firmware config | How to generate |
+| Secret | Server | Module | Generate |
 |---|---|---|---|
-| HMAC pre-shared key | `PORTUNUS_HMAC_SECRET` env var (and `.env` for build injection) | `CONFIG_PORTUNUS_HMAC_SECRET` — injected by `task firmware:build:prod` | `openssl rand -hex 32` |
-| Credential hash secret | `PORTUNUS_CREDENTIAL_HASH_SECRET` env var | Not applicable (server-side only) | `openssl rand -hex 32` |
-| TLS CA certificate | `ca.pem` used to sign `server.pem` | Embedded in firmware at `access_module/certs/ca_cert.pem` | `task certs:generate` |
+| HMAC pre-shared key | `PORTUNUS_HMAC_SECRET` in the server env | `hmac_secret` in NVS (`nvs_config.csv`) | `openssl rand -hex 32` |
+| Credential hash secret | `PORTUNUS_CREDENTIAL_HASH_SECRET` | not used | `openssl rand -hex 32` |
+| TLS CA | signs `server.pem` | pinned: embedded from `access_module/certs/ca_cert.pem` at build | `task certs:generate` (first run only) |
 
-Admin authentication is now session-based (login/logout via the admin API or web UI). There is no shared admin API key to manage or rotate.
+Use different values per environment, and never reuse one value for both secrets. The credential hash secret is permanent once any card is enrolled. To compare a secret between places, compare SHA-256 fingerprints; never print the value. Details: [Shared secrets setup](shared_secrets_setup.md).
 
-### Per-environment secrets
-
-Dev and prod should use **different** HMAC secrets and **different** credential hash secrets. Separate HMAC secrets prevent a dev-firmware ESP32 from accidentally authenticating against the production server. Separate credential hash secrets mean the same physical card registered in dev produces a different hash in the prod database.
+**The CA is long-lived.** Every module pins it, so a new CA means reflashing every module. `task certs:generate` creates the CA on the first run, and afterwards refuses unless told which of these you mean:
 
 ```bash
-# Generate once per environment, store securely
-openssl rand -hex 32   # → dev HMAC secret
-openssl rand -hex 32   # → prod HMAC secret
-openssl rand -hex 32   # → dev credential hash secret
-openssl rand -hex 32   # → prod credential hash secret
+# New server cert from the existing CA: new IP, extra SAN, renewal. No reflash.
+task certs:generate -- --sign-only --ip <SERVER_IP> --san DNS:localhost --san IP:127.0.0.1
+
+# Deliberate CA rotation. Old material moves to certs/backup-<timestamp>/.
+task certs:generate -- --new-ca --ip <SERVER_IP>
 ```
 
-- **Local:** Set `PORTUNUS_HMAC_SECRET` and `PORTUNUS_CREDENTIAL_HASH_SECRET` in the dev machine's server environment. `PORTUNUS_HMAC_SECRET` also goes in `.env` so `task firmware:build:dev` can inject it.
-- **Prod:** Set both secrets in `/etc/portunus/portunus.env` on the Pi. `PORTUNUS_HMAC_SECRET` also goes in the repo-root `.env` so `task firmware:build:prod` can inject it into the firmware.
-
-### TLS certificates per environment
-
-If the dev machine and Pi have different IP addresses (they almost certainly do), each needs its own server certificate with the correct IP in the Subject Alternative Name. The CA can be shared (the same `ca.key` signs both), but the server cert must match the IP the ESP32 connects to.
-
-```bash
-# Generate certs for dev
-task certs:generate -- --ip <DEV_MACHINE_IP>
-# → certs/server.pem has SAN=<DEV_MACHINE_IP>
-# → access_module/certs/ca_cert.pem updated
-
-# Generate certs for prod (overwrites the above)
-task certs:generate -- --ip <PROD_PI_IP>
-# → certs/server.pem has SAN=<PROD_PI_IP>
-# → access_module/certs/ca_cert.pem updated
-# → Copy server.pem + server.key to the Pi
-```
-
-Since the cert generation script overwrites in place, you need to generate and deploy each environment's certs in sequence. If you find yourself switching frequently, consider keeping environment-specific cert directories (e.g., `certs/dev/` and `certs/prod/`) and copying the appropriate files before building.
+One CA serves every environment: give the dev machine and the Pi each their own server cert with `--sign-only` (copy `certs/server.*` away between runs, since each run replaces them and keeps the previous pair as `server.{pem,key}.<timestamp>`).
 
 ---
 
-## Taskfile reference
+## Command summary
 
-The following targets are defined in `Taskfile.yml`. The Taskfile loads `.env` automatically via `dotenv: ['.env']`, so any variable set there is available to all tasks.
-
-### Cross-compilation
-
-```yaml
-  build:server:arm64:
-    desc: Cross-compile server binary for Raspberry Pi (arm64)
-    dir: "{{.SERVER_DIR}}"
-    env:
-      GOOS: linux
-      GOARCH: arm64
-    cmds:
-      - go build -o bin/portunus-server-linux-arm64 ./cmd/portunus-server
-```
-
-### Deployment
-
-```yaml
-  deploy:server:
-    desc: Build, copy, and restart the server on the Raspberry Pi
-    deps: [build:server:arm64]
-    vars:
-      DEPLOY_HOST: '{{.DEPLOY_HOST | default "pi@192.168.1.100"}}'
-      DEPLOY_DIR: '{{.DEPLOY_DIR | default "/opt/portunus"}}'
-      DEPLOY_SERVICE: '{{.DEPLOY_SERVICE | default "portunus-server"}}'
-    cmds:
-      - echo "Deploying to {{.DEPLOY_HOST}}:{{.DEPLOY_DIR}}"
-      # Back up current binary on the Pi
-      - ssh {{.DEPLOY_HOST}} "sudo cp {{.DEPLOY_DIR}}/bin/portunus-server {{.DEPLOY_DIR}}/bin/portunus-server.prev 2>/dev/null || true"
-      # Copy new binary
-      - scp {{.SERVER_DIR}}/bin/portunus-server-linux-arm64 {{.DEPLOY_HOST}}:/tmp/portunus-server
-      # Move into place and restart
-      - ssh {{.DEPLOY_HOST}} "sudo mv /tmp/portunus-server {{.DEPLOY_DIR}}/bin/portunus-server && sudo chmod 755 {{.DEPLOY_DIR}}/bin/portunus-server && sudo systemctl restart {{.DEPLOY_SERVICE}}"
-      # Verify
-      - ssh {{.DEPLOY_HOST}} "sudo systemctl is-active {{.DEPLOY_SERVICE}}"
-      - echo "Deploy complete"
-
-  deploy:server:status:
-    desc: Check the server status on the Raspberry Pi
-    vars:
-      DEPLOY_HOST: '{{.DEPLOY_HOST | default "pi@192.168.1.100"}}'
-      DEPLOY_SERVICE: '{{.DEPLOY_SERVICE | default "portunus-server"}}'
-    cmds:
-      - ssh {{.DEPLOY_HOST}} "sudo systemctl status {{.DEPLOY_SERVICE}} --no-pager"
-
-  deploy:server:logs:
-    desc: Tail server logs on the Raspberry Pi
-    vars:
-      DEPLOY_HOST: '{{.DEPLOY_HOST | default "pi@192.168.1.100"}}'
-      DEPLOY_SERVICE: '{{.DEPLOY_SERVICE | default "portunus-server"}}'
-    cmds:
-      - ssh {{.DEPLOY_HOST}} "sudo journalctl -u {{.DEPLOY_SERVICE}} -f"
-
-  deploy:server:rollback:
-    desc: Roll back to the previous server binary on the Raspberry Pi
-    vars:
-      DEPLOY_HOST: '{{.DEPLOY_HOST | default "pi@192.168.1.100"}}'
-      DEPLOY_DIR: '{{.DEPLOY_DIR | default "/opt/portunus"}}'
-      DEPLOY_SERVICE: '{{.DEPLOY_SERVICE | default "portunus-server"}}'
-    cmds:
-      - ssh {{.DEPLOY_HOST}} "sudo systemctl stop {{.DEPLOY_SERVICE}} && sudo cp {{.DEPLOY_DIR}}/bin/portunus-server.prev {{.DEPLOY_DIR}}/bin/portunus-server && sudo systemctl start {{.DEPLOY_SERVICE}}"
-      - ssh {{.DEPLOY_HOST}} "sudo systemctl is-active {{.DEPLOY_SERVICE}}"
-      - echo "Rollback complete"
-```
-
-### Full CI check
-
-```yaml
-  ci:all:
-    desc: Full CI — server checks + proto drift + firmware compile
-    cmds:
-      - task: ci:server
-      - task: proto:check
-      - task: firmware:build
-```
-
-### Full deploy workflow
-
-```yaml
-  release:
-    desc: Full release — validate, deploy server, build prod firmware
-    cmds:
-      - task: ci:all
-      - task: deploy:server
-      - task: firmware:clean
-      - task: firmware:build:prod
-      - echo "Server deployed. Firmware built. Flash with 'task firmware:flash'"
-```
-
----
-
-## .env file
-
-The repo-root `.env` (deploy targets plus the firmware HMAC secret) is documented once in [getting_started.md › Post-Clone Setup](getting_started.md#post-clone-setup). It is gitignored and loaded automatically by the Taskfile.
-
----
-
-## Pipeline summary
-
-| Command | What it does | When to use |
-|---|---|---|
-| `task ci:all` | Validate everything (tests, lint, proto, firmware compile) | Before every commit or deploy |
-| `task build:server` | Build server for dev machine (x86_64) | Local dev testing |
-| `task build:server:arm64` | Cross-compile server for Pi (arm64) | Before deploying to Pi |
-| `task deploy:server` | Build arm64 + copy to Pi + restart service | Deploying a new server version |
-| `task deploy:server:status` | Check server status on Pi | After deploy or to diagnose issues |
-| `task deploy:server:logs` | Tail server logs on Pi | Debugging production |
-| `task deploy:server:rollback` | Revert to previous server binary on Pi | Deploy broke something |
-| `task firmware:build:dev` | Build firmware with dev settings | Testing against dev server |
-| `task firmware:build:prod` | Build firmware with prod settings | Preparing for production |
-| `task firmware:flash` | Flash firmware to connected ESP32 | After building firmware |
-| `task firmware:flash-monitor` | Flash and open serial monitor | Flash + verify in one step |
-| `task release` | Full pipeline: validate → deploy server → build prod firmware | Production release |
+| Command | What it does |
+|---|---|
+| `task ci:all` | Everything CI runs, locally |
+| `task build:server:arm64` | Cross-compile the server for the Pi |
+| `task deploy:server` | Deploy with SHA check, DB snapshot, health check, automatic binary rollback |
+| `task deploy:server:status` / `:logs` | Status and deployed version / follow the journal |
+| `task deploy:server:rollback [RESTORE_DB=1]` | Previous binary [and pre-deploy DB snapshot] |
+| `task firmware:build:prod` / `:dev` | Profile builds (prod asserts the image is deployable) |
+| `task firmware:nvs:gen` / `:nvs:flash` | Build and write the device-config NVS image |
+| `task firmware:flash-monitor` | Flash the app and open the serial monitor |
+| `task certs:generate -- ...` | First CA, `--sign-only` server cert, or `--new-ca` rotation |
+| `task release` | Clean tree only: validate, build prod firmware, deploy the server |

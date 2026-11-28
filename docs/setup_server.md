@@ -105,7 +105,7 @@ The server is configured entirely through environment variables. No config file 
 | Variable | Description | Example |
 |---|---|---|
 | `PORTUNUS_ENV` | `local`, `ci`, or `prod`. Local mode seeds the database with a default module and door on startup. Prod mode skips seeding. | `prod` |
-| `PORTUNUS_HMAC_SECRET` | Pre-shared key for HMAC-SHA256 request signing. Every device endpoint POST must include a valid `X-Portunus-Sig` header computed with this secret. Must match `CONFIG_PORTUNUS_HMAC_SECRET` in the firmware. Generate with `openssl rand -hex 32`. | `a3f1...` (64 hex chars) |
+| `PORTUNUS_HMAC_SECRET` | Pre-shared key for HMAC-SHA256 request signing. Every device endpoint POST must include a valid `X-Portunus-Sig` header computed with this secret. Must match `hmac_secret` in every module's NVS. Generate with `openssl rand -hex 32`. | `a3f1...` (64 hex chars) |
 | `PORTUNUS_CREDENTIAL_HASH_SECRET` | HMAC key used to hash credential IDs before storage. Prevents rainbow-table attacks against a stolen database. Generate with `openssl rand -hex 32`. Required in prod — server refuses to start without it. | `c9d4...` (64 hex chars) |
 | `PORTUNUS_TLS_CERT_FILE` | Path to the PEM-encoded server certificate. | `./certs/server.pem` |
 | `PORTUNUS_TLS_KEY_FILE` | Path to the PEM-encoded server private key. | `./certs/server.key` |
@@ -623,7 +623,7 @@ All server-related commands from the project `Taskfile.yml`:
 
 **"database is locked" errors** — Should not occur in normal operation because the server serializes writes through a single worker goroutine. If you see this, check for external tools (e.g. `sqlite3` CLI) holding a lock on the database file.
 
-**"missing_signature" (HTTP 401) on device requests** — `PORTUNUS_HMAC_SECRET` is set on the server but the device is not sending the `X-Portunus-Sig` header, or the secrets don't match. Verify the firmware's `CONFIG_PORTUNUS_HMAC_SECRET` matches the server's `PORTUNUS_HMAC_SECRET` exactly.
+**"missing_signature" (HTTP 401) on device requests**: `PORTUNUS_HMAC_SECRET` is set on the server but the device is not sending the `X-Portunus-Sig` header, or the secrets don't match. Verify the module's NVS `hmac_secret` matches the server's `PORTUNUS_HMAC_SECRET` exactly (compare SHA-256 fingerprints, never the values).
 
 **"unknown_module" in access responses** — The module ID in the request is not registered in the database. In local mode, `PORTUNUS_KNOWN_MODULES` or the default `door-001` seeding handles this automatically. In production, register modules via the admin API: `POST /admin/v1/modules`.
 
