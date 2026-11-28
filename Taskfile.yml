@@ -584,56 +584,63 @@ tasks:
         idf.py -C "$NET" -B "$NET/build/net" -D SDKCONFIG="$NET/build/net/sdkconfig" build
 
   # ─── Deploy ────────────────────────────────────────────────────────────────
-  # Requires SSH key-based auth to the Pi. Configure target in .env:
-  #   DEPLOY_HOST=pi@192.168.1.100
+  # SSH key auth and passwordless sudo on the Pi. Configure the target in the
+  # repo-root .env (or pass it: task deploy:server DEPLOY_HOST=user@host):
+  #   DEPLOY_HOST=pi@192.168.1.100      required, no default
   #   DEPLOY_DIR=/opt/portunus
   #   DEPLOY_SERVICE=portunus-server
+  # The steps live in scripts/deploy_server.sh (local) and
+  # scripts/deploy_remote.sh (runs on the Pi as root).
 
   deploy:server:
-    desc: Build, copy, and restart the server on the Raspberry Pi
+    desc: "Install the arm64 binary on the Pi: SHA-256 check, DB snapshot, health check, automatic binary rollback"
     deps: [build:server:arm64]
-    vars:
-      DEPLOY_HOST: '{{.DEPLOY_HOST | default "pi@192.168.1.100"}}'
+    requires:
+      vars: [DEPLOY_HOST]
+    env:
+      DEPLOY_HOST: "{{.DEPLOY_HOST}}"
       DEPLOY_DIR: '{{.DEPLOY_DIR | default "/opt/portunus"}}'
       DEPLOY_SERVICE: '{{.DEPLOY_SERVICE | default "portunus-server"}}'
     cmds:
-      - echo "Deploying to {{.DEPLOY_HOST}}:{{.DEPLOY_DIR}}"
-      # Back up current binary on the Pi
-      - ssh {{.DEPLOY_HOST}} "sudo cp {{.DEPLOY_DIR}}/bin/portunus-server {{.DEPLOY_DIR}}/bin/portunus-server.prev 2>/dev/null || true"
-      # Copy new binary
-      - scp {{.SERVER_DIR}}/bin/portunus-server-linux-arm64 {{.DEPLOY_HOST}}:/tmp/portunus-server
-      # Move into place and restart
-      - ssh {{.DEPLOY_HOST}} "sudo mv /tmp/portunus-server {{.DEPLOY_DIR}}/bin/portunus-server && sudo chmod 755 {{.DEPLOY_DIR}}/bin/portunus-server && sudo systemctl restart {{.DEPLOY_SERVICE}}"
-      # Verify
-      - ssh {{.DEPLOY_HOST}} "sudo systemctl is-active {{.DEPLOY_SERVICE}}"
-      - echo "Deploy complete"
+      - bash scripts/deploy_server.sh deploy
 
   deploy:server:status:
-    desc: Check the server status on the Raspberry Pi
-    vars:
-      DEPLOY_HOST: '{{.DEPLOY_HOST | default "pi@192.168.1.100"}}'
-      DEPLOY_SERVICE: '{{.DEPLOY_SERVICE | default "portunus-server"}}'
-    cmds:
-      - ssh {{.DEPLOY_HOST}} "sudo systemctl status {{.DEPLOY_SERVICE}} --no-pager"
-
-  deploy:server:logs:
-    desc: Tail server logs on the Raspberry Pi
-    vars:
-      DEPLOY_HOST: '{{.DEPLOY_HOST | default "pi@192.168.1.100"}}'
-      DEPLOY_SERVICE: '{{.DEPLOY_SERVICE | default "portunus-server"}}'
-    cmds:
-      - ssh {{.DEPLOY_HOST}} "sudo journalctl -u {{.DEPLOY_SERVICE}} -f"
-
-  deploy:server:rollback:
-    desc: Roll back to the previous server binary on the Raspberry Pi
-    vars:
-      DEPLOY_HOST: '{{.DEPLOY_HOST | default "pi@192.168.1.100"}}'
+    desc: Show the server status and deployed version on the Pi
+    requires:
+      vars: [DEPLOY_HOST]
+    env:
+      DEPLOY_HOST: "{{.DEPLOY_HOST}}"
       DEPLOY_DIR: '{{.DEPLOY_DIR | default "/opt/portunus"}}'
       DEPLOY_SERVICE: '{{.DEPLOY_SERVICE | default "portunus-server"}}'
     cmds:
-      - ssh {{.DEPLOY_HOST}} "sudo systemctl stop {{.DEPLOY_SERVICE}} && sudo cp {{.DEPLOY_DIR}}/bin/portunus-server.prev {{.DEPLOY_DIR}}/bin/portunus-server && sudo systemctl start {{.DEPLOY_SERVICE}}"
-      - ssh {{.DEPLOY_HOST}} "sudo systemctl is-active {{.DEPLOY_SERVICE}}"
-      - echo "Rollback complete"
+      - |
+        ssh "$DEPLOY_HOST" "sudo systemctl status $DEPLOY_SERVICE --no-pager; echo; echo deployed version: \$(cat $DEPLOY_DIR/deploy/version 2>/dev/null || echo unknown)"
+
+  deploy:server:logs:
+    desc: Tail server logs on the Pi
+    requires:
+      vars: [DEPLOY_HOST]
+    env:
+      DEPLOY_HOST: "{{.DEPLOY_HOST}}"
+      DEPLOY_DIR: '{{.DEPLOY_DIR | default "/opt/portunus"}}'
+      DEPLOY_SERVICE: '{{.DEPLOY_SERVICE | default "portunus-server"}}'
+    cmds:
+      - ssh "$DEPLOY_HOST" "sudo journalctl -u $DEPLOY_SERVICE -f"
+
+  # RESTORE_DB=1 also restores the database snapshot taken by the last deploy,
+  # discarding every write made since (members, audit log). Only needed when
+  # the version being rolled back migrated the schema.
+  deploy:server:rollback:
+    desc: "Reinstall the previous binary on the Pi (RESTORE_DB=1 also restores the pre-deploy DB snapshot)"
+    requires:
+      vars: [DEPLOY_HOST]
+    env:
+      DEPLOY_HOST: "{{.DEPLOY_HOST}}"
+      DEPLOY_DIR: '{{.DEPLOY_DIR | default "/opt/portunus"}}'
+      DEPLOY_SERVICE: '{{.DEPLOY_SERVICE | default "portunus-server"}}'
+      RESTORE_DB: '{{.RESTORE_DB | default "0"}}'
+    cmds:
+      - bash scripts/deploy_server.sh rollback
 
   # ─── CI ───────────────────────────────────────────────────────────────────
 
@@ -692,11 +699,18 @@ tasks:
       - task: firmware:compile:ci
       - task: firmware:compile:prod
 
+  # Everything is built and checked before anything is deployed, and only
+  # from a clean tree, so the deployed version names a real commit.
   release:
-    desc: Full release — validate, deploy server, build prod firmware
+    desc: "Full release from a clean commit: validate, build prod firmware, then deploy the server"
+    requires:
+      vars: [DEPLOY_HOST]
+    preconditions:
+      - sh: test -z "$(git status --porcelain)"
+        msg: "Working tree has uncommitted or untracked changes; release only from a clean commit."
     cmds:
       - task: ci:all
-      - task: deploy:server
       - task: firmware:clean
       - task: firmware:build:prod
-      - echo "Server deployed. Firmware built. Flash with 'task firmware:flash'"
+      - task: deploy:server
+      - echo "Server deployed. Prod firmware built. Flash with 'task firmware:flash'"
