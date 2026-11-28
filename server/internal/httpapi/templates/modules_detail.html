@@ -196,10 +196,8 @@
         <select id="member_uuid" name="member_uuid" required>
           <option value="">— Select member —</option>
           {{range .Members}}
-          {{if eq .Status "active"}}
-          <option value="{{.UUID}}">
-            {{.UUID}}{{if .RoleID}} ({{.RoleID}}){{end}}
-          </option>
+          {{if and (eq .Status "active") (eq .ProvisioningStatus "active")}}
+          <option value="{{.UUID}}">{{.UUID}}</option>
           {{end}}
           {{end}}
         </select>
