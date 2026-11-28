@@ -136,7 +136,7 @@ func tail(s string, n int) string {
 }
 
 // flashOf extracts the flash message and type from a redirect.
-func flashOf(t *testing.T, resp *http.Response) (dest, msg, kind string) {
+func flashOf(t testing.TB, resp *http.Response) (dest, msg, kind string) {
 	t.Helper()
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("status %d, want 303", resp.StatusCode)
