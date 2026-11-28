@@ -39,7 +39,7 @@ type harnessOptions struct {
 // harness is a full HTTP server wired the same way cmd/portunus-server/main.go
 // wires it, backed by in-memory SQLite with the real migrations applied.
 type harness struct {
-	t      *testing.T
+	t      testing.TB
 	TS     *httptest.Server
 	Conn   *sql.DB
 	Admin  *http.Cookie // bootstrapped "admin" account, must_change_pw cleared
@@ -56,7 +56,7 @@ type harness struct {
 	DeviceAuth  *service.DeviceAuthMonitor
 }
 
-func newHarness(t *testing.T, opts harnessOptions) *harness {
+func newHarness(t testing.TB, opts harnessOptions) *harness {
 	t.Helper()
 	ctx := context.Background()
 

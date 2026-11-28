@@ -82,7 +82,7 @@ func newAdminTestServer(t *testing.T) (*httptest.Server, *http.Cookie) {
 	return ts, cookie
 }
 
-func openAdminDB(t *testing.T) *sql.DB {
+func openAdminDB(t testing.TB) *sql.DB {
 	t.Helper()
 	safe := strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
 	dsn := fmt.Sprintf(
@@ -104,7 +104,7 @@ func openAdminDB(t *testing.T) *sql.DB {
 }
 
 // adminReq builds a request with a session cookie and JSON body.
-func adminReq(t *testing.T, method, url string, body any, cookie *http.Cookie) *http.Request {
+func adminReq(t testing.TB, method, url string, body any, cookie *http.Cookie) *http.Request {
 	t.Helper()
 	var b []byte
 	if body != nil {
@@ -125,7 +125,7 @@ func adminReq(t *testing.T, method, url string, body any, cookie *http.Cookie) *
 	return req
 }
 
-func do(t *testing.T, req *http.Request) *http.Response {
+func do(t testing.TB, req *http.Request) *http.Response {
 	t.Helper()
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

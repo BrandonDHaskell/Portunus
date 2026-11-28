@@ -201,6 +201,22 @@ tasks:
     cmds:
       - go mod tidy -diff
 
+  fuzz:server:
+    desc: "Fuzz the device-facing parsers, projections, replay store and device endpoints (FUZZTIME per target, default 30s)"
+    dir: "{{.SERVER_DIR}}"
+    vars:
+      FUZZTIME: '{{.FUZZTIME | default "30s"}}'
+    cmds:
+      # go test runs one fuzz target per invocation. Crashers land in the
+      # package's testdata/fuzz/; commit them so the plain test run replays them.
+      - for: [
+          "FuzzParseCredentialUID ./internal/portunus/service",
+          "FuzzHMACProjection ./internal/grpcapi",
+          "FuzzCheck ./internal/replay",
+          "FuzzDeviceEndpoints ./internal/httpapi",
+        ]
+        cmd: set -- {{.ITEM}}; go test -run '^$' -fuzz "^$1\$" -fuzztime {{.FUZZTIME}} "$2"
+
   vuln:server:
     desc: Scan for known vulnerabilities reachable from server code (govulncheck)
     dir: "{{.SERVER_DIR}}"
@@ -678,12 +694,13 @@ tasks:
         fi
 
   ci:server:
-    desc: Full server CI check (vet, format, test with race detector, boot smoke)
+    desc: Full server CI check (vet, format, test with race detector, boot smoke, fuzz)
     cmds:
       - task: vet:server
       - task: fmt:server
       - task: test:server:race
       - task: ci:server:smoke
+      - task: fuzz:server
 
   # Mirrors .github/workflows/ci.yml job for job, so a local pass predicts a
   # CI pass. Keep the two in step.
