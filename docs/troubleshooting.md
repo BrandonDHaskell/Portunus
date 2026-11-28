@@ -95,9 +95,9 @@ That script creates `certs/ca.pem` and copies it to `access_module/certs/ca_cert
 
 ---
 
-**`task firmware:build:prod` fails: `PORTUNUS_HMAC_SECRET must be set in .env`**
+**`task firmware:build:prod` fails: `... is NOT a deployable image`**
 
-The production build reads the HMAC secret from the repo-root `.env`. Create it as described in [getting_started.md › Post-Clone Setup](getting_started.md#post-clone-setup), using the same value as `PORTUNUS_HMAC_SECRET` on the server.
+`scripts/assert_secure_build.sh` found an insecure setting in the compiled `build/config/sdkconfig.h` (it lists which: dev mode, skipped cert verification, TLS or HMAC off, CA not pinned). The usual cause is a value carried over in `access_module/sdkconfig.defaults.local`, the saved per-device settings. Remove the offending line there and rebuild. The prod overlay sets every security option, so none of them belongs in `sdkconfig.defaults.local`.
 
 ---
 
@@ -234,21 +234,17 @@ See [Register an access module](setup_server.md#register-an-access-module). In d
 
 The server has `PORTUNUS_HMAC_SECRET` set but the device request is missing or has an invalid `X-Portunus-Sig` header. Check:
 
-1. `PORTUNUS_HMAC_ENABLED` is set to `y` in firmware `menuconfig`.
-2. `CONFIG_PORTUNUS_HMAC_SECRET` in the firmware exactly matches `PORTUNUS_HMAC_SECRET` on the server — including case, no leading or trailing whitespace.
-3. For `firmware:build:prod`, the secret comes from the `.env` file, not `menuconfig` directly. Confirm the `.env` value matches the server.
+1. The firmware was built with `task firmware:build:prod` (which requires `PORTUNUS_HMAC_ENABLED`).
+2. The module's NVS `hmac_secret` exactly matches `PORTUNUS_HMAC_SECRET` on the server, including case and with no leading or trailing whitespace. Compare SHA-256 fingerprints of the two values rather than printing them.
+3. NVS was rewritten after the last secret change (`task firmware:nvs:gen` + `task firmware:nvs:flash`). Flashing the app alone does not update it.
 
 ---
 
 **TLS connection fails / `mbedtls` errors in the monitor**
 
-1. **Custom CA mismatch** — the CA cert embedded in the firmware does not match the CA that signed the server's certificate. Regenerate both together:
-   ```bash
-   task certs:generate -- --ip <SERVER_IP>
-   ```
-   Then rebuild and reflash the firmware so the new `access_module/certs/ca_cert.pem` is embedded.
+1. **Custom CA mismatch**: the CA cert embedded in the firmware does not match the CA that signed the server's certificate. If `certs/ca.pem` is still the CA the server cert came from, rebuild and reflash the firmware so `access_module/certs/ca_cert.pem` is embedded again. If the server cert was signed by a different CA, reissue it from the CA the modules pin (`task certs:generate -- --sign-only --ip <SERVER_IP>`) rather than rotating the CA, which would mean reflashing every module.
 
-2. **IP address mismatch** — the server certificate was generated with a different IP than the one the firmware is connecting to. The IP used in `task certs:generate -- --ip <IP>` must match `CONFIG_PORTUNUS_SERVER_HOST` in the firmware.
+2. **IP address mismatch**: the server certificate was generated with a different IP than the one the firmware is connecting to. The server cert's SAN must cover the module's NVS `server_host`. Reissue with `task certs:generate -- --sign-only --ip <IP>` (add `--san` entries for other addresses); no reflash is needed.
 
 3. **Using skip-verify in production** — `PORTUNUS_TLS_SKIP_VERIFY=y` disables certificate validation. This is only for temporary development testing. Set it to `n` for any real deployment.
 

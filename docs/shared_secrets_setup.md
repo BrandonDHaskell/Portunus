@@ -160,34 +160,15 @@ The current server uses the **same TLS certificate and key** for both:
 
 ### 2.4 Current firmware TLS options
 
-Open firmware configuration:
+The TLS options are Kconfig, under **Portunus Configuration > Security Configuration**, and the prod profile sets them for you:
 
-```bash
-cd access_module
-idf.py menuconfig
-```
-
-Navigate to:
-
-```text
-Portunus Configuration
-  Security Configuration
-```
-
-Relevant current options are:
-
-| Option | Purpose | Recommended value for LAN deployment |
+| Option | Purpose | Prod profile |
 |---|---|---|
-| `CONFIG_PORTUNUS_USE_TLS` | Enables HTTPS/TLS | `y` |
-| `CONFIG_PORTUNUS_TLS_SERVER_PORT` | HTTPS port | `8443` |
+| `CONFIG_PORTUNUS_USE_TLS` | Enables TLS | `y` |
 | `CONFIG_PORTUNUS_TLS_SKIP_VERIFY` | Disables certificate validation | `n` |
 | `CONFIG_PORTUNUS_TLS_USE_CUSTOM_CA` | Pins to `access_module/certs/ca_cert.pem` | `y` |
 
-For LAN deployments using the repo-generated CA, the correct secure setup is:
-
-- TLS enabled
-- skip verify disabled
-- custom CA enabled
+Build with `task firmware:build:prod`: it applies `sdkconfig.defaults.prod` and then fails if the compiled image has TLS off, skip-verify on, or no pinned CA. The server address and port are not Kconfig options; they are NVS keys (section 4).
 
 ### 2.5 Public CA certificates
 
@@ -284,82 +265,31 @@ Keep this value secret and consistent: changing it invalidates all stored creden
 
 ### 3.4 Firmware HMAC options
 
-In `menuconfig`, navigate to:
+`CONFIG_PORTUNUS_HMAC_ENABLED` (Kconfig, set to `y` by the prod profile) turns signing on. The secret itself is **not** a Kconfig option: it is the `hmac_secret` key in the module's NVS namespace, written from `access_module/nvs_config.csv` with `task firmware:nvs:gen` and `task firmware:nvs:flash` (see [Firmware setup: Device configuration and secrets](setup_firmware.md#device-configuration-and-secrets-nvs)).
 
-```text
-Portunus Configuration
-  Security Configuration
-```
-
-Relevant current options are:
-
-| Option | Purpose | Recommended value |
-|---|---|---|
-| `CONFIG_PORTUNUS_HMAC_ENABLED` | Enables HMAC request signing | `y` |
-| `CONFIG_PORTUNUS_HMAC_SECRET` | Shared secret | same value as server |
-
-The secret configured in firmware must exactly match:
-
-```text
-PORTUNUS_HMAC_SECRET
-```
-
-on the server.
+It must exactly match `PORTUNUS_HMAC_SECRET` on the server. To check, compare SHA-256 fingerprints of the two values; never print the secret.
 
 ### 3.5 Storage caveat
 
-In the current snapshot, `CONFIG_PORTUNUS_HMAC_SECRET` is compiled into the
-firmware image and stored in flash.
+The secret is stored in plain text in the module's NVS partition, and in `nvs_config.csv` and `build/nvs.bin` on the dev machine.
 
 That means:
 
-- firmware binaries should be treated as sensitive
-- `sdkconfig` should not be committed with real secrets in it
-- the current repo does **not** provide a finished secure provisioning flow for
-  injecting secrets per device at manufacturing time
-
----
+- `nvs_config.csv` and `build/nvs.bin` are secrets: gitignored, never shared, never printed or hex-dumped
+- firmware images contain no secret, but anyone with physical access to a module can read its NVS unless flash encryption is enabled
+- the repo does **not** provide a finished per-device provisioning flow; every module shares one HMAC secret
 
 ## 4. Current network and transport settings that must match
 
-Besides TLS and HMAC, the module still needs the correct server location.
+Current firmware always talks gRPC over TLS; there is no transport option. Where to connect comes from NVS, not Kconfig:
 
-Under:
-
-```text
-Portunus Configuration
-  Network Configuration
-```
-
-set:
-
-| Option | Purpose | Example |
+| NVS key | Purpose | Example |
 |---|---|---|
-| `CONFIG_PORTUNUS_SERVER_HOST` | Server IP or hostname | `192.168.1.100` |
-| `CONFIG_PORTUNUS_SERVER_PORT` | HTTP port when TLS is disabled | `8080` |
-| `CONFIG_PORTUNUS_SERVER_REQUEST_TIMEOUT_MS` | request timeout | `5000` |
+| `server_host` | Server IP or hostname; must be covered by the server cert's SAN | `192.168.1.100` |
+| `grpc_port` | Server gRPC port; must match `PORTUNUS_GRPC_ADDR` | `50051` |
+| `module_id` | Must match the module registered on the server | `front-door` |
 
-If TLS is enabled, the module uses `CONFIG_PORTUNUS_TLS_SERVER_PORT` for the
-HTTP/protobuf path.
-
-If gRPC is enabled, also configure under:
-
-```text
-Portunus Configuration
-  Transport Configuration
-```
-
-| Option | Purpose | Example |
-|---|---|---|
-| `CONFIG_PORTUNUS_USE_GRPC` | Use gRPC instead of HTTP/protobuf | `y` or `n` |
-| `CONFIG_PORTUNUS_GRPC_SERVER_PORT` | gRPC server port | `50051` |
-
-Important current behavior:
-
-- `CONFIG_PORTUNUS_USE_GRPC` depends on TLS being enabled
-- the server must expose `PORTUNUS_GRPC_ADDR` when gRPC is enabled in the
-  firmware
-- HTTP and gRPC can coexist on different ports
+Request timeouts and reconnect backoff are Kconfig, under **Network Configuration**. The server must expose `PORTUNUS_GRPC_ADDR`; it serves gRPC and the HTTPS admin API on different ports with the same certificate.
 
 ---
 
@@ -400,34 +330,21 @@ export PORTUNUS_CREDENTIAL_HASH_SECRET="<your-64-char-hex-secret>"
 export PORTUNUS_GRPC_ADDR=:50051
 ```
 
-### 5.4 Configure the firmware
+### 5.4 Configure the module
 
-In `idf.py menuconfig`, set at minimum:
-
-```text
-CONFIG_PORTUNUS_USE_TLS=y
-CONFIG_PORTUNUS_TLS_SERVER_PORT=8443
-CONFIG_PORTUNUS_TLS_SKIP_VERIFY=n
-CONFIG_PORTUNUS_TLS_USE_CUSTOM_CA=y
-CONFIG_PORTUNUS_HMAC_ENABLED=y
-CONFIG_PORTUNUS_HMAC_SECRET="<same secret as server>"
-CONFIG_PORTUNUS_SERVER_HOST="192.168.1.100"
+```bash
+cp access_module/nvs_config.example.csv access_module/nvs_config.csv
 ```
 
-If using gRPC, also set:
-
-```text
-CONFIG_PORTUNUS_USE_GRPC=y
-CONFIG_PORTUNUS_GRPC_SERVER_PORT=50051
-```
+Fill in `module_id`, `wifi_ssid`, `wifi_psk`, `server_host` (`192.168.1.100`), `grpc_port` (`50051`) and `hmac_secret` (the server's secret). Set hardware options (variant, pins) with `task firmware:menuconfig` if needed; security options come from the prod profile.
 
 ### 5.5 Build and flash
 
 ```bash
-cd access_module
-idf.py build
-idf.py -p /dev/ttyACM0 flash
-idf.py monitor
+task firmware:build:prod     # fails if the image is not deployable
+task firmware:nvs:gen        # nvs_config.csv -> build/nvs.bin
+task firmware:nvs:flash
+task firmware:flash-monitor
 ```
 
 ---
@@ -436,26 +353,23 @@ idf.py monitor
 
 ### 6.1 Rotating the HMAC secret
 
-To rotate the HMAC secret in the current implementation:
-
 1. generate a new secret
-2. update `PORTUNUS_HMAC_SECRET` on the server
-3. update `CONFIG_PORTUNUS_HMAC_SECRET` in each module
-4. rebuild and reflash each device
+2. update `PORTUNUS_HMAC_SECRET` on the server and restart it
+3. update `hmac_secret` in each module's `nvs_config.csv`, then `task firmware:nvs:gen` and `task firmware:nvs:flash` (no app rebuild needed)
 
-Until a device is reflashed, it will fail HMAC verification.
+Every module whose NVS has not been rewritten fails HMAC verification from the moment the server restarts, and shows up as a device auth failure on the admin health page.
 
-### 6.2 Rotating the TLS certificate
+### 6.2 Renewing or reissuing the TLS certificate
 
-For the repo’s private-CA model:
+For the repo's private-CA model, keep the CA and reissue only the server certificate:
 
-- regenerate the certs with `task certs:generate`
-- restart the server with the new `server.pem` and `server.key`
-- reflash firmware only if the CA changed and therefore
-  `access_module/certs/ca_cert.pem` changed
+```bash
+task certs:generate -- --sign-only --ip 192.168.1.100
+```
 
-If only the server leaf certificate changes but it is still signed by the same
-CA, the existing firmware CA pin remains valid.
+Install the new `server.pem` and `server.key` on the server and restart it. The modules' CA pin stays valid, so no reflash is needed.
+
+Rotating the CA itself (`--new-ca`) changes `access_module/certs/ca_cert.pem`: every module must then be rebuilt and reflashed, and modules still pinning the old CA cannot connect until they are. `task certs:generate` refuses to replace an existing CA without that flag.
 
 ---
 
@@ -469,8 +383,9 @@ CA, the existing firmware CA pin remains valid.
 - HMAC signing in firmware and verification in the Go server
 - keyed HMAC-SHA256 credential hashing on the server (`PORTUNUS_CREDENTIAL_HASH_SECRET`)
 - on-device SHA-256 hashing of credentials in PROVISIONING_CONSOLE firmware before transmission
-- optional gRPC transport using the same trust material
-- certificate generation script in the repo
+- gRPC transport (the only one current firmware uses) with the same trust material
+- certificate generation script that guards the CA (`--sign-only` / `--new-ca`)
+- device identity and HMAC secret in NVS, not in the firmware image
 - `sdkconfig.defaults`, `sdkconfig.defaults.dev`, `sdkconfig.defaults.prod`, and `sdkconfig.defaults.ci` overlay files committed in the repo
 
 ### Not a finished repo workflow yet
@@ -494,7 +409,7 @@ Firmware:
 - `CONFIG_PORTUNUS_HMAC_ENABLED=y`
 - a fresh 32-byte HMAC secret generated with OpenSSL
 - repo-generated CA and server cert for LAN use
-- optional gRPC only after confirming `PORTUNUS_GRPC_ADDR` is active on the server
+- `PORTUNUS_GRPC_ADDR` active on the server (the firmware is gRPC-only)
 
 Server:
 

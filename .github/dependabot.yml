@@ -1,0 +1,27 @@
+version: 2
+updates:
+  # Keeps the SHA-pinned actions in ci.yml current (the trailing version
+  # comment is updated along with the SHA).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Server Go modules, including the protoc plugins pinned as go.mod tool
+  # directives. A plugin bump changes generated code: run task proto:gen on
+  # the Dependabot branch and commit the result, or proto drift fails.
+  - package-ecosystem: gomod
+    directory: /server
+    schedule:
+      interval: weekly
+    groups:
+      go-minor-patch:
+        update-types: [minor, patch]
+
+  # The espressif/idf container image in ci.yml is pinned by digest and is
+  # not covered here (Dependabot does not update workflow container images).
+  # Bump it by hand when moving ESP-IDF, together with the version in the
+  # setup docs.

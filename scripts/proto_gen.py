@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
 """Regenerate protobuf code for the Portunus server (Go) and firmware (Nanopb).
 
-Cross-platform replacement for the shell-based protoc / nanopb_generator
-invocations.  Validates that required tools are installed before running,
-and reports clear errors when they are not.
-
 Usage:
     python scripts/proto_gen.py              # generate both Go and Nanopb
     python scripts/proto_gen.py --go         # generate Go stubs only
@@ -12,273 +8,219 @@ Usage:
     python scripts/proto_gen.py --check      # generate both, then fail if
                                              # output differs from committed
 
-Must be run from the project root (the directory containing proto/).
+Tool versions are pinned so local runs and CI produce identical output:
+  - protoc-gen-go / protoc-gen-go-grpc: `tool` directives in server/go.mod,
+    built from the module here (nothing needs to be on PATH), with the Go
+    toolchain go.mod names. The plugins gofmt their output with the go/printer
+    of whichever Go built them, and its comment layout changes between
+    releases (1.27 differs from 1.25), so the toolchain is part of the pin.
+  - protoc: must match the version recorded in the committed Go stubs.
+  - nanopb: the version CI installs (.github/workflows/ci.yml).
 
 Exit codes:
-    0 — generation succeeded (and --check found no drift)
-    1 — generation failed or a required tool is missing
-    2 — --check found uncommitted differences
+    0  generation succeeded (and --check found no drift)
+    1  generation failed or a required tool is missing or the wrong version
+    2  --check found differences from the committed files
 """
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
-# ── Project layout (relative to project root) ──────────────────────────────
+PROTO_DIR = Path("proto")
+PROTO_FILE = PROTO_DIR / "portunus" / "v1" / "portunus.proto"
+NANOPB_OPTIONS = PROTO_DIR / "nanopb" / "portunus.options"
 
-PROTO_DIR       = Path("proto")
-PROTO_FILE      = PROTO_DIR / "portunus" / "v1" / "portunus.proto"
-NANOPB_OPTIONS  = PROTO_DIR / "nanopb" / "portunus.options"
+SERVER_DIR = Path("server")
+GO_OUT_DIR = SERVER_DIR / "api"
+GO_STUB = GO_OUT_DIR / "portunus" / "v1" / "portunus.pb.go"
+# Both generators mirror the proto package path (portunus/v1/) under this dir.
+NANOPB_OUT_DIR = Path("access_module") / "components" / "portunus_proto"
 
-GO_OUT_DIR      = Path("server") / "api"
-# Root of the IDF component that houses the generated Nanopb files.
-# grpc_tools.protoc reproduces the proto package path under this dir;
-# nanopb_generator CLI writes files flat, so it targets the leaf dir instead.
-NANOPB_COMPONENT_DIR = Path("access_module") / "components" / "portunus_proto"
-NANOPB_GENERATED_DIR = NANOPB_COMPONENT_DIR / "portunus" / "v1"
-
-
-# ── Tool discovery ──────────────────────────────────────────────────────────
-
-def find_tool(name: str) -> str | None:
-    """Return the full path to a tool, or None if not found."""
-    return shutil.which(name)
+GO_PLUGINS = {
+    "protoc-gen-go": "google.golang.org/protobuf/cmd/protoc-gen-go",
+    "protoc-gen-go-grpc": "google.golang.org/grpc/cmd/protoc-gen-go-grpc",
+}
 
 
-def require_tool(name: str, install_hint: str) -> str:
-    """Return the tool path or exit with an actionable error message."""
-    path = find_tool(name)
-    if path is None:
-        print(f"error: {name!r} not found on PATH", file=sys.stderr)
-        print(f"       install: {install_hint}", file=sys.stderr)
-        sys.exit(1)
-    return path
-
-
-def find_nanopb_generator() -> list[str]:
-    """Resolve the nanopb generator command.
-
-    Nanopb can be installed in several ways:
-      1. Standalone CLI:        nanopb_generator
-      2. Python module (pip):   python -m grpc_tools.protoc --nanopb_out=...
-      3. ESP-IDF managed component (build-time only, not usable here)
-
-    We prefer (1) if available, fall back to (2).
-    Checks the running interpreter's bin/ directory first so that venv-local
-    installs (e.g. the ESP-IDF venv) are found even when not on PATH.
-    """
-    # Check beside the running interpreter before searching PATH — handles
-    # venv installs (e.g. ESP-IDF) where the venv bin/ is not on PATH.
-    venv_bin = Path(sys.executable).parent
-    venv_nanopb = venv_bin / "nanopb_generator"
-    if venv_nanopb.exists():
-        return [str(venv_nanopb)]
-
-    if find_tool("nanopb_generator") is not None:
-        return ["nanopb_generator"]
-
-    # Try the Python module path.
-    python = sys.executable
-    result = subprocess.run(
-        [python, "-c", "import grpc_tools.protoc"],
-        capture_output=True,
-    )
-    if result.returncode == 0:
-        return [python, "-m", "grpc_tools.protoc"]
-
-    print(
-        "error: nanopb generator not found.\n"
-        "       Install one of:\n"
-        "         pip install nanopb           (provides nanopb_generator CLI)\n"
-        "         pip install grpcio-tools     (provides grpc_tools.protoc)\n"
-        "       Or install nanopb as an ESP-IDF managed component.",
-        file=sys.stderr,
-    )
+def fail(msg: str) -> None:
+    print(f"error: {msg}", file=sys.stderr)
     sys.exit(1)
 
 
-# ── Generation commands ─────────────────────────────────────────────────────
+def require_tool(name: str, install_hint: str) -> str:
+    path = shutil.which(name)
+    if path is None:
+        fail(f"{name!r} not found on PATH\n       install: {install_hint}")
+    return path
 
-def generate_go(project_root: Path) -> bool:
-    """Generate Go protobuf + gRPC stubs.  Returns True on success."""
-    protoc = require_tool(
-        "protoc",
-        "https://github.com/protocolbuffers/protobuf/releases",
-    )
-    require_tool(
-        "protoc-gen-go",
-        "go install google.golang.org/protobuf/cmd/protoc-gen-go@latest",
-    )
-    require_tool(
-        "protoc-gen-go-grpc",
-        "go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest",
-    )
 
-    proto_dir  = project_root / PROTO_DIR
-    proto_file = project_root / PROTO_FILE
-    go_out     = project_root / GO_OUT_DIR
+def run(cmd: list[str], what: str, cwd: Path | None = None,
+        env: dict[str, str] | None = None) -> bool:
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, env=env)
+    if result.returncode != 0:
+        print(f"error: {what} failed:\n{result.stderr}", file=sys.stderr)
+        return False
+    if result.stderr:
+        print(result.stderr, end="")
+    return True
 
+
+def check_protoc_version(protoc: str, project_root: Path) -> None:
+    """Fail early when protoc differs from the version in the committed stubs.
+
+    protoc-gen-go writes the protoc version into every generated file, so a
+    mismatch shows up as drift on every line header rather than a clear error.
+    """
+    stub = project_root / GO_STUB
+    if not stub.exists():
+        return
+    m = re.search(r"^//\s+protoc\s+v(\S+)$", stub.read_text(), re.MULTILINE)
+    if m is None:
+        return
+    want = m.group(1)
+    out = subprocess.run([protoc, "--version"], capture_output=True, text=True)
+    have = out.stdout.strip().removeprefix("libprotoc ")
+    if have != want:
+        fail(
+            f"protoc {have} does not match {want}, the version that generated "
+            f"the committed stubs.\n       Install protoc {want}, or regenerate "
+            "deliberately and update CI to the same version."
+        )
+
+
+def go_toolchain(project_root: Path) -> str:
+    """The toolchain go.mod names (toolchain directive, else go directive)."""
+    text = (project_root / SERVER_DIR / "go.mod").read_text()
+    m = re.search(r"^toolchain\s+(go\S+)$", text, re.MULTILINE)
+    if m:
+        return m.group(1)
+    m = re.search(r"^go\s+(\S+)$", text, re.MULTILINE)
+    if m is None:
+        fail("no go directive in server/go.mod")
+    return f"go{m.group(1)}"
+
+
+def generate_go(project_root: Path, plugin_dir: Path) -> bool:
+    protoc = require_tool("protoc", "https://github.com/protocolbuffers/protobuf/releases")
+    check_protoc_version(protoc, project_root)
+    require_tool("go", "https://go.dev/dl/")
+
+    toolchain = go_toolchain(project_root)
+    env = {**os.environ, "GOTOOLCHAIN": toolchain}
+    plugin_args = []
+    for name, pkg in GO_PLUGINS.items():
+        exe = plugin_dir / name
+        if not run(["go", "build", "-o", str(exe), pkg], f"building {name} with {toolchain}",
+                   cwd=project_root / SERVER_DIR, env=env):
+            return False
+        plugin_args.append(f"--plugin={name}={exe}")
+
+    go_out = project_root / GO_OUT_DIR
     cmd = [
         protoc,
-        f"-I{proto_dir}",
+        *plugin_args,
+        f"-I{project_root / PROTO_DIR}",
         f"--go_out={go_out}",
         "--go_opt=paths=source_relative",
         f"--go-grpc_out={go_out}",
         "--go-grpc_opt=paths=source_relative",
-        str(proto_file),
+        str(project_root / PROTO_FILE),
     ]
-
     print(f"[proto:go] generating → {go_out}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
-
-    if result.returncode != 0:
-        print(f"error: protoc (Go) failed:\n{result.stderr}", file=sys.stderr)
+    if not run(cmd, "protoc (Go)"):
         return False
-
-    if result.stderr:
-        print(result.stderr, end="")
-
     print("[proto:go] done")
     return True
 
 
+def find_nanopb_generator() -> str:
+    # The interpreter's own bin/ first: a venv install (e.g. the ESP-IDF venv)
+    # is often not on PATH.
+    beside = Path(sys.executable).parent / "nanopb_generator"
+    if beside.exists():
+        return str(beside)
+    on_path = shutil.which("nanopb_generator")
+    if on_path is None:
+        fail("nanopb_generator not found\n"
+             "       install: pip install nanopb==<version pinned in .github/workflows/ci.yml>")
+    return on_path
+
+
 def generate_nanopb(project_root: Path) -> bool:
-    """Generate Nanopb C stubs for ESP32.  Returns True on success."""
-    nanopb_cmd = find_nanopb_generator()
-
-    proto_dir      = project_root / PROTO_DIR
-    proto_file     = project_root / PROTO_FILE
-    nanopb_options = project_root / NANOPB_OPTIONS
-
-    # nanopb_generator CLI and grpc_tools.protoc have different invocations.
-    # nanopb_cmd[-1] may be a bare name or a full path, so compare by basename.
-    if Path(nanopb_cmd[-1]).name == "nanopb_generator":
-        # nanopb_generator mirrors the proto package path under the output dir
-        # (portunus/v1/portunus.pb.*), so point at the component root — same
-        # as grpc_tools.protoc.  The old assumption that it wrote files "flat"
-        # was incorrect; using the leaf dir caused a doubled portunus/v1/ path.
-        nanopb_out = project_root / NANOPB_COMPONENT_DIR
-        nanopb_out.mkdir(parents=True, exist_ok=True)
-        cmd = [
-            *nanopb_cmd,
-            f"-I{proto_dir}",
-            f"-D{nanopb_out}",
-            f"-f{nanopb_options}",
-            str(proto_file),
-        ]
-    else:
-        # grpc_tools.protoc mirrors the proto package path under the output dir
-        # (portunus/v1/portunus.pb.*), so point at the component root.
-        nanopb_out = project_root / NANOPB_COMPONENT_DIR
-        cmd = [
-            *nanopb_cmd,
-            f"--proto_path={proto_dir}",
-            f"--nanopb_out=--options-path={nanopb_options}:{nanopb_out}",
-            str(proto_file),
-        ]
-
+    nanopb_out = project_root / NANOPB_OUT_DIR
+    nanopb_out.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        find_nanopb_generator(),
+        f"-I{project_root / PROTO_DIR}",
+        f"-D{nanopb_out}",
+        f"-f{project_root / NANOPB_OPTIONS}",
+        str(project_root / PROTO_FILE),
+    ]
     print(f"[proto:nanopb] generating → {nanopb_out}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
-
-    if result.returncode != 0:
-        print(
-            f"error: nanopb generation failed:\n{result.stderr}",
-            file=sys.stderr,
-        )
+    if not run(cmd, "nanopb generation"):
         return False
-
-    if result.stderr:
-        print(result.stderr, end="")
-
     print("[proto:nanopb] done")
     return True
 
 
 def check_drift(project_root: Path) -> bool:
-    """Return True if generated files match what's committed in git."""
-    git = find_tool("git")
-    if git is None:
-        print("warning: git not found, skipping drift check", file=sys.stderr)
-        return True
+    """Return True if generated files match what's committed in git.
 
-    paths = [
-        str(project_root / GO_OUT_DIR),
-        str(project_root / NANOPB_COMPONENT_DIR),
-    ]
+    git status (not git diff) so a newly generated, untracked file counts as
+    drift too.
+    """
+    git = require_tool("git", "apt install git")
+    paths = [str(project_root / GO_OUT_DIR), str(project_root / NANOPB_OUT_DIR)]
     result = subprocess.run(
-        [git, "diff", "--exit-code", *paths],
-        capture_output=True,
-        text=True,
+        [git, "status", "--porcelain", "--untracked-files=all", "--", *paths],
+        capture_output=True, text=True, cwd=project_root,
     )
-
     if result.returncode != 0:
+        fail(f"git status failed:\n{result.stderr}")
+    if result.stdout.strip():
         print(
             "\nerror: generated protobuf code differs from committed files.\n"
             "       Run 'task proto:gen' and commit the changes.\n",
             file=sys.stderr,
         )
-        if result.stdout:
-            print(result.stdout)
+        print(result.stdout)
+        subprocess.run([git, "--no-pager", "diff", "--", *paths], cwd=project_root)
         return False
-
     print("[proto:check] generated code is up to date")
     return True
 
 
-# ── CLI ─────────────────────────────────────────────────────────────────────
-
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate protobuf code for Portunus (Go + Nanopb).",
     )
-    parser.add_argument(
-        "--go", action="store_true",
-        help="Generate Go stubs only",
-    )
-    parser.add_argument(
-        "--nanopb", action="store_true",
-        help="Generate Nanopb C stubs only",
-    )
-    parser.add_argument(
-        "--check", action="store_true",
-        help="After generating, fail if output differs from committed files",
-    )
+    parser.add_argument("--go", action="store_true", help="Generate Go stubs only")
+    parser.add_argument("--nanopb", action="store_true", help="Generate Nanopb C stubs only")
+    parser.add_argument("--check", action="store_true",
+                        help="After generating, fail if output differs from committed files")
     args = parser.parse_args()
 
-    # Default: generate both if neither --go nor --nanopb specified.
-    gen_go     = args.go or (not args.go and not args.nanopb)
-    gen_nanopb = args.nanopb or (not args.go and not args.nanopb)
-
-    # Resolve project root: the script lives in <root>/scripts/.
-    script_dir   = Path(__file__).resolve().parent
-    project_root = script_dir.parent
-
-    # Validate that we're in the right place.
+    both = not args.go and not args.nanopb
+    project_root = Path(__file__).resolve().parent.parent
     if not (project_root / PROTO_FILE).exists():
-        print(
-            f"error: cannot find {PROTO_FILE} relative to {project_root}\n"
-            f"       run this script from the project root or from scripts/",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        fail(f"cannot find {PROTO_FILE} under {project_root}")
 
     ok = True
-
-    if gen_go:
-        ok = generate_go(project_root) and ok
-
-    if gen_nanopb:
+    if args.go or both:
+        with tempfile.TemporaryDirectory() as plugin_dir:
+            ok = generate_go(project_root, Path(plugin_dir)) and ok
+    if args.nanopb or both:
         ok = generate_nanopb(project_root) and ok
-
     if not ok:
         sys.exit(1)
-
-    if args.check:
-        if not check_drift(project_root):
-            sys.exit(2)
+    if args.check and not check_drift(project_root):
+        sys.exit(2)
 
 
 if __name__ == "__main__":

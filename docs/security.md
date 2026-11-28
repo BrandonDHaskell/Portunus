@@ -110,11 +110,11 @@ In this mode, the firmware validates the server certificate against a CA certifi
 access_module/certs/ca_cert.pem
 ```
 
-The repo includes `scripts/generate_certs.sh`, which:
+The repo includes `scripts/generate_certs.sh` (`task certs:generate`), which:
 
-- creates a private CA
-- creates a server certificate signed by that CA
-- copies the CA certificate into `access_module/certs/ca_cert.pem`
+- creates a private CA on the first run and copies its certificate into `access_module/certs/ca_cert.pem`
+- creates a server certificate signed by that CA, verified against the CA and the server IP before it replaces anything
+- refuses to replace an existing CA unless given `--new-ca` (every module pins the CA, so rotation means reflashing all of them); `--sign-only` issues a new server cert from the existing CA
 
 ### 2. Mozilla CA bundle
 
@@ -480,8 +480,9 @@ For the current codebase, the strongest practical setup is:
 - keep `TLS_SKIP_VERIFY` disabled
 - use `TLS_USE_CUSTOM_CA` with a generated private CA for LAN deployment
 - enable HMAC signing
-- ensure `CONFIG_PORTUNUS_HMAC_SECRET` exactly matches the server secret
-- treat firmware binaries and config outputs as sensitive artifacts
+- ensure the module's NVS `hmac_secret` exactly matches the server secret (compare SHA-256 fingerprints, never the values)
+- treat `nvs_config.csv` and `build/nvs.bin` as secrets: they hold the HMAC secret in plain text
+- build with `task firmware:build:prod`, which fails if the compiled image is not deployable
 
 This is the best match to the project’s current intended security posture.
 

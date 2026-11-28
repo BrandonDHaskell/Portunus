@@ -85,7 +85,7 @@ ACCESS_POINT runtime flow:
 
 ### Server
 
-Requires Go 1.24+ and [Task](https://taskfile.dev).
+Requires Go 1.26+ and [Task](https://taskfile.dev).
 
 ```bash
 git clone https://github.com/BrandonDHaskell/Portunus.git
@@ -168,12 +168,10 @@ Portunus/
 ├── scripts/
 │   ├── generate_certs.sh      Private CA + server TLS cert generation
 │   ├── proto_gen.py           Protobuf code generation (Go + Nanopb)
-│   ├── check_fmt.py           Go format checker
-│   └── clean.py               Cross-platform artifact cleanup
+│   └── hw_test.py             On-target hardware test runner (bench board)
 │
 ├── docs/                      Project documentation
-├── Taskfile.yml               Build, test, lint, deploy task runner
-└── project_plan.md            Phased development plan and design rationale
+└── Taskfile.yml               Build, test, lint, deploy task runner
 ```
 
 ---
@@ -185,7 +183,7 @@ Portunus/
 | [Getting started](docs/getting_started.md) | End-to-end setup sequence for new developers — dev and production paths |
 | [Server setup](docs/setup_server.md) | Install dependencies, configure, run, and deploy the Go server |
 | [Firmware setup](docs/setup_firmware.md) | Install ESP-IDF, wire hardware, configure Kconfig, build and flash |
-| [CI/CD pipeline](docs/ci_cd_pipeline.md) | Local build/test/deploy pipeline, cross-compilation, deployment to Raspberry Pi |
+| [CI/CD pipeline](docs/ci_cd_pipeline.md) | GitHub Actions CI, `task ci:all`, cross-compilation, deploy and rollback on the Raspberry Pi |
 | [Architecture](docs/architecture.md) | System design, firmware layering, server structure, event bus, data flow |
 | [Database](docs/database.md) | SQLite schema, migrations, write model, useful queries |
 | [Security](docs/security.md) | Threat model, defense layers, TLS/HMAC details, hardening checklist |

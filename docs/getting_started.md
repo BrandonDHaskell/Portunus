@@ -31,7 +31,7 @@ Individual hardware features can be disabled in `menuconfig` if you want to benc
 
 | Tool | Purpose | Install guide |
 |---|---|---|
-| Go 1.24+ | Build and run the server | [setup_server.md — Install Go](setup_server.md#install-go) |
+| Go 1.26+ | Build and run the server | [setup_server.md — Install Go](setup_server.md#install-go) |
 | Task 3.x | Build runner used throughout both setups | [setup_firmware.md — Install Task](setup_firmware.md#install-task) |
 | ESP-IDF 5.x | ESP32 toolchain (2–5 GB, 10–30 min install) | [setup_firmware.md — Install ESP-IDF](setup_firmware.md#install-esp-idf) |
 | OpenSSL | TLS certificate generation (production) | Usually pre-installed on Debian |
@@ -57,7 +57,7 @@ Follow [Install Go](setup_server.md#install-go) and [Install Task](setup_server.
 Verify:
 
 ```bash
-go version    # should print go1.24 or newer
+go version    # should print go1.26 or newer
 task --version
 ```
 
@@ -164,8 +164,8 @@ A response of `"known": true` confirms the module is communicating with the serv
 A clone does not contain everything you need to run Portunus. What is missing falls into three buckets:
 
 - **Generated build output** (`build/`, `bin/`, `data/`). Created by the build and ignored by git. Nothing to do.
-- **Command-generated material.** TLS certificates (`task certs:generate`) and the firmware overlay files (`sdkconfig.defaults*`, committed) are produced by tooling, not copied by hand. The prod build also writes a temporary `sdkconfig.defaults.secret` and deletes it; that is machine-managed, leave it alone.
-- **Per-user files you create.** Secret and machine-specific config that cannot be committed: the repo-root `.env`, `server/.env.prod`, and your firmware device settings. These are covered below.
+- **Command-generated material.** TLS certificates (`task certs:generate`) and the firmware overlay files (`sdkconfig.defaults*`, committed) are produced by tooling, not copied by hand.
+- **Per-user files you create.** Secret and machine-specific config that cannot be committed: the repo-root `.env`, `server/.env.prod`, and each module's NVS device config (`access_module/nvs_config.csv`). These are covered below.
 
 The two non-secret server profiles, `server/.env.local` and `server/.env.ci`, are committed and ship in the clone. You do not create them; they are documented under "Server environment files" only so you know what they do.
 
@@ -183,7 +183,7 @@ The server selects a runtime profile via `PORTUNUS_ENV`. Each profile has an env
 
 ```bash
 # server/.env.prod — gitignored, you create this. Holds real secrets.
-# Loaded by `task run:server:prod` together with the repo-root .env.
+# Loaded by `task run:server:prod` (after the repo-root .env, which holds only deploy targets).
 # The Raspberry Pi does NOT use this file; it reads /etc/portunus/portunus.env
 # via systemd — see setup_server.md › Running as a systemd service.
 PORTUNUS_ENV=prod
@@ -193,34 +193,29 @@ PORTUNUS_DB_PATH=./data/portunus.db
 # Cert paths are relative to server/, where the task runs (certs:generate writes to repo-root certs/):
 PORTUNUS_TLS_CERT_FILE=../certs/server.pem
 PORTUNUS_TLS_KEY_FILE=../certs/server.key
-PORTUNUS_HMAC_SECRET=<64-char hex, same value as the repo-root .env>
+PORTUNUS_HMAC_SECRET=<64-char hex, same value as the modules' NVS hmac_secret>
 PORTUNUS_CREDENTIAL_HASH_SECRET=<64-char hex>
 ```
 
 Setting `PORTUNUS_ENV=prod` here is required: the server validates the prod profile at startup and refuses to boot without TLS, the HMAC secret, and the credential hash secret. A prod env that forgets `PORTUNUS_ENV=prod` would otherwise boot as `local`.
 
-### The shared secret and deploy targets (repo-root `.env`)
+### Deploy targets (repo-root `.env`)
 
-The repo-root `.env` is loaded automatically by the Taskfile (`dotenv: ['.env']`) and carries two unrelated things: the shared HMAC secret injected into the prod firmware build, and your deployment targets.
+The repo-root `.env` is loaded automatically by the Taskfile (`dotenv: ['.env']`). It holds your deployment target. The deploy tasks have no default host and refuse to run without one.
 
 ```bash
-# .env — repo root, gitignored. Create this yourself.
-
-# Shared HMAC secret. Use the SAME value on the server and in the firmware.
-# `task firmware:build:prod` injects this into the firmware at build time.
-PORTUNUS_HMAC_SECRET=<64-char hex>
-
-# Deploy targets — used by `task deploy:server`, `deploy:server:status`, `deploy:server:logs`.
+# .env (repo root, gitignored). Create this yourself.
+# Used by task deploy:server, deploy:server:status, deploy:server:logs, deploy:server:rollback.
 DEPLOY_HOST=pi@192.168.1.100
 DEPLOY_DIR=/opt/portunus
 DEPLOY_SERVICE=portunus-server
 ```
 
-Generate the secret with `openssl rand -hex 32`. For HMAC and TLS in depth, including rotation, see [Shared secrets setup](shared_secrets_setup.md).
+No secret belongs here. The HMAC secret goes in the server environment and in each module's NVS (see [Secrets](#secrets)); nothing reads it from this file. For HMAC and TLS in depth, including rotation, see [Shared secrets setup](shared_secrets_setup.md).
 
 ### TLS certificates
 
-Generate a CA and server certificate for your server's LAN IP. Do this once the server IP is decided; you only regenerate if the IP changes.
+Generate a CA and server certificate for your server's LAN IP. Do this once: every module pins this CA. If the IP changes later, reissue only the server cert with `--sign-only` (see [Reissuing the server certificate](setup_server.md#reissuing-the-server-certificate-without-rotating-the-ca)).
 
 ```bash
 task certs:generate -- --ip 192.168.1.100            # add --dns portunus.local if you have one
@@ -230,10 +225,10 @@ This writes `certs/ca.pem`, `certs/server.pem`, `certs/server.key`, and copies t
 
 ### Secrets
 
-Two secrets, both 32-byte hex. The HMAC secret is shared with the firmware (and goes in the repo-root `.env`, above); the credential hash secret is server-only.
+Two secrets, both 32-byte hex, and they must be different values. The HMAC secret is shared with the modules (server env + each module's NVS `hmac_secret`); the credential hash secret is server-only.
 
 ```bash
-openssl rand -hex 32   # → PORTUNUS_HMAC_SECRET (server + firmware + repo-root .env)
+openssl rand -hex 32   # → PORTUNUS_HMAC_SECRET (server env + module NVS)
 openssl rand -hex 32   # → PORTUNUS_CREDENTIAL_HASH_SECRET (server only)
 ```
 
@@ -241,13 +236,10 @@ Record both. Keep them out of source control. Both are required in the `prod` pr
 
 ### Firmware device settings
 
-Firmware configuration is not a file you copy; it is set through ESP-IDF menuconfig and saved to `sdkconfig` (gitignored). Run:
+Two places, for two kinds of setting:
 
-```bash
-task firmware:menuconfig
-```
-
-Under **Portunus Configuration**, set WiFi (`PORTUNUS_WIFI_SSID`, `PORTUNUS_WIFI_PASSWORD`), the module ID (`PORTUNUS_MODULE_ID`), the server host, TLS options, and the HMAC secret. For the full menuconfig reference and GPIO defaults, see [Firmware setup](setup_firmware.md).
+- **Device identity and secrets** (module ID, WiFi, server host, gRPC port, HMAC secret) live in NVS. Copy `access_module/nvs_config.example.csv` to `nvs_config.csv` (gitignored), fill it in, then `task firmware:nvs:gen` and `task firmware:nvs:flash`. See [Device configuration and secrets (NVS)](setup_firmware.md#device-configuration-and-secrets-nvs).
+- **Hardware and behaviour** (module variant, pins, polarity, timing) are Kconfig, set with `task firmware:menuconfig` and saved to `sdkconfig` (gitignored). The profile builds keep these in `sdkconfig.defaults.local`. Security settings (TLS, HMAC, dev mode) come from the profile overlay, not menuconfig. For the menu reference and GPIO defaults, see [Firmware setup](setup_firmware.md).
 
 ---
 
@@ -280,7 +272,7 @@ Generate the HMAC secret and the credential hash secret as described in [Post-Cl
 
 ### 5. Start the server
 
-Put the production values in `server/.env.prod` and the shared HMAC secret in the repo-root `.env`, as described in [Post-Clone Setup › Server environment files](#server-environment-files). Then start the server:
+Put the production values, including both secrets, in `server/.env.prod`, as described in [Post-Clone Setup › Server environment files](#server-environment-files). Then start the server:
 
 ```bash
 task run:server:prod
@@ -298,7 +290,7 @@ Or via the API — see [Change the bootstrap password](setup_server.md#change-th
 
 ### 7. Register the access module
 
-Choose a module ID (e.g. `front-door`). This value must match `PORTUNUS_MODULE_ID` in the firmware you flash in step 10.
+Choose a module ID (e.g. `front-door`). This value must match `module_id` in the module's NVS config (step 9).
 
 ```bash
 curl -s -c /tmp/portunus-cookies.txt \
@@ -328,42 +320,32 @@ cd esp-idf
 . ./export.sh
 ```
 
-### 9. Create the .env file
+### 9. Create the module's NVS config
 
-The production firmware build reads `PORTUNUS_HMAC_SECRET` from the repo-root `.env`. If you have not created it yet, see [Post-Clone Setup › The shared secret and deploy targets](#the-shared-secret-and-deploy-targets-repo-root-env). Use the **same value** you set on the server in step 5.
+```bash
+cp access_module/nvs_config.example.csv access_module/nvs_config.csv
+```
 
-### 10. Configure the firmware
+Fill in `module_id` (`front-door`, as in step 7), `wifi_ssid`, `wifi_psk`, `server_host` (your server's LAN IP, covered by its cert), `grpc_port` (`50051`) and `hmac_secret` (the **same value** you set on the server in step 5). The file is gitignored; never commit or print it.
+
+### 10. Configure the firmware hardware
 
 ```bash
 task firmware:menuconfig
 ```
 
-Set the following under **Portunus Configuration**:
-
-| Setting | Value | Menu location |
-|---|---|---|
-| Module variant | `ACCESS_POINT` | Module Variant |
-| `PORTUNUS_MODULE_ID` | `front-door` (must match step 7) | Network Configuration |
-| `PORTUNUS_WIFI_SSID` | your WiFi SSID | Network Configuration |
-| `PORTUNUS_WIFI_PASSWORD` | your WiFi password | Network Configuration |
-| `PORTUNUS_SERVER_HOST` | your server's LAN IP | Network Configuration |
-| `PORTUNUS_USE_TLS` | enabled | Security Configuration |
-| `PORTUNUS_TLS_SERVER_PORT` | `8443` | Security Configuration |
-| `PORTUNUS_TLS_SKIP_VERIFY` | disabled | Security Configuration |
-| `PORTUNUS_TLS_USE_CUSTOM_CA` | enabled | Security Configuration |
-| `PORTUNUS_HMAC_ENABLED` | enabled | Security Configuration |
-| `PORTUNUS_HMAC_SECRET` | your HMAC secret | Security Configuration |
-
-Save and exit menuconfig.
+Under **Portunus Configuration**, set the **Module Variant** (`ACCESS_POINT` for a door) and, if your wiring differs from the defaults, the pin and polarity options. Save and exit. TLS, HMAC and CA pinning are set by the prod profile in the next step, not here.
 
 ### 11. Build and flash
 
 ```bash
 task firmware:build:prod
+task firmware:nvs:gen
+task firmware:nvs:flash
 task firmware:flash-monitor
 ```
 
-`firmware:build:prod` reads the HMAC secret from `.env` and injects it at build time. Find your serial port first if needed — see [Finding your serial port](setup_firmware.md#finding-your-serial-port).
+`firmware:build:prod` fails if the compiled image is not deployable (dev mode, TLS or HMAC off, CA not pinned). The NVS steps write the device config from step 9; reflashing the app later does not touch it. Find your serial port first if needed: see [Finding your serial port](setup_firmware.md#finding-your-serial-port).
 
 ### 12. Verify end-to-end
 
@@ -388,10 +370,10 @@ curl -s -X POST https://localhost:8443/v1/heartbeat \
 
 With the system running:
 
-- **Register credentials** — use the admin UI at `/admin/ui/` or `POST /admin/v1/credentials` to add RFID cards
+- **Enroll members and cards**: use the admin UI at `/admin/ui/`, a provisioning console module, or `POST /admin/v1/members/{member_uuid}/credential`
 - **Authorize members** — grant specific members access to specific modules via `POST /admin/v1/modules/{module_id}/authorizations`
-- **Deploy to a Raspberry Pi** — see [Running as a systemd service](setup_server.md#running-as-a-systemd-service) and `task deploy:server`
-- **Add more modules** — repeat steps 7 and 10–12 with a new `module_id` for each additional door
+- **Deploy to a Raspberry Pi**: see [Running as a systemd service](setup_server.md#running-as-a-systemd-service) and [CI/CD pipeline](ci_cd_pipeline.md)
+- **Add more modules**: repeat steps 7 and 9 to 12 with a new `module_id` for each additional door
 
 ---
 

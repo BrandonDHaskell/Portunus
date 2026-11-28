@@ -17,7 +17,7 @@ An **Admin UI** is also available at `/admin/ui/` for browser-based management.
 
 Every `POST` to `/v1/*` must include an `X-Portunus-Sig` header containing `HMAC-SHA256(secret, request_body)` hex-encoded. The server rejects requests with missing or invalid signatures with HTTP 401.
 
-Set the shared secret via `PORTUNUS_HMAC_SECRET` on the server and `CONFIG_PORTUNUS_HMAC_SECRET` in the firmware.
+Set the shared secret via `PORTUNUS_HMAC_SECRET` on the server and the `hmac_secret` NVS key on each module (see [Firmware setup: Device configuration and secrets](setup_firmware.md#device-configuration-and-secrets-nvs)).
 
 ### Admin endpoints (session cookie)
 

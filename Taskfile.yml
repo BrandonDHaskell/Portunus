@@ -1,5 +1,5 @@
 # https://taskfile.dev
-# Install: go install github.com/go-task/task/v3/cmd/task@latest
+# Install: go install github.com/go-task/task/v3/cmd/task@v3.49.1
 #
 # Usage:
 #   task test              — run all tests
@@ -13,11 +13,9 @@
 #   task release           — validate + deploy server + build prod firmware
 #   task clean             — remove build artifacts
 #
-# Cross-platform:
-#   All tasks run on macOS, Linux, and Windows without modification.
-#   Python (required by ESP-IDF) handles file operations that would
-#   otherwise need shell-specific syntax. Go and idf.py commands are
-#   natively cross-platform.
+# Platform:
+#   Tasks assume a POSIX shell with GNU coreutils (Debian/Ubuntu, or the
+#   espressif/idf image in CI). They are not written for Windows.
 #
 # Deployment:
 #   Deploy tasks use SSH to push the server binary to a Raspberry Pi.
@@ -32,24 +30,28 @@ version: "3"
 dotenv: ['.env']
 
 vars:
-  # ── Cross-platform Python resolution ────────────────────────────────────
-  # Windows typically installs Python as 'python'; macOS/Linux use 'python3'.
-  # Override with: task <target> PYTHON=py
-  PYTHON: '{{if eq OS "windows"}}python{{else}}python3{{end}}'
-
   # ── ESP-IDF environment ──────────────────────────────────────────────────
-  # IDF_PATH points to the ESP-IDF installation root.
+  # A plain Taskfile var would override the IDF_PATH that export.sh sets (Task
+  # ranks Taskfile vars above the environment), so read the environment first
+  # and only fall back to the default install location.
   # Override with: task firmware:build IDF_PATH=/path/to/esp-idf
-  IDF_PATH: '{{.HOME}}/esp/esp-idf'
+  IDF_PATH:
+    sh: echo "${IDF_PATH:-$HOME/esp/esp-idf}"
 
-  # The ESP-IDF venv has nanopb and grpcio-tools pre-installed.
-  # Proto generation uses this interpreter so system Python stays unmodified.
+  # The ESP-IDF venv interpreter (it has nanopb and pyserial), so system
+  # Python stays unmodified. export.sh sets IDF_PYTHON_ENV_PATH; without it,
+  # use the newest idf5.5 venv the installer created.
   # Override with: task proto:gen IDF_PYTHON=/path/to/python
-  IDF_PYTHON: '{{.HOME}}/.espressif/python_env/idf5.5_py3.13_env/bin/python'
-
-  # ── Cross-platform executable extension ─────────────────────────────────
-  # Go requires explicit .exe on Windows for 'go build -o'.
-  EXE: '{{if eq OS "windows"}}.exe{{end}}'
+  IDF_PYTHON:
+    sh: |
+      if [ -n "${IDF_PYTHON_ENV_PATH:-}" ]; then echo "$IDF_PYTHON_ENV_PATH/bin/python"; exit 0; fi
+      py=python3
+      # if/fi, not &&: with no venv the glob stays literal, and a failing
+      # test as the loop's last command would fail the whole Taskfile.
+      for c in "$HOME"/.espressif/python_env/idf5.5_py*_env/bin/python; do
+        if [ -x "$c" ]; then py="$c"; fi
+      done
+      echo "$py"
 
   # ── Project paths ───────────────────────────────────────────────────────
   SERVER_DIR: server
@@ -123,7 +125,7 @@ tasks:
     desc: Build the server binary
     dir: "{{.SERVER_DIR}}"
     cmds:
-      - go build -o bin/portunus-server{{.EXE}} ./cmd/portunus-server
+      - go build -o bin/portunus-server ./cmd/portunus-server
 
   build:server:arm64:
     desc: Cross-compile server binary for Raspberry Pi (arm64)
@@ -131,6 +133,8 @@ tasks:
     env:
       GOOS: linux
       GOARCH: arm64
+      # Explicit, not inherited: the Pi target depends on a pure-Go build.
+      CGO_ENABLED: "0"
     cmds:
       - go build -o bin/portunus-server-linux-arm64 ./cmd/portunus-server
 
@@ -160,7 +164,7 @@ tasks:
     dir: "{{.SERVER_DIR}}"
     cmds:
       - go clean ./...
-      - "{{.PYTHON}} ../scripts/clean.py bin coverage.out"
+      - rm -rf bin coverage.out
 
   lint:server:
     desc: Run Go linters (requires golangci-lint)
@@ -178,13 +182,32 @@ tasks:
     desc: Check server code formatting (fails if unformatted)
     dir: "{{.SERVER_DIR}}"
     cmds:
-      - "{{.PYTHON}} ../scripts/check_fmt.py"
+      - |
+        unformatted=$(gofmt -l .)
+        if [ -n "$unformatted" ]; then
+          printf 'Not gofmt-formatted:\n%s\nRun: task fmt:server:fix\n' "$unformatted" >&2
+          exit 1
+        fi
 
   fmt:server:fix:
     desc: Auto-format server code with gofmt
     dir: "{{.SERVER_DIR}}"
     cmds:
       - gofmt -w .
+
+  tidy:server:check:
+    desc: Fail if go.mod/go.sum are not tidy
+    dir: "{{.SERVER_DIR}}"
+    cmds:
+      - go mod tidy -diff
+
+  vuln:server:
+    desc: Scan for known vulnerabilities reachable from server code (govulncheck)
+    dir: "{{.SERVER_DIR}}"
+    cmds:
+      # go run @version rather than a go.mod tool directive: govulncheck's own
+      # dependencies would otherwise join (and could bump) the server's build list.
+      - go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
 
   # ─── Protobuf ─────────────────────────────────────────────────────────────
 
@@ -205,13 +228,12 @@ tasks:
 
   # ─── TLS Certificates ─────────────────────────────────────────────────────
 
+  # First run creates the CA. Afterwards it refuses unless given --sign-only
+  # (new server cert, same CA) or --new-ca (rotation: reflash every module).
   certs:generate:
-    desc: Generate private CA + server TLS certs for LAN deployment
-    vars:
-      PROD_HOST:
-        sh: grep 'CONFIG_PORTUNUS_SERVER_HOST' access_module/sdkconfig.defaults.prod | sed 's/.*="\(.*\)"/\1/'
+    desc: "Private CA + server TLS cert (task certs:generate -- --ip ADDR [--sign-only|--new-ca])"
     cmds:
-      - bash scripts/generate_certs.sh --ip {{.PROD_HOST}} {{.CLI_ARGS}}
+      - bash scripts/generate_certs.sh {{.CLI_ARGS}}
 
   certs:verify:
     desc: Verify the cert chain (ca.pem → server.pem)
@@ -234,35 +256,21 @@ tasks:
       ALLOW_INSECURE: '{{.ALLOW_INSECURE | default "0"}}'
     cmds:
       - |
-        refuse() {
-          echo "ERROR: $1 has an insecure config:" >&2
-          printf '%s\n' "$2" | sed 's/^/  /' >&2
-          echo "  Prod image:      task firmware:build:prod" >&2
-          echo "  Dev image:       task firmware:build:dev" >&2
-          echo "  Compile check:   task firmware:build ALLOW_INSECURE=1" >&2
-          exit 1
-        }
+        # Cheap early refusal before a long build; the authoritative check
+        # runs on the compiled header afterwards.
         if [ "{{.ALLOW_INSECURE}}" != "1" ] && [ -f sdkconfig ]; then
           bad=$(grep -E '^CONFIG_PORTUNUS_(ENV_DEV|TLS_SKIP_VERIFY)=y|^# CONFIG_PORTUNUS_(USE_TLS|HMAC_ENABLED) is not set' sdkconfig || true)
-          if [ -n "$bad" ]; then refuse sdkconfig "$bad"; fi
+          if [ -n "$bad" ]; then
+            printf 'ERROR: sdkconfig has an insecure config:\n%s\n' "$bad" >&2
+            echo "  Use firmware:build:prod / firmware:build:dev, or ALLOW_INSECURE=1 for a compile check." >&2
+            exit 1
+          fi
         fi
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
         idf.py build
-        # Re-check what was actually compiled: cached CMake defaults can differ
-        # from the sdkconfig that existed before the build.
         if [ "{{.ALLOW_INSECURE}}" != "1" ]; then
-          h=build/config/sdkconfig.h
-          bad=""
-          has() { grep -qE "^#define CONFIG_PORTUNUS_$1 1" "$h"; }
-          if has ENV_DEV; then bad="${bad}ENV_DEV on"$'\n'; fi
-          if has TLS_SKIP_VERIFY; then bad="${bad}TLS_SKIP_VERIFY on"$'\n'; fi
-          if has ENABLE_WIFI; then
-            if ! has USE_TLS; then bad="${bad}USE_TLS off"$'\n'; fi
-            if ! has HMAC_ENABLED; then bad="${bad}HMAC_ENABLED off"$'\n'; fi
-          fi
-          if [ -n "$bad" ]; then refuse "$h (image in build/ is NOT deployable)" "${bad%$'\n'}"; fi
+          bash ../scripts/assert_secure_build.sh build/config/sdkconfig.h
         fi
-        exit 0
 
   # Both profile builds delete sdkconfig so the profile overlay always wins,
   # which would also discard the per-device hardware settings set in
@@ -312,12 +320,39 @@ tasks:
       - |
         rm -f sdkconfig
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
-        idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.local;sdkconfig.defaults.prod" build
-        BUILD_STATUS=$?
-        if [ $BUILD_STATUS -eq 0 ]; then
-          idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.local;sdkconfig.defaults.prod" reconfigure > /dev/null 2>&1 || true
-        fi
-        exit $BUILD_STATUS
+        DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.local;sdkconfig.defaults.prod"
+        idf.py -D SDKCONFIG_DEFAULTS="$DEFAULTS" build
+        # The overlay is trusted to be secure; this proves the compiled image is.
+        bash ../scripts/assert_secure_build.sh --prod build/config/sdkconfig.h
+        idf.py -D SDKCONFIG_DEFAULTS="$DEFAULTS" reconfigure > /dev/null 2>&1 || true
+
+  # Compile-only checks in their own build directories, so they never touch
+  # the working sdkconfig or build/. Their sdkconfig is regenerated every run:
+  # IDF applies defaults only to symbols an existing sdkconfig lacks.
+  firmware:_compile:
+    internal: true
+    dir: "{{.FIRMWARE_DIR}}"
+    env:
+      IDF_PATH: "{{.IDF_PATH}}"
+    cmds:
+      - |
+        eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
+        B="$PWD/build/{{.NAME}}"
+        rm -f "$B/sdkconfig"
+        idf.py -B "$B" -D SDKCONFIG="$B/sdkconfig" -D SDKCONFIG_DEFAULTS="{{.DEFAULTS}}" build
+
+  firmware:compile:ci:
+    desc: Compile check with the CI overlay (dev mode, no secrets; not deployable)
+    cmds:
+      - task: firmware:_compile
+        vars: { NAME: ci, DEFAULTS: "sdkconfig.defaults;sdkconfig.defaults.ci" }
+
+  firmware:compile:prod:
+    desc: Compile check with the prod overlay, then assert the image is deployable (needs access_module/certs/ca_cert.pem)
+    cmds:
+      - task: firmware:_compile
+        vars: { NAME: ci-prod, DEFAULTS: "sdkconfig.defaults;sdkconfig.defaults.prod" }
+      - bash scripts/assert_secure_build.sh --prod {{.FIRMWARE_DIR}}/build/ci-prod/config/sdkconfig.h
 
   firmware:nvs:gen:
     desc: Generate NVS binary from nvs_config.csv (copy nvs_config.example.csv first)
@@ -330,12 +365,15 @@ tasks:
           echo "  Then fill in real values (SSID, PSK, HMAC secret, server host)."
           exit 1
         fi
+        NVS_SIZE=$(awk -F, '{gsub(/[ \t]/,"")} $1=="nvs"{print $5}' partitions.csv)
+        [ -n "$NVS_SIZE" ] || { echo "ERROR: no nvs row in partitions.csv" >&2; exit 1; }
+        mkdir -p build
         {{.IDF_PYTHON}} {{.IDF_PATH}}/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py \
-          generate nvs_config.csv build/nvs.bin 0x6000
+          generate nvs_config.csv build/nvs.bin "$NVS_SIZE"
         echo "Generated build/nvs.bin ($(wc -c < build/nvs.bin) bytes)"
 
   firmware:nvs:flash:
-    desc: Flash NVS binary to the nvs partition (0x11000) — run firmware:nvs:gen first
+    desc: "Flash build/nvs.bin to the nvs partition (offset from partitions.csv); run firmware:nvs:gen first"
     dir: "{{.FIRMWARE_DIR}}"
     env:
       IDF_PATH: "{{.IDF_PATH}}"
@@ -345,8 +383,10 @@ tasks:
           echo "ERROR: build/nvs.bin not found — run 'task firmware:nvs:gen' first"
           exit 1
         fi
+        NVS_OFFSET=$(awk -F, '{gsub(/[ \t]/,"")} $1=="nvs"{print $4}' partitions.csv)
+        [ -n "$NVS_OFFSET" ] || { echo "ERROR: no nvs row in partitions.csv" >&2; exit 1; }
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
-        esptool.py write_flash 0x11000 build/nvs.bin
+        esptool.py write_flash "$NVS_OFFSET" build/nvs.bin
         echo "NVS partition flashed. Now flash firmware with: task firmware:flash"
 
   firmware:flash:
@@ -519,57 +559,92 @@ tasks:
         eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
         {{.IDF_PYTHON}} scripts/hw_test.py --port "{{.PORT}}" --net {{if .SERVER_IP}}--server-ip "{{.SERVER_IP}}"{{end}}
 
+  # The hardware-tier apps run on a bench board; this only compiles them so
+  # they cannot rot. The network app pins a CA at build time: if none exists
+  # yet, a throwaway is made (hw_test.py replaces it with its own CA-A).
+  test:firmware:hardware:compile:
+    desc: "Compile the hardware-tier apps (both strike variants + network), no board needed"
+    env:
+      IDF_PATH: "{{.IDF_PATH}}"
+    cmds:
+      - |
+        eval "$({{.IDF_PYTHON}} {{.IDF_PATH}}/tools/idf_tools.py export 2>/dev/null)"
+        APP="$PWD/{{.FIRMWARE_DIR}}/test/hardware"
+        for V in "active_high:sdkconfig.defaults" \
+                 "active_low:sdkconfig.defaults;sdkconfig.defaults.active_low"; do
+          N=${V%%:*}; D=${V#*:}
+          idf.py -C "$APP" -B "$APP/build/$N" -D SDKCONFIG="$APP/build/$N/sdkconfig" \
+            -D "SDKCONFIG_DEFAULTS=$D" build
+        done
+        NET="$APP/net"
+        if [ ! -f "$NET/certs/ca_cert.pem" ]; then
+          mkdir -p "$NET/certs"
+          KEY=$(mktemp)
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+            -keyout "$KEY" -out "$NET/certs/ca_cert.pem" -days 1 \
+            -subj "/CN=ci-compile-only" 2>/dev/null
+          rm -f "$KEY"
+        fi
+        idf.py -C "$NET" -B "$NET/build/net" -D SDKCONFIG="$NET/build/net/sdkconfig" build
+
   # ─── Deploy ────────────────────────────────────────────────────────────────
-  # Requires SSH key-based auth to the Pi. Configure target in .env:
-  #   DEPLOY_HOST=pi@192.168.1.100
+  # SSH key auth and passwordless sudo on the Pi. Configure the target in the
+  # repo-root .env (or pass it: task deploy:server DEPLOY_HOST=user@host):
+  #   DEPLOY_HOST=pi@192.168.1.100      required, no default
   #   DEPLOY_DIR=/opt/portunus
   #   DEPLOY_SERVICE=portunus-server
+  # The steps live in scripts/deploy_server.sh (local) and
+  # scripts/deploy_remote.sh (runs on the Pi as root).
 
   deploy:server:
-    desc: Build, copy, and restart the server on the Raspberry Pi
+    desc: "Install the arm64 binary on the Pi: SHA-256 check, DB snapshot, health check, automatic binary rollback"
     deps: [build:server:arm64]
-    vars:
-      DEPLOY_HOST: '{{.DEPLOY_HOST | default "pi@192.168.1.100"}}'
+    requires:
+      vars: [DEPLOY_HOST]
+    env:
+      DEPLOY_HOST: "{{.DEPLOY_HOST}}"
       DEPLOY_DIR: '{{.DEPLOY_DIR | default "/opt/portunus"}}'
       DEPLOY_SERVICE: '{{.DEPLOY_SERVICE | default "portunus-server"}}'
     cmds:
-      - echo "Deploying to {{.DEPLOY_HOST}}:{{.DEPLOY_DIR}}"
-      # Back up current binary on the Pi
-      - ssh {{.DEPLOY_HOST}} "sudo cp {{.DEPLOY_DIR}}/bin/portunus-server {{.DEPLOY_DIR}}/bin/portunus-server.prev 2>/dev/null || true"
-      # Copy new binary
-      - scp {{.SERVER_DIR}}/bin/portunus-server-linux-arm64 {{.DEPLOY_HOST}}:/tmp/portunus-server
-      # Move into place and restart
-      - ssh {{.DEPLOY_HOST}} "sudo mv /tmp/portunus-server {{.DEPLOY_DIR}}/bin/portunus-server && sudo chmod 755 {{.DEPLOY_DIR}}/bin/portunus-server && sudo systemctl restart {{.DEPLOY_SERVICE}}"
-      # Verify
-      - ssh {{.DEPLOY_HOST}} "sudo systemctl is-active {{.DEPLOY_SERVICE}}"
-      - echo "Deploy complete"
+      - bash scripts/deploy_server.sh deploy
 
   deploy:server:status:
-    desc: Check the server status on the Raspberry Pi
-    vars:
-      DEPLOY_HOST: '{{.DEPLOY_HOST | default "pi@192.168.1.100"}}'
-      DEPLOY_SERVICE: '{{.DEPLOY_SERVICE | default "portunus-server"}}'
-    cmds:
-      - ssh {{.DEPLOY_HOST}} "sudo systemctl status {{.DEPLOY_SERVICE}} --no-pager"
-
-  deploy:server:logs:
-    desc: Tail server logs on the Raspberry Pi
-    vars:
-      DEPLOY_HOST: '{{.DEPLOY_HOST | default "pi@192.168.1.100"}}'
-      DEPLOY_SERVICE: '{{.DEPLOY_SERVICE | default "portunus-server"}}'
-    cmds:
-      - ssh {{.DEPLOY_HOST}} "sudo journalctl -u {{.DEPLOY_SERVICE}} -f"
-
-  deploy:server:rollback:
-    desc: Roll back to the previous server binary on the Raspberry Pi
-    vars:
-      DEPLOY_HOST: '{{.DEPLOY_HOST | default "pi@192.168.1.100"}}'
+    desc: Show the server status and deployed version on the Pi
+    requires:
+      vars: [DEPLOY_HOST]
+    env:
+      DEPLOY_HOST: "{{.DEPLOY_HOST}}"
       DEPLOY_DIR: '{{.DEPLOY_DIR | default "/opt/portunus"}}'
       DEPLOY_SERVICE: '{{.DEPLOY_SERVICE | default "portunus-server"}}'
     cmds:
-      - ssh {{.DEPLOY_HOST}} "sudo systemctl stop {{.DEPLOY_SERVICE}} && sudo cp {{.DEPLOY_DIR}}/bin/portunus-server.prev {{.DEPLOY_DIR}}/bin/portunus-server && sudo systemctl start {{.DEPLOY_SERVICE}}"
-      - ssh {{.DEPLOY_HOST}} "sudo systemctl is-active {{.DEPLOY_SERVICE}}"
-      - echo "Rollback complete"
+      - |
+        ssh "$DEPLOY_HOST" "sudo systemctl status $DEPLOY_SERVICE --no-pager; echo; echo deployed version: \$(cat $DEPLOY_DIR/deploy/version 2>/dev/null || echo unknown)"
+
+  deploy:server:logs:
+    desc: Tail server logs on the Pi
+    requires:
+      vars: [DEPLOY_HOST]
+    env:
+      DEPLOY_HOST: "{{.DEPLOY_HOST}}"
+      DEPLOY_DIR: '{{.DEPLOY_DIR | default "/opt/portunus"}}'
+      DEPLOY_SERVICE: '{{.DEPLOY_SERVICE | default "portunus-server"}}'
+    cmds:
+      - ssh "$DEPLOY_HOST" "sudo journalctl -u $DEPLOY_SERVICE -f"
+
+  # RESTORE_DB=1 also restores the database snapshot taken by the last deploy,
+  # discarding every write made since (members, audit log). Only needed when
+  # the version being rolled back migrated the schema.
+  deploy:server:rollback:
+    desc: "Reinstall the previous binary on the Pi (RESTORE_DB=1 also restores the pre-deploy DB snapshot)"
+    requires:
+      vars: [DEPLOY_HOST]
+    env:
+      DEPLOY_HOST: "{{.DEPLOY_HOST}}"
+      DEPLOY_DIR: '{{.DEPLOY_DIR | default "/opt/portunus"}}'
+      DEPLOY_SERVICE: '{{.DEPLOY_SERVICE | default "portunus-server"}}'
+      RESTORE_DB: '{{.RESTORE_DB | default "0"}}'
+    cmds:
+      - bash scripts/deploy_server.sh rollback
 
   # ─── CI ───────────────────────────────────────────────────────────────────
 
@@ -610,21 +685,36 @@ tasks:
       - task: test:server:race
       - task: ci:server:smoke
 
+  # Mirrors .github/workflows/ci.yml job for job, so a local pass predicts a
+  # CI pass. Keep the two in step.
   ci:all:
-    desc: "Full CI: server checks, proto drift, firmware tests, firmware compile"
+    desc: "Full CI locally: server checks, proto drift, all firmware tiers, CI and prod compiles"
     cmds:
       - task: ci:server
+      - task: tidy:server:check
+      - task: vuln:server
+      - task: build:server:arm64
       - task: proto:check
       - task: test:firmware
+      - task: test:firmware:unit
+        vars: { PRESET: host-asan }
       - task: test:firmware:unit:m32
-      - task: firmware:build
-        vars: { ALLOW_INSECURE: "1" }
+      - task: test:firmware:hardware:compile
+      - task: firmware:compile:ci
+      - task: firmware:compile:prod
 
+  # Everything is built and checked before anything is deployed, and only
+  # from a clean tree, so the deployed version names a real commit.
   release:
-    desc: Full release — validate, deploy server, build prod firmware
+    desc: "Full release from a clean commit: validate, build prod firmware, then deploy the server"
+    requires:
+      vars: [DEPLOY_HOST]
+    preconditions:
+      - sh: test -z "$(git status --porcelain)"
+        msg: "Working tree has uncommitted or untracked changes; release only from a clean commit."
     cmds:
       - task: ci:all
-      - task: deploy:server
       - task: firmware:clean
       - task: firmware:build:prod
-      - echo "Server deployed. Firmware built. Flash with 'task firmware:flash'"
+      - task: deploy:server
+      - echo "Server deployed. Prod firmware built. Flash with 'task firmware:flash'"

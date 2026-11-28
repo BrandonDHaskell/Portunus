@@ -15,7 +15,7 @@ Before starting, confirm the following are installed or available. Each is cover
 | Go | 1.24+ | Build and run the server | [Install Go](#install-go) |
 | Task | 3.x | Task runner (build, test, lint commands) | [Install Task](#install-task) |
 | protoc | 3.21+ | Regenerate protobuf code (only if `.proto` files change) | [Protobuf tooling](#protobuf-tooling-optional) |
-| protoc-gen-go / protoc-gen-go-grpc | latest | Go code generation from `.proto` | [Protobuf tooling](#protobuf-tooling-optional) |
+| protoc-gen-go / protoc-gen-go-grpc | pinned in `server/go.mod` | Go code generation from `.proto` | [Protobuf tooling](#protobuf-tooling-optional) |
 | openssl | 1.1.1+ | Generate TLS certificates | [TLS certificate setup](#tls-certificate-setup) |
 | Git | any | Clone the repository | Usually pre-installed on Debian |
 
@@ -25,7 +25,7 @@ The server uses **modernc.org/sqlite** (a pure-Go SQLite implementation), so the
 
 ## Install Go
 
-The server requires Go 1.24 or newer. The version in Debian's default apt repositories is typically outdated, so install from the official tarball.
+The server requires Go 1.26 or newer (`go.mod`). Use the latest patch release: release binaries are built on your machine, so standard-library security fixes only reach the Pi when your Go is current. The version in Debian's default apt repositories is typically outdated, so install from the official tarball.
 
 Check if Go is already installed and at the right version:
 
@@ -33,18 +33,18 @@ Check if Go is already installed and at the right version:
 go version
 ```
 
-If missing or below 1.24, install from the official release:
+If missing or below 1.26, install from the official release:
 
 ```bash
-# Download (adjust version as needed — check https://go.dev/dl/)
-wget https://go.dev/dl/go1.24.1.linux-amd64.tar.gz
+# Download the latest release (check https://go.dev/dl/)
+wget https://go.dev/dl/go1.27.4.linux-amd64.tar.gz
 
 # For Raspberry Pi 5 (arm64):
-# wget https://go.dev/dl/go1.24.1.linux-arm64.tar.gz
+# wget https://go.dev/dl/go1.27.4.linux-arm64.tar.gz
 
 # Remove any prior install and extract
 sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.24.1.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.27.4.linux-amd64.tar.gz
 
 # Add to PATH (append to ~/.bashrc or ~/.profile for persistence)
 export PATH=$PATH:/usr/local/go/bin
@@ -105,7 +105,7 @@ The server is configured entirely through environment variables. No config file 
 | Variable | Description | Example |
 |---|---|---|
 | `PORTUNUS_ENV` | `local`, `ci`, or `prod`. Local mode seeds the database with a default module and door on startup. Prod mode skips seeding. | `prod` |
-| `PORTUNUS_HMAC_SECRET` | Pre-shared key for HMAC-SHA256 request signing. Every device endpoint POST must include a valid `X-Portunus-Sig` header computed with this secret. Must match `CONFIG_PORTUNUS_HMAC_SECRET` in the firmware. Generate with `openssl rand -hex 32`. | `a3f1...` (64 hex chars) |
+| `PORTUNUS_HMAC_SECRET` | Pre-shared key for HMAC-SHA256 request signing. Every device endpoint POST must include a valid `X-Portunus-Sig` header computed with this secret. Must match `hmac_secret` in every module's NVS. Generate with `openssl rand -hex 32`. | `a3f1...` (64 hex chars) |
 | `PORTUNUS_CREDENTIAL_HASH_SECRET` | HMAC key used to hash credential IDs before storage. Prevents rainbow-table attacks against a stolen database. Generate with `openssl rand -hex 32`. Required in prod — server refuses to start without it. | `c9d4...` (64 hex chars) |
 | `PORTUNUS_TLS_CERT_FILE` | Path to the PEM-encoded server certificate. | `./certs/server.pem` |
 | `PORTUNUS_TLS_KEY_FILE` | Path to the PEM-encoded server private key. | `./certs/server.key` |
@@ -220,33 +220,17 @@ For production on the Raspberry Pi, the server certificate and key go in `/etc/p
 
 ### Reissuing the server certificate without rotating the CA
 
-`task certs:generate` always creates a **new CA**. Every flashed module pins the old CA, so running it means reflashing all of them. When only the server certificate needs to change (new IP, new DNS name, approaching expiry), sign a new one with the existing `certs/ca.key` instead. Modules keep working because the CA is unchanged.
+Every flashed module pins the CA, so a new CA means reflashing all of them. When only the server certificate needs to change (new IP, new DNS name, approaching expiry), sign a new one with the existing `certs/ca.key`. Modules keep working because the CA is unchanged.
 
 ```bash
-# From the repo root. Adjust the SAN list; include localhost/127.0.0.1 if you
-# reach the admin UI through an SSH tunnel.
-SAN="IP:10.0.0.57,DNS:localhost,IP:127.0.0.1"
-OUT=$(mktemp -d)
-cat > "$OUT/ext.cnf" <<EOF
-[v3_server]
-basicConstraints       = CA:FALSE
-keyUsage               = digitalSignature, keyEncipherment
-extendedKeyUsage       = serverAuth
-subjectAltName         = ${SAN}
-subjectKeyIdentifier   = hash
-authorityKeyIdentifier = keyid,issuer
-EOF
-(umask 077; openssl genrsa -out "$OUT/server.key" 2048)
-openssl req -new -key "$OUT/server.key" -out "$OUT/server.csr" -subj "/C=US/O=Portunus/CN=10.0.0.57"
-openssl x509 -req -in "$OUT/server.csr" -CA certs/ca.pem -CAkey certs/ca.key \
-  -CAserial "$OUT/ca.srl" -CAcreateserial -out "$OUT/server.pem" -days 825 \
-  -extfile "$OUT/ext.cnf" -extensions v3_server
-
-# Verify chain and IP before deploying
-openssl verify -CAfile certs/ca.pem -verify_ip 10.0.0.57 "$OUT/server.pem"
+# From the repo root. Add --san entries for every other address clients use,
+# e.g. localhost/127.0.0.1 if you reach the admin UI through an SSH tunnel.
+task certs:generate -- --sign-only --ip 10.0.0.57 --san DNS:localhost --san IP:127.0.0.1
 ```
 
-Copy `server.key` and `server.pem` to the Pi, install them with the same commands and ownership as in [Running as a systemd service](#running-as-a-systemd-service), and restart with `sudo systemctl restart portunus-server`. Back up the old pair first if you may need to roll back.
+The script verifies the chain and the IP before touching `certs/`, and keeps the previous pair as `server.{pem,key}.<timestamp>`. Once a CA exists, `task certs:generate` refuses to run without either `--sign-only` or `--new-ca`, so the CA cannot be replaced by accident. `--new-ca` moves the old material to `certs/backup-<timestamp>/` and is only for a deliberate rotation, after which every module must be reflashed.
+
+Copy `certs/server.key` and `certs/server.pem` to the Pi, install them with the same commands and ownership as in [Running as a systemd service](#running-as-a-systemd-service), and restart with `sudo systemctl restart portunus-server`. Back up the old pair on the Pi first if you may need to roll back.
 
 To browse the admin UI without a certificate warning, import `certs/ca.pem` into the browser as a trusted authority (Firefox: Settings > Privacy & Security > Certificates > View Certificates > Authorities > Import; Chrome on Linux: `certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n "Portunus CA" -i certs/ca.pem`).
 
@@ -259,12 +243,10 @@ Protobuf code generation is only needed if you modify `proto/portunus/v1/portunu
 If you do need to regenerate:
 
 ```bash
-# Install protoc (the protobuf compiler)
+# Install protoc (the protobuf compiler). It must match the version recorded
+# in the committed stubs (Debian trixie and Ubuntu 24.04 both ship 3.21.12);
+# proto_gen.py refuses a mismatch.
 sudo apt install -y protobuf-compiler
-
-# Install Go protobuf plugins
-go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
 
 # Regenerate both Go and Nanopb stubs
 task proto:gen
@@ -277,7 +259,9 @@ task proto:gen:nanopb
 task proto:check
 ```
 
-The Nanopb generator (`nanopb_generator` or `protoc-gen-nanopb`) must also be installed for ESP32 stub generation. See the firmware setup guide for Nanopb installation.
+Nothing else needs installing for Go: `protoc-gen-go` and `protoc-gen-go-grpc` are `tool` directives in `server/go.mod`, and `proto_gen.py` builds them from there with the Go toolchain `go.mod` names (Go downloads it if needed). The toolchain is pinned because the plugins format their output with the Go that built them, and that layout changes between Go releases.
+
+The Nanopb generator (`nanopb_generator`, from `pip install nanopb` at the version pinned in `.github/workflows/ci.yml`) must also be installed for ESP32 stub generation. The ESP-IDF venv is the usual place for it.
 
 ---
 
@@ -639,7 +623,7 @@ All server-related commands from the project `Taskfile.yml`:
 
 **"database is locked" errors** — Should not occur in normal operation because the server serializes writes through a single worker goroutine. If you see this, check for external tools (e.g. `sqlite3` CLI) holding a lock on the database file.
 
-**"missing_signature" (HTTP 401) on device requests** — `PORTUNUS_HMAC_SECRET` is set on the server but the device is not sending the `X-Portunus-Sig` header, or the secrets don't match. Verify the firmware's `CONFIG_PORTUNUS_HMAC_SECRET` matches the server's `PORTUNUS_HMAC_SECRET` exactly.
+**"missing_signature" (HTTP 401) on device requests**: `PORTUNUS_HMAC_SECRET` is set on the server but the device is not sending the `X-Portunus-Sig` header, or the secrets don't match. Verify the module's NVS `hmac_secret` matches the server's `PORTUNUS_HMAC_SECRET` exactly (compare SHA-256 fingerprints, never the values).
 
 **"unknown_module" in access responses** — The module ID in the request is not registered in the database. In local mode, `PORTUNUS_KNOWN_MODULES` or the default `door-001` seeding handles this automatically. In production, register modules via the admin API: `POST /admin/v1/modules`.
 

@@ -199,10 +199,10 @@ scripts/proto_gen.py
 
 Before changing the schema, make sure your local environment has:
 
-- `protoc`
-- `protoc-gen-go`
-- `protoc-gen-go-grpc`
-- a Nanopb generator (`nanopb_generator` or `grpc_tools.protoc` with Nanopb)
+- `protoc` at the version recorded in the committed Go stubs (the script checks)
+- Go (the plugins `protoc-gen-go` / `protoc-gen-go-grpc` are pinned as `tool`
+  directives in `server/go.mod` and built automatically)
+- `nanopb_generator` at the version pinned in `.github/workflows/ci.yml`
 
 ## Nanopb sizing rules
 
