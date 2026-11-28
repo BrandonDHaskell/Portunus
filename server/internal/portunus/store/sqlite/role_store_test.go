@@ -84,7 +84,9 @@ func TestRoleStore_CreateRole_SetsIsSystemFalse(t *testing.T) {
 	_ = rs.CreateRole(ctx, "custom2", "Another Role", "")
 
 	var isSystem int
-	conn.QueryRowContext(ctx, `SELECT is_system FROM roles WHERE role_id = 'custom2'`).Scan(&isSystem)
+	if err := conn.QueryRowContext(ctx, `SELECT is_system FROM roles WHERE role_id = 'custom2'`).Scan(&isSystem); err != nil {
+		t.Fatalf("read is_system: %v", err)
+	}
 	if isSystem != 0 {
 		t.Errorf("expected is_system=0 for user-created role, got %d", isSystem)
 	}
@@ -239,7 +241,9 @@ func TestRoleStore_Permissions_DeleteCascades(t *testing.T) {
 	_ = rs.DeleteRole(ctx, "cascade_role")
 
 	var count int
-	conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM role_permissions WHERE role_id = 'cascade_role'`).Scan(&count)
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM role_permissions WHERE role_id = 'cascade_role'`).Scan(&count); err != nil {
+		t.Fatalf("count role_permissions: %v", err)
+	}
 	if count != 0 {
 		t.Errorf("expected role_permissions to cascade-delete, got %d rows", count)
 	}

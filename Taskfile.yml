@@ -55,6 +55,10 @@ vars:
 
   # ── Project paths ───────────────────────────────────────────────────────
   SERVER_DIR: server
+
+  # ── Pinned tool versions (bump deliberately; Dependabot does not see these) ─
+  GOLANGCI_LINT_VERSION: v2.15.0
+  CLANG_TIDY_VERSION: 23.1.4
   FIRMWARE_DIR: access_module
 
 tasks:
@@ -167,10 +171,13 @@ tasks:
       - rm -rf bin coverage.out
 
   lint:server:
-    desc: Run Go linters (requires golangci-lint)
+    desc: Run golangci-lint (defaults plus gosec, see server/.golangci.yml)
     dir: "{{.SERVER_DIR}}"
     cmds:
-      - golangci-lint run ./...
+      # Installed @version into bin/tools, like govulncheck, so the linter's
+      # dependencies stay out of the server's build list.
+      - GOBIN="$PWD/bin/tools" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}}
+      - bin/tools/golangci-lint run ./...
 
   vet:server:
     desc: Run go vet (built-in, no extra tools needed)
@@ -525,6 +532,26 @@ tasks:
         vars: { VARIANT: sc-nohmac, DEFAULTS: "sdkconfig.defaults;sdkconfig.defaults.sc;sdkconfig.defaults.sc_nohmac", EXTRA: "-DPORTUNUS_TEST_SERVER_COMM=ON" }
       - task: test:firmware:_variant
         vars: { VARIANT: sc-peu, DEFAULTS: "sdkconfig.defaults;sdkconfig.defaults.sc;sdkconfig.defaults.peu", EXTRA: "-DPORTUNUS_TEST_SERVER_COMM=ON" }
+      # Reuses the compile databases the variants above just produced.
+      - task: lint:firmware
+
+  lint:firmware:
+    desc: "clang-tidy (access_module/.clang-tidy) over the first-party sources the component tier compiles (after test:firmware:component)"
+    dir: "{{.FIRMWARE_DIR}}"
+    cmds:
+      - |
+        set -eu
+        # The PyPI wheel, pip --target into build/: the same clang-tidy locally
+        # and in the IDF container, and nothing installed system-wide.
+        T="$PWD/build/clang-tidy-{{.CLANG_TIDY_VERSION}}"
+        CT="$T/clang_tidy/data/bin/clang-tidy"
+        if [ ! -x "$CT" ]; then
+          {{.IDF_PYTHON}} -m pip install -q --disable-pip-version-check --target "$T" clang-tidy=={{.CLANG_TIDY_VERSION}}
+        fi
+        DB="$PWD/build/tidy-db"
+        {{.IDF_PYTHON}} ../scripts/firmware_compile_db.py "$DB" test/component/build/* > "$DB.files"
+        echo "clang-tidy {{.CLANG_TIDY_VERSION}}: $(wc -l < "$DB.files") files"
+        xargs -P "$(nproc)" -n 1 "$CT" -p "$DB" --quiet < "$DB.files"
 
   test:firmware:integration:
     desc: "Firmware integration tier: IDF linux target, real event bus and dispatcher task"
@@ -678,10 +705,11 @@ tasks:
         fi
 
   ci:server:
-    desc: Full server CI check (vet, format, test with race detector, boot smoke)
+    desc: Full server CI check (vet, format, lint, test with race detector, boot smoke)
     cmds:
       - task: vet:server
       - task: fmt:server
+      - task: lint:server
       - task: test:server:race
       - task: ci:server:smoke
 

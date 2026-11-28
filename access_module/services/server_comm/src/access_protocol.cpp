@@ -249,7 +249,7 @@ bool proto_parse_server_time(const char *s, struct timeval *out)
     }
 
     out->tv_sec  = static_cast<time_t>(days_from_civil(year, mon, mday) * 86400 +
-                                       hour * 3600 + min * 60 + sec);
+                                       int64_t{hour} * 3600 + int64_t{min} * 60 + sec);
     out->tv_usec = static_cast<suseconds_t>(usec);
     return true;
 }

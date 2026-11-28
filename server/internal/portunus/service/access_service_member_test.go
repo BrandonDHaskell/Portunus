@@ -57,68 +57,6 @@ func openSvcTestDB(t *testing.T) (*sql.DB, *db.Worker) {
 	return conn, w
 }
 
-// newMemberAccessSvc builds an AccessService wired with the member_access path.
-func newMemberAccessSvc(t *testing.T) (
-	*service.AccessService,
-	store.MemberAccessStore,
-	store.ModuleAuthorizationStore,
-) {
-	t.Helper()
-	dbConn, writer := openSvcTestDB(t)
-	maStore := sqlitestore.NewMemberAccessStore(dbConn, writer)
-	moStore := sqlitestore.NewModuleAuthorizationStore(dbConn, writer)
-
-	deviceStore := memory.NewDeviceStore([]string{"module-a"})
-	registry := service.NewDeviceRegistry(deviceStore)
-	eventStore := memory.NewAccessEventStore()
-
-	svc := service.NewAccessService(registry, service.AccessPolicy{}, eventStore)
-	svc.SetMemberAccessStore(maStore)
-	svc.SetModuleAuthStore(moStore)
-	return svc, maStore, moStore
-}
-
-// seedActiveMember creates a member with an attached credential and an active
-// module authorization. Returns the credential hash used.
-func seedActiveMember(
-	t *testing.T,
-	ctx context.Context,
-	maStore store.MemberAccessStore,
-	moStore store.ModuleAuthorizationStore,
-	memberUUID, moduleID string,
-) []byte {
-	t.Helper()
-	credHash := make([]byte, 32)
-	credHash[0] = 0xDE
-	credHash[1] = 0xAD
-
-	if err := maStore.CreateMember(ctx, memberUUID, "", store.ProvisioningStatusActive, nil, nil); err != nil {
-		t.Fatalf("CreateMember: %v", err)
-	}
-	if err := maStore.AttachCredential(ctx, memberUUID, credHash); err != nil {
-		t.Fatalf("AttachCredential: %v", err)
-	}
-	if err := moStore.GrantAuthorization(ctx, memberUUID, moduleID, "", nil, ""); err != nil {
-		t.Fatalf("GrantAuthorization: %v", err)
-	}
-	return credHash
-}
-
-// credID encodes the raw credential identifier for HashCredentialID with an
-// empty secret, matching the test service configuration.
-func credIDFor(hash []byte) string {
-	// The AccessService calls HashCredentialID(credentialID, secret) → hash.
-	// With an empty secret, HashCredentialID does SHA-256(credentialID).
-	// To produce the exact hash we inserted we need to produce the pre-image.
-	// For tests, we bypass HashCredentialID by inserting the raw hash directly
-	// and using a special helper; here we just return a placeholder and instead
-	// inject the hash via the store — so this function is unused in the helpers.
-	// The actual tests pass a credential_id and expect the access service to
-	// hash it. Use seedActiveMemberByID below for a test that owns the full chain.
-	_ = hash
-	return ""
-}
-
 // ── access decision tests ─────────────────────────────────────────────────────
 
 // TestAccessService_MemberPath_Granted verifies end-to-end grant when member is

@@ -3,6 +3,7 @@ package sqlite_test
 import (
 	"context"
 	"database/sql"
+	"math"
 	"testing"
 	"time"
 
@@ -260,6 +261,45 @@ func TestHeartbeatStore_UpsertHeartbeat_CreatesModuleIfMissing(t *testing.T) {
 // ═══════════════════════════════════════════════════════════════════════════
 // UpsertHeartbeat — optional fields
 // ═══════════════════════════════════════════════════════════════════════════
+
+// uptime_s comes from the device: a value whose milliseconds overflow int64
+// is stored as NULL (unknown), never as a wrapped negative uptime.
+func TestHeartbeatStore_UpsertHeartbeat_UptimeRange(t *testing.T) {
+	const maxSec = math.MaxInt64 / 1000
+	tests := []struct {
+		name   string
+		uptime uint64
+		wantMs sql.NullInt64
+	}{
+		{"unreported", 0, sql.NullInt64{}},
+		{"normal", 300, sql.NullInt64{Int64: 300_000, Valid: true}},
+		{"largest representable", maxSec, sql.NullInt64{Int64: maxSec * 1000, Valid: true}},
+		{"one past", maxSec + 1, sql.NullInt64{}},
+		{"max uint64", math.MaxUint64, sql.NullInt64{}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			conn := openTestDB(t)
+			hs := sqlitestore.NewHeartbeatStore(conn, newTestWriter(t, conn))
+			err := hs.UpsertHeartbeat(context.Background(), "door-001", store.HeartbeatRecord{
+				ReceivedAt: time.Now().UTC(),
+				Request:    types.HeartbeatRequest{ModuleID: "door-001", UptimeSeconds: tc.uptime},
+			})
+			if err != nil {
+				t.Fatalf("UpsertHeartbeat: %v", err)
+			}
+			var got sql.NullInt64
+			if err := conn.QueryRowContext(context.Background(),
+				`SELECT uptime_ms FROM module_heartbeats WHERE module_id = ?`, "door-001",
+			).Scan(&got); err != nil {
+				t.Fatalf("query: %v", err)
+			}
+			if got != tc.wantMs {
+				t.Errorf("uptime_ms = %v, want %v", got, tc.wantMs)
+			}
+		})
+	}
+}
 
 func TestHeartbeatStore_UpsertHeartbeat_NilRSSI(t *testing.T) {
 	conn := openTestDB(t)

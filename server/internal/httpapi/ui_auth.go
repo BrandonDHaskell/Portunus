@@ -78,7 +78,7 @@ func (s *Server) handleUILogout(w http.ResponseWriter, r *http.Request) {
 	if err == nil && cookie.Value != "" {
 		_ = s.authService.Logout(r.Context(), cookie.Value)
 	}
-	clearSessionCookie(w)
+	clearSessionCookie(w, s.tlsEnabled)
 	http.Redirect(w, r, "/admin/ui/login?flash=Signed+out&ft=success", http.StatusSeeOther)
 }
 
@@ -137,7 +137,7 @@ func (s *Server) handleUIChangePassword(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	clearSessionCookie(w)
+	clearSessionCookie(w, s.tlsEnabled)
 	http.Redirect(w, r, "/admin/ui/login?flash=Password+changed.+Please+sign+in.&ft=success", http.StatusSeeOther)
 }
 
