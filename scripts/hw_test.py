@@ -239,6 +239,9 @@ class TestServer:
         self.log = (LOG_DIR / "net-server.log").open("w")
 
     def build(self) -> None:
+        # A server left over from an interrupted run would hold the ports.
+        subprocess.run(["bash", "scripts/stop_local_servers.sh"], check=True,
+                       stdout=self.log, stderr=subprocess.STDOUT)
         result = subprocess.run(["go", "build", "-o", str(self.binary), "./cmd/portunus-server"],
                                 cwd="server", stdout=self.log, stderr=subprocess.STDOUT)
         if result.returncode != 0:
