@@ -1,0 +1,20 @@
+# clang-tidy for first-party firmware sources (task lint:firmware).
+# A MISRA-inspired subset: bug-prone patterns, the clang static analyzer, and
+# CERT C/C++ rules. Full MISRA C++:2023 needs a commercial checker.
+#
+# Disabled, with reasons:
+#   bugprone-easily-swappable-parameters  flags most C-style APIs; low signal
+#   bugprone-signed-bitwise               fires inside ESP_LOG*/FreeRTOS macros
+#   cert-int09-c                          event IDs are grouped by subsystem on
+#                                         purpose (0x01xx, 0x02xx, ...)
+Checks: >
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  cert-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-signed-bitwise,
+  -cert-int09-c
+WarningsAsErrors: '*'
+# Our headers, not ESP-IDF's or the generated Nanopb stubs.
+HeaderFilterRegex: '.*/access_module/(core|services|drivers|main|components/portunus_(types|config|interfaces|nvs|clock))/.*'

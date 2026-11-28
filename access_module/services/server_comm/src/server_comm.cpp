@@ -112,7 +112,7 @@ static_assert(portunus_v1_ProvisionCredentialRequest_size <= GRPC_MAX_REQUEST_PA
 static_assert(sizeof(event_access_decision_t::reason) ==
               sizeof(portunus_v1_AccessResponse::reason),
               "decision reason must match AccessResponse.reason");
-static_assert(CREDENTIAL_UID_MAX_LEN * 3 <= sizeof(portunus_v1_AccessRequest::credential_id),
+static_assert(size_t{CREDENTIAL_UID_MAX_LEN} * 3 <= sizeof(portunus_v1_AccessRequest::credential_id),
               "a 10-byte UID as XX:..:XX plus NUL must fit AccessRequest.credential_id");
 static_assert(CREDENTIAL_UID_MAX_LEN <=
               sizeof(portunus_v1_ProvisionCredentialRequest_credential_uid_t::bytes),
@@ -230,7 +230,7 @@ static bool compute_hmac_hex(const uint8_t *data, size_t data_len,
 
     /* Hex-encode into out_hex */
     static const char hex_chars[] = "0123456789abcdef";
-    for (int i = 0; i < 32; ++i) {
+    for (size_t i = 0; i < 32; ++i) {
         out_hex[i * 2]     = hex_chars[(raw[i] >> 4) & 0x0F];
         out_hex[i * 2 + 1] = hex_chars[ raw[i]       & 0x0F];
     }
