@@ -95,3 +95,34 @@ func TestAdminUserStore_CountEnabledAdminsWithRole_DifferentRolesIsolated(t *tes
 		t.Errorf("expected 1 operator, got %d", opCount)
 	}
 }
+
+// A NULL role_id must read back as "no role", never as the superuser role.
+// Coalescing it to 'admin' would grant full permissions to an unassigned row.
+func TestAdminUserStore_NullRole_IsNotAdmin(t *testing.T) {
+	conn := openTestDB(t)
+	w := newTestWriter(t, conn)
+	us := sqlitestore.NewAdminUserStore(conn, w)
+	ctx := context.Background()
+
+	if err := us.CreateAdminUser(ctx, "u-null", "norole", "hash", "admin"); err != nil {
+		t.Fatalf("CreateAdminUser: %v", err)
+	}
+	if _, err := conn.Exec(`UPDATE admin_users SET role_id = NULL WHERE uuid = 'u-null'`); err != nil {
+		t.Fatalf("null role: %v", err)
+	}
+
+	rec, err := us.GetAdminUserByUUID(ctx, "u-null")
+	if err != nil {
+		t.Fatalf("GetAdminUserByUUID: %v", err)
+	}
+	if rec.RoleID != "" {
+		t.Errorf("RoleID = %q for NULL role_id, want empty", rec.RoleID)
+	}
+	n, err := us.CountEnabledAdminsWithRole(ctx, "admin")
+	if err != nil {
+		t.Fatalf("CountEnabledAdminsWithRole: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("NULL-role row counted as admin: got %d, want 0", n)
+	}
+}

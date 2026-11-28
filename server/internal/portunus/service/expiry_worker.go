@@ -22,8 +22,7 @@ type ExpiryWorker struct {
 	interval       time.Duration
 	pendingTTLDays int
 	logger         *log.Logger
-	cancel         context.CancelFunc
-	done           chan struct{}
+	bg             bgLoop
 }
 
 // ExpiryWorkerConfig holds configuration for NewExpiryWorker.
@@ -52,7 +51,6 @@ func NewExpiryWorker(s store.MemberAccessStore, audit store.AuditStore, cfg Expi
 		interval:       interval,
 		pendingTTLDays: ttl,
 		logger:         logger,
-		done:           make(chan struct{}),
 	}
 }
 
@@ -60,21 +58,18 @@ func NewExpiryWorker(s store.MemberAccessStore, audit store.AuditStore, cfg Expi
 // then repeats on the configured interval. The loop exits when ctx is cancelled
 // or Stop is called.
 func (w *ExpiryWorker) Start(ctx context.Context) {
-	ctx, w.cancel = context.WithCancel(ctx)
-	go w.loop(ctx)
+	if !w.bg.start(ctx, w.loop) {
+		return
+	}
 	w.logger.Printf("expiry worker started (interval=%dm, pendingTTL=%dd)", int(w.interval.Minutes()), w.pendingTTLDays)
 }
 
 // Stop signals the worker to exit and waits for it to finish.
 func (w *ExpiryWorker) Stop() {
-	if w.cancel != nil {
-		w.cancel()
-	}
-	<-w.done
+	w.bg.stop()
 }
 
 func (w *ExpiryWorker) loop(ctx context.Context) {
-	defer close(w.done)
 
 	w.sweep(ctx)
 
@@ -99,6 +94,7 @@ func (w *ExpiryWorker) sweep(ctx context.Context) {
 		w.logger.Printf("expiry worker: hard-deadline sweep error: %v", err)
 	} else if n > 0 {
 		w.logger.Printf("expiry worker: expired %d member(s) by hard deadline", n)
+		w.auditExpiry(ctx, n, "hard_deadline")
 	}
 
 	n, err = w.store.ExpireByInactivity(ctx, now)
@@ -106,6 +102,7 @@ func (w *ExpiryWorker) sweep(ctx context.Context) {
 		w.logger.Printf("expiry worker: inactivity sweep error: %v", err)
 	} else if n > 0 {
 		w.logger.Printf("expiry worker: expired %d member(s) by inactivity", n)
+		w.auditExpiry(ctx, n, "inactivity")
 	}
 
 	if w.pendingTTLDays == 0 {
@@ -133,4 +130,14 @@ func (w *ExpiryWorker) sweep(ctx context.Context) {
 			w.logger.Printf("expiry worker: audit write error: %v", err)
 		}
 	}
+}
+
+// auditExpiry records members deactivated automatically, so every loss of
+// access shows up in the audit log, not only admin actions.
+func (w *ExpiryWorker) auditExpiry(ctx context.Context, count int, reason string) {
+	writeAudit(ctx, w.auditStore, store.AuditEntry{
+		Action:       "member.expire",
+		ResourceType: "member_access",
+		Details:      auditDetails(map[string]any{"count": count, "reason": reason}),
+	})
 }

@@ -54,7 +54,7 @@ func (s *Server) handleUIUsersCreate(w http.ResponseWriter, r *http.Request) {
 	roleID := r.FormValue("role_id")
 
 	sess := sessionFromContext(r.Context())
-	_, err := s.adminUserService.CreateUser(r.Context(), sess.AdminUUID, username, password, roleID)
+	_, err := s.adminUserService.CreateUser(r.Context(), sess.AdminUUID, sess.Permissions, username, password, roleID)
 	if err != nil {
 		if errors.Is(err, store.ErrUsernameAlreadyExists) {
 			d := newUIPageData(r, "users")
@@ -65,6 +65,10 @@ func (s *Server) handleUIUsersCreate(w http.ResponseWriter, r *http.Request) {
 				d.Roles = roles
 			}
 			render.render(w, "users_create", d)
+			return
+		}
+		if errors.Is(err, service.ErrPermissionSubsetViolation) {
+			flashRedirect(w, r, "/admin/ui/users/new", "You cannot create an account with a role that has permissions you do not hold.", "error")
 			return
 		}
 		s.logger.Printf("ui create user: %v", err)
@@ -136,9 +140,13 @@ func (s *Server) handleUIUsersSetExpiry(w http.ResponseWriter, r *http.Request) 
 	}
 
 	sess := sessionFromContext(r.Context())
-	if err := s.adminUserService.SetExpiry(r.Context(), sess.AdminUUID, uuid, expiresAt); err != nil {
+	if err := s.adminUserService.SetExpiry(r.Context(), sess.AdminUUID, sess.Permissions, uuid, expiresAt); err != nil {
 		if errors.Is(err, service.ErrAdminUserNotFound) {
 			http.NotFound(w, r)
+			return
+		}
+		if errors.Is(err, service.ErrTargetOutranksCaller) {
+			flashRedirect(w, r, "/admin/ui/users/"+uuid, "You cannot change an account that holds permissions you do not.", "error")
 			return
 		}
 		if errors.Is(err, service.ErrLastAdmin) {
@@ -172,9 +180,17 @@ func (s *Server) handleUIUsersSetMemberLink(w http.ResponseWriter, r *http.Reque
 	}
 
 	sess := sessionFromContext(r.Context())
-	if err := s.adminUserService.SetMemberLink(r.Context(), sess.AdminUUID, uuid, memberUUID); err != nil {
+	if err := s.adminUserService.SetMemberLink(r.Context(), sess.AdminUUID, sess.Permissions, uuid, memberUUID); err != nil {
 		if errors.Is(err, service.ErrAdminUserNotFound) {
 			http.NotFound(w, r)
+			return
+		}
+		if errors.Is(err, service.ErrCannotSelfLink) {
+			flashRedirect(w, r, "/admin/ui/users/"+uuid, "You cannot change the member link on your own account. Ask another admin.", "error")
+			return
+		}
+		if errors.Is(err, service.ErrTargetOutranksCaller) {
+			flashRedirect(w, r, "/admin/ui/users/"+uuid, "You cannot change an account that holds permissions you do not.", "error")
 			return
 		}
 		if errors.Is(err, store.ErrMemberAlreadyLinked) {
@@ -212,6 +228,10 @@ func (s *Server) handleUIUsersAssignRole(w http.ResponseWriter, r *http.Request)
 			http.NotFound(w, r)
 			return
 		}
+		if errors.Is(err, service.ErrTargetOutranksCaller) {
+			flashRedirect(w, r, "/admin/ui/users/"+uuid, "You cannot change an account that holds permissions you do not.", "error")
+			return
+		}
 		if errors.Is(err, service.ErrLastAdmin) {
 			flashRedirect(w, r, "/admin/ui/users/"+uuid, "Cannot move the last admin user off the admin role.", "error")
 			return
@@ -234,13 +254,17 @@ func (s *Server) handleUIUsersDisable(w http.ResponseWriter, r *http.Request) {
 	uuid := r.PathValue("uuid")
 	sess := sessionFromContext(r.Context())
 
-	if err := s.adminUserService.SetEnabled(r.Context(), uuid, sess.AdminUUID, false); err != nil {
+	if err := s.adminUserService.SetEnabled(r.Context(), uuid, sess.AdminUUID, sess.Permissions, false); err != nil {
 		if errors.Is(err, service.ErrCannotSelfDisable) {
 			flashRedirect(w, r, "/admin/ui/users", "You cannot disable your own account.", "error")
 			return
 		}
 		if errors.Is(err, service.ErrAdminUserNotFound) {
 			http.NotFound(w, r)
+			return
+		}
+		if errors.Is(err, service.ErrTargetOutranksCaller) {
+			flashRedirect(w, r, "/admin/ui/users", "You cannot change an account that holds permissions you do not.", "error")
 			return
 		}
 		if errors.Is(err, service.ErrLastAdmin) {
@@ -261,9 +285,13 @@ func (s *Server) handleUIUsersEnable(w http.ResponseWriter, r *http.Request) {
 	uuid := r.PathValue("uuid")
 	sess := sessionFromContext(r.Context())
 
-	if err := s.adminUserService.SetEnabled(r.Context(), uuid, sess.AdminUUID, true); err != nil {
+	if err := s.adminUserService.SetEnabled(r.Context(), uuid, sess.AdminUUID, sess.Permissions, true); err != nil {
 		if errors.Is(err, service.ErrAdminUserNotFound) {
 			http.NotFound(w, r)
+			return
+		}
+		if errors.Is(err, service.ErrTargetOutranksCaller) {
+			flashRedirect(w, r, "/admin/ui/users", "You cannot change an account that holds permissions you do not.", "error")
 			return
 		}
 		s.logger.Printf("ui enable user: %v", err)

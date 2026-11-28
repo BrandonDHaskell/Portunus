@@ -139,14 +139,14 @@ func (f *fakeModuleAdminStore) DeleteDoor(_ context.Context, doorID string) erro
 // ── helper ────────────────────────────────────────────────────────────────────
 
 func newTestAdminService(ms *fakeModuleAdminStore) *service.AdminService {
-	return service.NewAdminService(ms, nil)
+	return service.NewAdminService(ms, nil, nil)
 }
 
 // ── B12: not-found vs DB-error propagation ────────────────────────────────────
 
 func TestRevokeModule_NotFound_ReturnsErrModuleNotFound(t *testing.T) {
 	svc := newTestAdminService(newFakeModuleStore())
-	err := svc.RevokeModule(context.Background(), "missing")
+	err := svc.RevokeModule(context.Background(), "missing", "test-admin")
 	if !errors.Is(err, service.ErrModuleNotFound) {
 		t.Fatalf("expected ErrModuleNotFound, got: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestRevokeModule_DBError_Propagated(t *testing.T) {
 	ms := newFakeModuleStore()
 	ms.returnErr = errDB
 	svc := newTestAdminService(ms)
-	err := svc.RevokeModule(context.Background(), "any")
+	err := svc.RevokeModule(context.Background(), "any", "test-admin")
 	if errors.Is(err, service.ErrModuleNotFound) {
 		t.Fatal("DB error must not be masked as ErrModuleNotFound")
 	}
@@ -167,7 +167,7 @@ func TestRevokeModule_DBError_Propagated(t *testing.T) {
 
 func TestDeleteModule_NotFound_ReturnsErrModuleNotFound(t *testing.T) {
 	svc := newTestAdminService(newFakeModuleStore())
-	err := svc.DeleteModule(context.Background(), "missing")
+	err := svc.DeleteModule(context.Background(), "missing", "test-admin")
 	if !errors.Is(err, service.ErrModuleNotFound) {
 		t.Fatalf("expected ErrModuleNotFound, got: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestDeleteModule_DBError_Propagated(t *testing.T) {
 	ms := newFakeModuleStore()
 	ms.returnErr = errDB
 	svc := newTestAdminService(ms)
-	err := svc.DeleteModule(context.Background(), "any")
+	err := svc.DeleteModule(context.Background(), "any", "test-admin")
 	if errors.Is(err, service.ErrModuleNotFound) {
 		t.Fatal("DB error must not be masked as ErrModuleNotFound")
 	}
@@ -188,7 +188,7 @@ func TestDeleteModule_DBError_Propagated(t *testing.T) {
 
 func TestDeleteDoor_NotFound_ReturnsErrDoorNotFound(t *testing.T) {
 	svc := newTestAdminService(newFakeModuleStore())
-	err := svc.DeleteDoor(context.Background(), "missing")
+	err := svc.DeleteDoor(context.Background(), "missing", "test-admin")
 	if !errors.Is(err, service.ErrDoorNotFound) {
 		t.Fatalf("expected ErrDoorNotFound, got: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestDeleteDoor_DBError_Propagated(t *testing.T) {
 	ms := newFakeModuleStore()
 	ms.returnErr = errDB
 	svc := newTestAdminService(ms)
-	err := svc.DeleteDoor(context.Background(), "any")
+	err := svc.DeleteDoor(context.Background(), "any", "test-admin")
 	if errors.Is(err, service.ErrDoorNotFound) {
 		t.Fatal("DB error must not be masked as ErrDoorNotFound")
 	}
@@ -218,7 +218,7 @@ func TestAdminService_RegisterRevokeDeleteModule(t *testing.T) {
 		t.Fatalf("RegisterDoor: %v", err)
 	}
 
-	info, err := svc.RegisterModule(ctx, types.RegisterModuleRequest{ModuleID: "door-001", DoorID: "door-main"})
+	info, err := svc.RegisterModule(ctx, types.RegisterModuleRequest{ModuleID: "door-001", DoorID: "door-main"}, "test-admin")
 	if err != nil {
 		t.Fatalf("RegisterModule: %v", err)
 	}
@@ -226,15 +226,15 @@ func TestAdminService_RegisterRevokeDeleteModule(t *testing.T) {
 		t.Errorf("expected module_id=door-001, got %q", info.ModuleID)
 	}
 
-	if err := svc.RevokeModule(ctx, "door-001"); err != nil {
+	if err := svc.RevokeModule(ctx, "door-001", "test-admin"); err != nil {
 		t.Fatalf("RevokeModule: %v", err)
 	}
-	if err := svc.DeleteModule(ctx, "door-001"); err != nil {
+	if err := svc.DeleteModule(ctx, "door-001", "test-admin"); err != nil {
 		t.Fatalf("DeleteModule: %v", err)
 	}
 
 	// Second delete must return not-found, not a panic.
-	if err := svc.DeleteModule(ctx, "door-001"); !errors.Is(err, service.ErrModuleNotFound) {
+	if err := svc.DeleteModule(ctx, "door-001", "test-admin"); !errors.Is(err, service.ErrModuleNotFound) {
 		t.Errorf("expected ErrModuleNotFound on second delete, got: %v", err)
 	}
 }
@@ -243,7 +243,7 @@ func TestAdminService_RegisterRevokeDeleteModule(t *testing.T) {
 
 func TestRegisterModule_EmptyDoor_ReturnsErrModuleDoorRequired(t *testing.T) {
 	svc := newTestAdminService(newFakeModuleStore())
-	_, err := svc.RegisterModule(context.Background(), types.RegisterModuleRequest{ModuleID: "m1", DoorID: ""})
+	_, err := svc.RegisterModule(context.Background(), types.RegisterModuleRequest{ModuleID: "m1", DoorID: ""}, "test-admin")
 	if !errors.Is(err, service.ErrModuleDoorRequired) {
 		t.Fatalf("expected ErrModuleDoorRequired, got: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestRegisterModule_EmptyDoor_ReturnsErrModuleDoorRequired(t *testing.T) {
 
 func TestRegisterModule_MissingDoor_ReturnsErrDoorNotFound(t *testing.T) {
 	svc := newTestAdminService(newFakeModuleStore())
-	_, err := svc.RegisterModule(context.Background(), types.RegisterModuleRequest{ModuleID: "m1", DoorID: "nonexistent"})
+	_, err := svc.RegisterModule(context.Background(), types.RegisterModuleRequest{ModuleID: "m1", DoorID: "nonexistent"}, "test-admin")
 	if !errors.Is(err, service.ErrDoorNotFound) {
 		t.Fatalf("expected ErrDoorNotFound, got: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestRegisterModule_ValidDoor_ReachesActiveStatus(t *testing.T) {
 		t.Fatalf("RegisterDoor: %v", err)
 	}
 
-	info, err := svc.RegisterModule(ctx, types.RegisterModuleRequest{ModuleID: "m1", DoorID: "door-a"})
+	info, err := svc.RegisterModule(ctx, types.RegisterModuleRequest{ModuleID: "m1", DoorID: "door-a"}, "test-admin")
 	if err != nil {
 		t.Fatalf("RegisterModule: %v", err)
 	}

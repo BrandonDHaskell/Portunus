@@ -293,7 +293,7 @@ This fallback exists only for local development and integration testing. It must
 
 ### Admin credential enrollment
 
-**Member credential attachment** (`POST /admin/v1/members/{member_uuid}/credential`): the caller supplies the pre-computed `credential_hash` as a 64-character hex string. The server stores the 32-byte hash in `member_access`. The admin web UI accepts a raw credential UID and hashes it server-side with `HMAC-SHA256(secret, rawUID)` before forwarding to this path.
+**Member credential attachment** (`POST /admin/v1/members/{member_uuid}/credential`): the caller supplies the raw credential UID as `credential_id` in colon-separated hex (e.g. `"04:A3:2B:1C"`). The admin web UI form takes the same input. Both paths parse it to raw bytes and hash it server-side with `HMAC-SHA256(secret, rawUID)` through one shared helper, so an admin-enrolled card matches the door lookup byte for byte. Callers never supply a hash: the credential-hash secret stays on the server.
 
 ### PROVISIONING_CONSOLE capture path
 
@@ -321,6 +321,21 @@ Access is default-deny at every step: a missing credential, inactive member, or 
 ### Audit trail
 
 The access-event write path stores the HMAC-SHA256 hash in `access_events.credential_hash` when a credential ID is present. Raw IDs are never written to audit records.
+
+Administrative changes are recorded in `audit_log` by the service layer, so the admin UI and the REST API produce identical entries. Each entry carries the acting admin (or `system`), the client address, the result (`success` or `failure`) and, for a refused action, a machine-readable reason. Recorded actions:
+
+| Area | Actions |
+|------|---------|
+| Members | `member.create`, `member.credential_attach`, `member.approve`, `member.policy_update`, `member.disable`, `member.enable`, `member.archive`, `member.expire` (system: hard deadline or inactivity), `member.capture` (PEU), `archive_stale_pending` (system) |
+| Modules and doors | `module.register`, `module.revoke`, `module.delete`, `door.register`, `door.delete` |
+| Door access | `module_auth.granted`, `module_auth.revoked` |
+| Console accounts | `admin_user.created`, `admin_user.role_assigned`, `admin_user.enabled`, `admin_user.disabled`, `admin_user.expiry_set`, `admin_user.member_linked`, `admin_user.password_change` (revokes all sessions), `admin_user.logout` |
+
+Audit writes are best-effort: a failed write never blocks the action, matching the availability-first policy for access events. Credential hashes are never written to `audit_log`.
+
+### Device signature failures
+
+A device request whose HMAC signature is missing or does not verify (on either transport) is rejected and recorded against the `module_id` the request claims: a `WARN device auth failure module=… peer=… transport=… reason=…` log line, a per-module counter on `GET /admin/v1/health` (`device_auth_failures`), and a warning banner on that module's admin UI page. The usual cause is a module whose NVS `hmac_secret` no longer matches `PORTUNUS_HMAC_SECRET`; compare SHA-256 fingerprints and re-flash NVS. The claimed id is unauthenticated, so at most 256 ids are tracked (least recent evicted) and neither secret nor signature is ever logged.
 
 ### Remaining limitation
 

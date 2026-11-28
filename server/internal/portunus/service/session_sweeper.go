@@ -17,8 +17,7 @@ type SessionSweeper struct {
 	store    store.SessionStore
 	interval time.Duration
 	logger   *log.Logger
-	cancel   context.CancelFunc
-	done     chan struct{}
+	bg       bgLoop
 }
 
 // NewSessionSweeper creates a sweeper that runs on the given interval.
@@ -31,28 +30,24 @@ func NewSessionSweeper(s store.SessionStore, interval time.Duration, logger *log
 		store:    s,
 		interval: interval,
 		logger:   logger,
-		done:     make(chan struct{}),
 	}
 }
 
 // Start begins the background sweep loop.
 func (sw *SessionSweeper) Start(ctx context.Context) {
-	ctx, sw.cancel = context.WithCancel(ctx)
-	go sw.loop(ctx)
+	if !sw.bg.start(ctx, sw.loop) {
+		return
+	}
 	sw.logger.Printf("session sweeper started (interval=%s)", sw.interval)
 }
 
-// Stop signals the sweeper to exit and waits for it to finish.
+// Stop signals the sweeper to exit and waits for it to finish. It is a no-op
+// if Start was never called, and safe to call more than once.
 func (sw *SessionSweeper) Stop() {
-	if sw.cancel != nil {
-		sw.cancel()
-	}
-	<-sw.done
+	sw.bg.stop()
 }
 
 func (sw *SessionSweeper) loop(ctx context.Context) {
-	defer close(sw.done)
-
 	sw.sweep(ctx)
 
 	ticker := time.NewTicker(sw.interval)

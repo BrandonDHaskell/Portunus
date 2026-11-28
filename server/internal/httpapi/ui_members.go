@@ -166,14 +166,13 @@ func (s *Server) handleUIMembersAttachCredential(w http.ResponseWriter, r *http.
 	}
 
 	credentialID := r.FormValue("credential_id")
-	rawUID, err := service.ParseCredentialUID(credentialID)
+	credHash, err := s.credentialHashFromUID(credentialID)
 	if err != nil {
 		flashRedirect(w, r, "/admin/ui/members/"+memberUUID, "Invalid credential UID — use colon-separated hex, e.g. 04:A3:2B:1C.", "error")
 		return
 	}
-	credHash := service.HashCredentialID(rawUID, s.credentialHashSecret)
 
-	if err := s.memberAccessService.AttachCredential(r.Context(), memberUUID, credHash); err != nil {
+	if err := s.memberAccessService.AttachCredential(r.Context(), memberUUID, credHash, actorOf(r)); err != nil {
 		msg := "Failed to attach credential."
 		switch {
 		case errors.Is(err, service.ErrMemberNotFound):
@@ -309,7 +308,7 @@ func (s *Server) handleUIMembersUpdate(w http.ResponseWriter, r *http.Request) {
 		inactivityDays = &n
 	}
 
-	if err := s.memberAccessService.UpdateMemberPolicy(r.Context(), memberUUID, expiresAt, inactivityDays); err != nil {
+	if err := s.memberAccessService.UpdateMemberPolicy(r.Context(), memberUUID, expiresAt, inactivityDays, actorOf(r)); err != nil {
 		if errors.Is(err, service.ErrMemberNotFound) {
 			http.NotFound(w, r)
 			return
@@ -326,7 +325,7 @@ func (s *Server) handleUIMembersUpdate(w http.ResponseWriter, r *http.Request) {
 // handleUIMembersDisable handles POST /admin/ui/members/{member_uuid}/disable.
 func (s *Server) handleUIMembersDisable(w http.ResponseWriter, r *http.Request) {
 	memberUUID := r.PathValue("member_uuid")
-	if err := s.memberAccessService.Disable(r.Context(), memberUUID); err != nil {
+	if err := s.memberAccessService.Disable(r.Context(), memberUUID, actorOf(r)); err != nil {
 		if errors.Is(err, service.ErrMemberNotFound) {
 			http.NotFound(w, r)
 			return
@@ -342,7 +341,7 @@ func (s *Server) handleUIMembersDisable(w http.ResponseWriter, r *http.Request) 
 // handleUIMembersEnable handles POST /admin/ui/members/{member_uuid}/enable.
 func (s *Server) handleUIMembersEnable(w http.ResponseWriter, r *http.Request) {
 	memberUUID := r.PathValue("member_uuid")
-	if err := s.memberAccessService.Enable(r.Context(), memberUUID); err != nil {
+	if err := s.memberAccessService.Enable(r.Context(), memberUUID, actorOf(r)); err != nil {
 		if errors.Is(err, service.ErrMemberNotFound) {
 			http.NotFound(w, r)
 			return
@@ -418,6 +417,10 @@ func (s *Server) handleUIGrantAuthorization(w http.ResponseWriter, r *http.Reque
 			msg = "An active authorization already exists for that module."
 		case errors.Is(err, service.ErrGrantOutOfScope):
 			msg = "Your linked member does not currently hold access to that module."
+		case errors.Is(err, service.ErrMemberNotApproved):
+			msg = "This member must be approved before granting door access."
+		case errors.Is(err, service.ErrMemberNotFound):
+			msg = "Member not found."
 		case errors.Is(err, service.ErrMemberUUIDRequired), errors.Is(err, service.ErrModuleIDRequired):
 			msg = "Member UUID and module are required."
 		default:

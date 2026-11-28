@@ -15,8 +15,12 @@ import (
 var (
 	ErrAdminUserNotFound         = errors.New("admin user not found")
 	ErrCannotSelfDisable         = errors.New("cannot disable your own account")
+	ErrCannotSelfLink            = errors.New("cannot change the member link on your own account")
 	ErrLastAdmin                 = errors.New("at least one enabled admin user must retain the admin role")
 	ErrPermissionSubsetViolation = errors.New("cannot grant a permission you do not hold")
+	// ErrTargetOutranksCaller wraps ErrPermissionSubsetViolation: the target
+	// account's role holds a permission the caller lacks.
+	ErrTargetOutranksCaller = fmt.Errorf("%w: target account holds permissions you do not", ErrPermissionSubsetViolation)
 )
 
 // AdminUserInfo is the view type for admin user management pages.
@@ -48,7 +52,9 @@ func NewAdminUserService(users store.AdminUserStore, roles store.RoleStore, audi
 // CreateUser creates a new admin user with the given role.
 // The new account starts with must_change_pw = 1 so the operator must set a
 // personal password on first login.
-func (s *AdminUserService) CreateUser(ctx context.Context, callerUUID, username, password, roleID string) (*AdminUserInfo, error) {
+// The role's permissions must be a subset of callerPerms (F-7): a caller may
+// not mint an account more privileged than themselves.
+func (s *AdminUserService) CreateUser(ctx context.Context, callerUUID string, callerPerms map[string]struct{}, username, password, roleID string) (*AdminUserInfo, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return nil, fmt.Errorf("username is required")
@@ -70,6 +76,16 @@ func (s *AdminUserService) CreateUser(ctx context.Context, callerUUID, username,
 			return nil, fmt.Errorf("role %q not found", roleID)
 		}
 		return nil, fmt.Errorf("create user: verify role: %w", err)
+	}
+	rolePerms, err := s.roles.GetRolePermissions(ctx, roleID)
+	if err != nil {
+		return nil, fmt.Errorf("create user: load role permissions: %w", err)
+	}
+	for _, p := range rolePerms {
+		if _, ok := callerPerms[p]; !ok {
+			s.recordAudit(ctx, callerUUID, "admin_user.created", "", "failure", username+":"+roleID)
+			return nil, ErrPermissionSubsetViolation
+		}
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
@@ -125,18 +141,15 @@ func (s *AdminUserService) GetUser(ctx context.Context, uuid string) (*AdminUser
 
 // SetEnabled enables or disables an admin account.
 // A user may not disable their own account (callerUUID guard).
-func (s *AdminUserService) SetEnabled(ctx context.Context, uuid, callerUUID string, enabled bool) error {
+func (s *AdminUserService) SetEnabled(ctx context.Context, uuid, callerUUID string, callerPerms map[string]struct{}, enabled bool) error {
 	if !enabled && uuid == callerUUID {
 		return ErrCannotSelfDisable
 	}
+	target, err := s.loadTargetWithinCaller(ctx, uuid, callerPerms)
+	if err != nil {
+		return fmt.Errorf("set enabled: %w", err)
+	}
 	if !enabled {
-		target, err := s.users.GetAdminUserByUUID(ctx, uuid)
-		if err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				return ErrAdminUserNotFound
-			}
-			return fmt.Errorf("set enabled: load user: %w", err)
-		}
 		if target.RoleID == adminRoleID {
 			n, err := s.users.CountEnabledAdminsWithRole(ctx, adminRoleID)
 			if err != nil {
@@ -188,14 +201,11 @@ func (s *AdminUserService) AssignRole(ctx context.Context, callerUUID string, ca
 		}
 	}
 
+	target, err := s.loadTargetWithinCaller(ctx, uuid, callerPerms)
+	if err != nil {
+		return fmt.Errorf("assign role: %w", err)
+	}
 	if roleID != adminRoleID {
-		target, err := s.users.GetAdminUserByUUID(ctx, uuid)
-		if err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				return ErrAdminUserNotFound
-			}
-			return fmt.Errorf("assign role: load user: %w", err)
-		}
 		if target.RoleID == adminRoleID {
 			n, err := s.users.CountEnabledAdminsWithRole(ctx, adminRoleID)
 			if err != nil {
@@ -220,15 +230,12 @@ func (s *AdminUserService) AssignRole(ctx context.Context, callerUUID string, ca
 // SetExpiry sets or clears the account expiry for an admin user.
 // Setting any expiry on the last qualifying admin (enabled + not expired) fails
 // with ErrLastAdmin.
-func (s *AdminUserService) SetExpiry(ctx context.Context, callerUUID, uuid string, expiresAt *time.Time) error {
+func (s *AdminUserService) SetExpiry(ctx context.Context, callerUUID string, callerPerms map[string]struct{}, uuid string, expiresAt *time.Time) error {
+	target, err := s.loadTargetWithinCaller(ctx, uuid, callerPerms)
+	if err != nil {
+		return fmt.Errorf("set expiry: %w", err)
+	}
 	if expiresAt != nil {
-		target, err := s.users.GetAdminUserByUUID(ctx, uuid)
-		if err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				return ErrAdminUserNotFound
-			}
-			return fmt.Errorf("set expiry: load user: %w", err)
-		}
 		if target.RoleID == adminRoleID {
 			n, err := s.users.CountEnabledAdminsWithRole(ctx, adminRoleID)
 			if err != nil {
@@ -255,7 +262,18 @@ func (s *AdminUserService) SetExpiry(ctx context.Context, callerUUID, uuid strin
 
 // SetMemberLink links or unlinks a member_access row to an admin account.
 // Returns ErrMemberAlreadyLinked if the member is already linked to another account.
-func (s *AdminUserService) SetMemberLink(ctx context.Context, callerUUID, uuid string, memberUUID *string) error {
+//
+// The link defines held-scope grant rights (the admin may grant doors the
+// linked member holds), so a caller may not set their own link and may not
+// change the link of an account that outranks them.
+func (s *AdminUserService) SetMemberLink(ctx context.Context, callerUUID string, callerPerms map[string]struct{}, uuid string, memberUUID *string) error {
+	if uuid == callerUUID {
+		s.recordAudit(ctx, callerUUID, "admin_user.member_linked", uuid, "failure", "self_link")
+		return ErrCannotSelfLink
+	}
+	if _, err := s.loadTargetWithinCaller(ctx, uuid, callerPerms); err != nil {
+		return fmt.Errorf("set member link: %w", err)
+	}
 	if err := s.users.SetAdminUserMemberLink(ctx, uuid, memberUUID); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return ErrAdminUserNotFound
@@ -273,25 +291,42 @@ func (s *AdminUserService) SetMemberLink(ctx context.Context, callerUUID, uuid s
 	return nil
 }
 
-func (s *AdminUserService) recordAudit(ctx context.Context, actorUUID, action, resourceID, result, details string) {
-	if s.auditStore == nil {
-		return
+// loadTargetWithinCaller loads the target account and refuses it when its
+// current role holds a permission the caller lacks. F-7 already stops a caller
+// granting a role above their own; this stops them demoting, disabling or
+// re-timing an account that outranks them.
+func (s *AdminUserService) loadTargetWithinCaller(ctx context.Context, uuid string, callerPerms map[string]struct{}) (*store.AdminUserRecord, error) {
+	target, err := s.users.GetAdminUserByUUID(ctx, uuid)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, ErrAdminUserNotFound
+		}
+		return nil, fmt.Errorf("load user: %w", err)
 	}
-	e := store.AuditEntry{
+	if target.RoleID == "" {
+		return target, nil // no role, no permissions to outrank the caller with
+	}
+	targetPerms, err := s.roles.GetRolePermissions(ctx, target.RoleID)
+	if err != nil {
+		return nil, fmt.Errorf("load target permissions: %w", err)
+	}
+	for _, p := range targetPerms {
+		if _, ok := callerPerms[p]; !ok {
+			return nil, ErrTargetOutranksCaller
+		}
+	}
+	return target, nil
+}
+
+func (s *AdminUserService) recordAudit(ctx context.Context, actorUUID, action, resourceID, result, details string) {
+	writeAudit(ctx, s.auditStore, store.AuditEntry{
 		ActorUUID:    actorUUID,
-		ActorType:    store.ActorTypeAdmin,
 		Action:       action,
 		ResourceType: "admin_user",
 		ResourceID:   resourceID,
 		Result:       result,
 		Details:      details,
-	}
-	if actorUUID == "" {
-		e.ActorType = store.ActorTypeSystem
-	}
-	if err := s.auditStore.RecordAuditEntry(ctx, e); err != nil {
-		_ = err
-	}
+	})
 }
 
 func adminUserRecordToInfo(r *store.AdminUserRecord) AdminUserInfo {

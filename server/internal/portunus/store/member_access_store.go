@@ -82,9 +82,6 @@ type MemberAccessStore interface {
 	// to any other member. Returns ErrNotFound if uuid does not exist.
 	AttachCredential(ctx context.Context, uuid string, credentialHash []byte) error
 
-	// SetProvisioningStatus updates provisioning_status.
-	SetProvisioningStatus(ctx context.Context, uuid string, status ProvisioningStatus) error
-
 	// UpdateLastAccess records the time of a granted access event.
 	UpdateLastAccess(ctx context.Context, uuid string, t time.Time) error
 

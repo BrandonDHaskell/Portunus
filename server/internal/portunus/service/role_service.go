@@ -132,12 +132,18 @@ func (s *RoleService) SetPermissions(ctx context.Context, callerPerms map[string
 	if roleID == adminRoleID {
 		return ErrAdminRoleImmutable
 	}
+	seen := make(map[string]struct{}, len(permissions))
+	unique := make([]string, 0, len(permissions))
 	for _, p := range permissions {
 		if _, ok := callerPerms[p]; !ok {
 			return ErrPermissionSubsetViolation
 		}
+		if _, dup := seen[p]; !dup {
+			seen[p] = struct{}{}
+			unique = append(unique, p)
+		}
 	}
-	if err := s.roles.SetRolePermissions(ctx, roleID, permissions); err != nil {
+	if err := s.roles.SetRolePermissions(ctx, roleID, unique); err != nil {
 		return fmt.Errorf("set permissions: %w", err)
 	}
 	return nil

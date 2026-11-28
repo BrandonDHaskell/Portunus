@@ -47,18 +47,57 @@ var (
 	ErrInvalidModuleType  = errors.New("module_type must be 'access_control_unit' or 'provisioning_enrollment_unit'")
 )
 
+// AdminService manages modules and doors. Every change is written to the
+// audit log with the acting admin, whichever transport invoked it.
 type AdminService struct {
 	moduleStore          store.ModuleAdminStore
 	credentialHashSecret []byte
+	auditStore           store.AuditStore // nil disables auditing (tests only)
 }
 
-func NewAdminService(ms store.ModuleAdminStore, credentialHashSecret []byte) *AdminService {
-	return &AdminService{moduleStore: ms, credentialHashSecret: credentialHashSecret}
+func NewAdminService(ms store.ModuleAdminStore, credentialHashSecret []byte, audit store.AuditStore) *AdminService {
+	return &AdminService{moduleStore: ms, credentialHashSecret: credentialHashSecret, auditStore: audit}
+}
+
+var adminAuditReasons = []auditReason{
+	{ErrModuleIDRequired, "module_id_required"},
+	{ErrModuleDoorRequired, "door_required"},
+	{ErrInvalidModuleType, "invalid_module_type"},
+	{ErrModuleNotFound, "module_not_found"},
+	{ErrDoorIDRequired, "door_id_required"},
+	{ErrDoorNameRequired, "door_name_required"},
+	{ErrDoorNotFound, "door_not_found"},
+}
+
+func (s *AdminService) audit(ctx context.Context, actorUUID, action, resourceType, resourceID string, err error, details map[string]any) {
+	result, reason := resultOf(err, adminAuditReasons...)
+	if reason != "" {
+		if details == nil {
+			details = map[string]any{}
+		}
+		details["reason"] = reason
+	}
+	writeAudit(ctx, s.auditStore, store.AuditEntry{
+		ActorUUID:    actorUUID,
+		Action:       action,
+		ResourceType: resourceType,
+		ResourceID:   strings.TrimSpace(resourceID),
+		Result:       result,
+		Details:      auditDetails(details),
+	})
 }
 
 // ── Modules ─────────────────────────────────────────────────────────────────
 
-func (s *AdminService) RegisterModule(ctx context.Context, req types.RegisterModuleRequest) (*types.ModuleInfo, error) {
+// RegisterModule commissions a module onto a door.
+func (s *AdminService) RegisterModule(ctx context.Context, req types.RegisterModuleRequest, actorUUID string) (*types.ModuleInfo, error) {
+	info, err := s.registerModule(ctx, req)
+	s.audit(ctx, actorUUID, "module.register", "module", req.ModuleID, err,
+		map[string]any{"door_id": strings.TrimSpace(req.DoorID), "module_type": strings.TrimSpace(req.ModuleType)})
+	return info, err
+}
+
+func (s *AdminService) registerModule(ctx context.Context, req types.RegisterModuleRequest) (*types.ModuleInfo, error) {
 	moduleID := strings.TrimSpace(req.ModuleID)
 	if moduleID == "" {
 		return nil, ErrModuleIDRequired
@@ -120,7 +159,14 @@ func (s *AdminService) GetModule(ctx context.Context, moduleID string) (*types.M
 	return moduleRecordToInfo(rec), nil
 }
 
-func (s *AdminService) RevokeModule(ctx context.Context, moduleID string) error {
+// RevokeModule takes a module out of service; its taps become unknown_module.
+func (s *AdminService) RevokeModule(ctx context.Context, moduleID, actorUUID string) error {
+	err := s.revokeModule(ctx, moduleID)
+	s.audit(ctx, actorUUID, "module.revoke", "module", moduleID, err, nil)
+	return err
+}
+
+func (s *AdminService) revokeModule(ctx context.Context, moduleID string) error {
 	if strings.TrimSpace(moduleID) == "" {
 		return ErrModuleIDRequired
 	}
@@ -133,7 +179,14 @@ func (s *AdminService) RevokeModule(ctx context.Context, moduleID string) error 
 	return nil
 }
 
-func (s *AdminService) DeleteModule(ctx context.Context, moduleID string) error {
+// DeleteModule removes a module record.
+func (s *AdminService) DeleteModule(ctx context.Context, moduleID, actorUUID string) error {
+	err := s.deleteModule(ctx, moduleID)
+	s.audit(ctx, actorUUID, "module.delete", "module", moduleID, err, nil)
+	return err
+}
+
+func (s *AdminService) deleteModule(ctx context.Context, moduleID string) error {
 	if strings.TrimSpace(moduleID) == "" {
 		return ErrModuleIDRequired
 	}
@@ -165,7 +218,14 @@ func HashCredentialID(rawUID []byte, secret []byte) []byte {
 
 // ── Doors ───────────────────────────────────────────────────────────────────
 
-func (s *AdminService) RegisterDoor(ctx context.Context, req types.RegisterDoorRequest) (*types.DoorInfo, error) {
+// RegisterDoor creates a door.
+func (s *AdminService) RegisterDoor(ctx context.Context, req types.RegisterDoorRequest, actorUUID string) (*types.DoorInfo, error) {
+	info, err := s.registerDoor(ctx, req)
+	s.audit(ctx, actorUUID, "door.register", "door", req.DoorID, err, map[string]any{"name": strings.TrimSpace(req.Name)})
+	return info, err
+}
+
+func (s *AdminService) registerDoor(ctx context.Context, req types.RegisterDoorRequest) (*types.DoorInfo, error) {
 	doorID := strings.TrimSpace(req.DoorID)
 	if doorID == "" {
 		return nil, ErrDoorIDRequired
@@ -205,7 +265,14 @@ func (s *AdminService) ListDoors(ctx context.Context) ([]types.DoorInfo, error) 
 	return infos, nil
 }
 
-func (s *AdminService) DeleteDoor(ctx context.Context, doorID string) error {
+// DeleteDoor removes a door.
+func (s *AdminService) DeleteDoor(ctx context.Context, doorID, actorUUID string) error {
+	err := s.deleteDoor(ctx, doorID)
+	s.audit(ctx, actorUUID, "door.delete", "door", doorID, err, nil)
+	return err
+}
+
+func (s *AdminService) deleteDoor(ctx context.Context, doorID string) error {
 	if strings.TrimSpace(doorID) == "" {
 		return ErrDoorIDRequired
 	}

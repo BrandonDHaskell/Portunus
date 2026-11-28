@@ -41,7 +41,7 @@ func newAdminTestServer(t *testing.T) (*httptest.Server, *http.Cookie) {
 	roleStore := sqlitestore.NewRoleStore(conn, writer)
 	moduleAdminStore := sqlitestore.NewModuleAdminStore(conn, writer)
 
-	authSvc := service.NewAuthService(adminUserStore, sessionStore, roleStore, silentLogger)
+	authSvc := service.NewAuthService(adminUserStore, sessionStore, roleStore, silentLogger, nil)
 
 	if err := authSvc.Bootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -66,7 +66,7 @@ func newAdminTestServer(t *testing.T) (*httptest.Server, *http.Cookie) {
 		t.Fatalf("test login: %v", err)
 	}
 
-	adminSvc := service.NewAdminService(moduleAdminStore, nil)
+	adminSvc := service.NewAdminService(moduleAdminStore, nil, nil)
 
 	srv := httpapi.NewServer(httpapi.Dependencies{
 		Logger:       silentLogger,

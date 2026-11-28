@@ -103,7 +103,7 @@ func main() {
 	accessSvc.SetLogger(logger)
 
 	// Member access + module authorization services.
-	memberAccessSvc := service.NewMemberAccessService(memberAccessStore)
+	memberAccessSvc := service.NewMemberAccessService(memberAccessStore, auditStore)
 	moduleAuthSvc := service.NewModuleAuthorizationService(moduleAuthStore, memberAccessStore, auditStore)
 
 	// Enable member_access + module_authorizations path in the access service.
@@ -125,10 +125,10 @@ func main() {
 	provisionSvc := service.NewProvisionService(registry, memberAccessStore, accessEventStore, credentialHashSecret, auditStore)
 
 	// Admin service for module and door management via REST API.
-	adminSvc := service.NewAdminService(moduleAdminStore, credentialHashSecret)
+	adminSvc := service.NewAdminService(moduleAdminStore, credentialHashSecret, auditStore)
 
 	// Auth service: session-based admin authentication.
-	authSvc := service.NewAuthService(adminUserStore, sessionStore, roleStore, logger)
+	authSvc := service.NewAuthService(adminUserStore, sessionStore, roleStore, logger, auditStore)
 	// Write the first-run admin password to a private file instead of the log
 	// stream (F-9).  Skip for in-memory DBs used in dev/test.
 	if cfg.DBPath != ":memory:" && !strings.Contains(cfg.DBPath, "mode=memory") {
@@ -153,6 +153,11 @@ func main() {
 	if cfg.HMACSecret != "" {
 		sharedReplayStore = replay.NewStore(60 * time.Second)
 	}
+
+	// Shared record of device requests whose HMAC signature was missing or
+	// wrong, per claimed module id, from either transport. Surfaces a module
+	// whose NVS hmac_secret no longer matches the server.
+	deviceAuthMonitor := service.NewDeviceAuthMonitor(logger)
 
 	// Acquire the serving certificate once. prod loads it from PEM files; ci
 	// generates an ephemeral self-signed cert in-process. Both the HTTP and the
@@ -188,9 +193,9 @@ func main() {
 		RoleService:          roleSvc,
 		MemberAccessService:  memberAccessSvc,
 		ModuleAuthService:    moduleAuthSvc,
-		AuditStore:           auditStore,
 		HMACSecret:           cfg.HMACSecret,
 		ReplayStore:          sharedReplayStore,
+		DeviceAuthMonitor:    deviceAuthMonitor,
 		CredentialHashSecret: credentialHashSecret,
 		TLSEnabled:           tlsEnabled,
 	})
@@ -219,7 +224,7 @@ func main() {
 			grpcapi.LoggingInterceptor(logger),
 		}
 		if cfg.HMACSecret != "" {
-			interceptors = append(interceptors, grpcapi.HMACInterceptor(cfg.HMACSecret, sharedReplayStore))
+			interceptors = append(interceptors, grpcapi.HMACInterceptor(cfg.HMACSecret, sharedReplayStore, deviceAuthMonitor))
 			logger.Printf("gRPC HMAC auth: ENABLED (replay window: 60s)")
 		} else {
 			logger.Printf("gRPC HMAC auth: DISABLED (set PORTUNUS_HMAC_SECRET to enable)")

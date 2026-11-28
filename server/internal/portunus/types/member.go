@@ -14,7 +14,9 @@ type ApprovePendingRequest struct {
 }
 
 type AttachCredentialRequest struct {
-	CredentialHashHex string `json:"credential_hash"` // hex-encoded 32-byte SHA-256
+	// CredentialID is the colon-separated hex UID (e.g. "04:A3:2B:1C"). The
+	// server hashes it; callers never supply a hash (hazard #1).
+	CredentialID string `json:"credential_id"`
 }
 
 // MemberInfo is the JSON representation of a member_access row.

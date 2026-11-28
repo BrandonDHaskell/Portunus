@@ -31,6 +31,9 @@ var (
 	dummyHash     []byte
 )
 
+// compareHashAndPassword is a variable so tests can count comparisons.
+var compareHashAndPassword = bcrypt.CompareHashAndPassword
+
 func getDummyHash() []byte {
 	dummyHashOnce.Do(func() {
 		h, _ := bcrypt.GenerateFromPassword([]byte("portunus-timing-dummy-constant"), bcryptCost)
@@ -69,7 +72,8 @@ type AuthService struct {
 	sessions        store.SessionStore
 	roles           store.RoleStore
 	logger          *log.Logger
-	bootstrapPWFile string // path to write the initial admin password; empty → log it
+	bootstrapPWFile string           // path to write the initial admin password; empty → log it
+	auditStore      store.AuditStore // nil disables auditing (tests only)
 }
 
 func NewAuthService(
@@ -77,8 +81,9 @@ func NewAuthService(
 	sessions store.SessionStore,
 	roles store.RoleStore,
 	logger *log.Logger,
+	audit store.AuditStore,
 ) *AuthService {
-	return &AuthService{users: users, sessions: sessions, roles: roles, logger: logger}
+	return &AuthService{users: users, sessions: sessions, roles: roles, logger: logger, auditStore: audit}
 }
 
 // SetBootstrapPasswordFile configures the path where the initial admin password
@@ -159,10 +164,16 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (str
 			// Run a dummy bcrypt compare so that a missing username takes the
 			// same wall-clock time as a present-but-wrong-password attempt,
 			// preventing username enumeration via response timing (F-2).
-			_ = bcrypt.CompareHashAndPassword(getDummyHash(), []byte(password))
+			_ = compareHashAndPassword(getDummyHash(), []byte(password))
 			return "", ErrInvalidCredentials
 		}
 		return "", fmt.Errorf("login: %w", err)
+	}
+
+	// Compare before any account-state check so disabled, expired and
+	// role-less accounts cost the same bcrypt work as a wrong password (F-2).
+	if err := compareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+		return "", ErrInvalidCredentials
 	}
 
 	if !user.Enabled {
@@ -173,7 +184,7 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (str
 		return "", ErrInvalidCredentials
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+	if user.RoleID == "" {
 		return "", ErrInvalidCredentials
 	}
 
@@ -191,9 +202,26 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (str
 	return sessionID, nil
 }
 
-// Logout deletes the session.
+// Logout deletes the session and records the revocation against its owner.
 func (s *AuthService) Logout(ctx context.Context, sessionID string) error {
-	return s.sessions.DeleteSession(ctx, sessionID)
+	owner := ""
+	if sess, err := s.sessions.GetSession(ctx, sessionID); err == nil {
+		owner = sess.AdminUUID
+	}
+	err := s.sessions.DeleteSession(ctx, sessionID)
+	result := "success"
+	if err != nil {
+		result = "failure"
+	}
+	writeAudit(ctx, s.auditStore, store.AuditEntry{
+		ActorUUID:    owner,
+		Action:       "admin_user.logout",
+		ResourceType: "admin_user",
+		ResourceID:   owner,
+		Result:       result,
+		Details:      auditDetails(map[string]any{"sessions_revoked": 1}),
+	})
+	return err
 }
 
 // ResolveSession looks up a session by ID, verifies it is not expired, loads
@@ -225,9 +253,11 @@ func (s *AuthService) ResolveSession(ctx context.Context, sessionID string) (*Ad
 		return nil, store.ErrNotFound
 	}
 
+	// A user with no role holds no permissions. Fail closed: never default an
+	// unassigned account to the superuser role.
 	roleID := user.RoleID
 	if roleID == "" {
-		roleID = "admin"
+		return nil, store.ErrNotFound
 	}
 
 	perms, err := s.roles.GetRolePermissions(ctx, roleID)
@@ -285,8 +315,21 @@ func (s *AuthService) ChangePassword(ctx context.Context, adminUUID, currentPass
 
 	// Revoke all sessions so the new password takes effect everywhere and any
 	// previously issued (or stolen) token is invalidated. The user must log in again.
-	if err := s.sessions.DeleteSessionsForAdmin(ctx, adminUUID); err != nil {
-		return fmt.Errorf("change password: revoke sessions: %w", err)
+	revokeErr := s.sessions.DeleteSessionsForAdmin(ctx, adminUUID)
+	result := "success"
+	if revokeErr != nil {
+		result = "failure"
+	}
+	writeAudit(ctx, s.auditStore, store.AuditEntry{
+		ActorUUID:    adminUUID,
+		Action:       "admin_user.password_change",
+		ResourceType: "admin_user",
+		ResourceID:   adminUUID,
+		Result:       result,
+		Details:      auditDetails(map[string]any{"all_sessions_revoked": revokeErr == nil}),
+	})
+	if revokeErr != nil {
+		return fmt.Errorf("change password: revoke sessions: %w", revokeErr)
 	}
 	return nil
 }

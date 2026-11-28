@@ -559,7 +559,7 @@ func TestMemberAccessService_AttachCredential_DuplicateActive(t *testing.T) {
 	dbConn, writer := openSvcTestDB(t)
 	maStore := sqlitestore.NewMemberAccessStore(dbConn, writer)
 
-	svc := service.NewMemberAccessService(maStore)
+	svc := service.NewMemberAccessService(maStore, nil)
 
 	// Provision first member and attach a credential.
 	m1, err := svc.ProvisionMember(ctx, "", nil, nil)
@@ -567,12 +567,12 @@ func TestMemberAccessService_AttachCredential_DuplicateActive(t *testing.T) {
 		t.Fatalf("ProvisionMember m1: %v", err)
 	}
 	credHash := service.HashCredentialID([]byte{0x04, 0x01, 0x00, 0x08}, nil)
-	if err := svc.AttachCredential(ctx, m1.UUID, credHash); err != nil {
+	if err := svc.AttachCredential(ctx, m1.UUID, credHash, "test-admin"); err != nil {
 		t.Fatalf("AttachCredential m1: %v", err)
 	}
-	// Mark as active provisioning status to pass the active check.
-	if err := maStore.SetProvisioningStatus(ctx, m1.UUID, store.ProvisioningStatusActive); err != nil {
-		t.Fatalf("SetProvisioningStatus: %v", err)
+	// Approve so the member is fully active (approval is the only activation path).
+	if err := maStore.ApprovePending(ctx, m1.UUID, "", nil, intPtr(30)); err != nil {
+		t.Fatalf("ApprovePending: %v", err)
 	}
 
 	// Provision second member and try to attach the same credential.
@@ -580,7 +580,7 @@ func TestMemberAccessService_AttachCredential_DuplicateActive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProvisionMember m2: %v", err)
 	}
-	err = svc.AttachCredential(ctx, m2.UUID, credHash)
+	err = svc.AttachCredential(ctx, m2.UUID, credHash, "test-admin")
 	if err == nil {
 		t.Fatal("expected duplicate credential error, got nil")
 	}
@@ -594,14 +594,14 @@ func TestMemberAccessService_AttachCredential_DuplicateInactive(t *testing.T) {
 	dbConn, writer := openSvcTestDB(t)
 	maStore := sqlitestore.NewMemberAccessStore(dbConn, writer)
 
-	svc := service.NewMemberAccessService(maStore)
+	svc := service.NewMemberAccessService(maStore, nil)
 
 	m1, err := svc.ProvisionMember(ctx, "", nil, nil)
 	if err != nil {
 		t.Fatalf("ProvisionMember: %v", err)
 	}
 	credHash := service.HashCredentialID([]byte{0x04, 0x01, 0x00, 0x09}, nil)
-	if err := svc.AttachCredential(ctx, m1.UUID, credHash); err != nil {
+	if err := svc.AttachCredential(ctx, m1.UUID, credHash, "test-admin"); err != nil {
 		t.Fatalf("AttachCredential: %v", err)
 	}
 	// Expire the first member.
@@ -613,7 +613,7 @@ func TestMemberAccessService_AttachCredential_DuplicateInactive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProvisionMember m2: %v", err)
 	}
-	err = svc.AttachCredential(ctx, m2.UUID, credHash)
+	err = svc.AttachCredential(ctx, m2.UUID, credHash, "test-admin")
 	if err != service.ErrDuplicateCredentialInactive {
 		t.Errorf("expected ErrDuplicateCredentialInactive, got %v", err)
 	}
@@ -726,5 +726,56 @@ func TestAccessService_FailOpen_UnauthorizedModuleIsDenied(t *testing.T) {
 	}
 	if resp.Reason != "credential_not_authorized" {
 		t.Errorf("expected reason=credential_not_authorized, got %q — wiring regression?", resp.Reason)
+	}
+}
+
+// ── pending (unapproved) members ──────────────────────────────────────────────
+
+// A card captured by a PEU is pending until an admin approves it; approval is
+// what applies expiry and inactivity policy. Even if an authorization row
+// exists (granted before the grant guard, or written directly), the door must
+// stay shut until approval.
+func TestAccessService_PendingMember_DeniedUntilApproved(t *testing.T) {
+	ctx := context.Background()
+	dbConn, writer := openSvcTestDB(t)
+	maStore := sqlitestore.NewMemberAccessStore(dbConn, writer)
+	moStore := sqlitestore.NewModuleAuthorizationStore(dbConn, writer)
+	const moduleID, memberUUID = "module-pend", "ffffffff-0000-4000-8000-000000000001"
+	secret := []byte("pending-test-secret")
+
+	seedModule(t, dbConn, moduleID)
+	if err := maStore.CreateMember(ctx, memberUUID, "", store.ProvisioningStatusPendingAuthorization, nil, nil); err != nil {
+		t.Fatalf("CreateMember: %v", err)
+	}
+	if err := maStore.AttachCredential(ctx, memberUUID, service.HashCredentialID([]byte{0x04, 0x11, 0x22, 0x33}, secret)); err != nil {
+		t.Fatalf("AttachCredential: %v", err)
+	}
+	if err := moStore.GrantAuthorization(ctx, memberUUID, moduleID, "", nil, ""); err != nil {
+		t.Fatalf("GrantAuthorization: %v", err)
+	}
+
+	svc := service.NewAccessService(service.NewDeviceRegistry(memory.NewDeviceStore([]string{moduleID})), service.AccessPolicy{}, memory.NewAccessEventStore())
+	svc.SetMemberAccessStore(maStore)
+	svc.SetModuleAuthStore(moStore)
+	svc.SetCredentialHashSecret(secret)
+	tap := types.AccessRequest{ModuleID: moduleID, CredentialID: "04:11:22:33"}
+
+	resp, err := svc.Decide(ctx, tap)
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if resp.Granted || resp.Reason != "member_pending" {
+		t.Fatalf("pending member: granted=%v reason=%q, want denied member_pending", resp.Granted, resp.Reason)
+	}
+
+	if err := maStore.ApprovePending(ctx, memberUUID, "", nil, intPtr(30)); err != nil {
+		t.Fatalf("ApprovePending: %v", err)
+	}
+	resp, err = svc.Decide(ctx, tap)
+	if err != nil {
+		t.Fatalf("Decide after approval: %v", err)
+	}
+	if !resp.Granted {
+		t.Fatalf("approved member denied: reason=%q", resp.Reason)
 	}
 }

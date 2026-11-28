@@ -44,7 +44,7 @@ func (s *Server) handleUILogin(w http.ResponseWriter, r *http.Request) {
 	password := r.FormValue("password")
 	d.Form["username"] = username
 
-	if !s.loginLimiter.Allow(username, r.RemoteAddr) {
+	if !s.loginLimiter.Allow(r.RemoteAddr) {
 		d.Flash = "Too many failed login attempts. Please try again later."
 		d.FlashType = "error"
 		render.render(w, "login", d)
@@ -54,7 +54,7 @@ func (s *Server) handleUILogin(w http.ResponseWriter, r *http.Request) {
 	sessionID, err := s.authService.Login(r.Context(), username, password)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidCredentials) || errors.Is(err, service.ErrAccountDisabled) {
-			s.loginLimiter.RecordFailure(username, r.RemoteAddr)
+			s.loginLimiter.RecordFailure(r.RemoteAddr)
 			d.Flash = "Invalid username or password."
 			d.FlashType = "error"
 			render.render(w, "login", d)
@@ -67,7 +67,7 @@ func (s *Server) handleUILogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.loginLimiter.Reset(username, r.RemoteAddr)
+	s.loginLimiter.Reset(r.RemoteAddr)
 	setSessionCookie(w, sessionID, s.tlsEnabled)
 	http.Redirect(w, r, "/admin/ui/", http.StatusSeeOther)
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	pb "github.com/BrandonDHaskell/Portunus/server/api/portunus/v1"
+	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/service"
 	"github.com/BrandonDHaskell/Portunus/server/internal/replay"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -70,7 +71,10 @@ func hmacProjection(req interface{}) ([]byte, error) {
 //
 // When secret is empty, the interceptor is a no-op pass-through.
 // replayStore may be nil to disable replay protection (not recommended for production).
-func HMACInterceptor(secret string, replayStore *replay.Store) grpc.UnaryServerInterceptor {
+// monitor, when non-nil, is told about every missing or invalid signature with
+// the module id the request claimed, so a module whose NVS secret no longer
+// matches the server can be identified.
+func HMACInterceptor(secret string, replayStore *replay.Store, monitor *service.DeviceAuthMonitor) grpc.UnaryServerInterceptor {
 	if secret == "" {
 		// No secret configured — pass everything through.
 		return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
@@ -81,14 +85,20 @@ func HMACInterceptor(secret string, replayStore *replay.Store) grpc.UnaryServerI
 	secretBytes := []byte(secret)
 
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+		report := func(reason string) {
+			monitor.RecordFailure(claimedModuleID(req), peerAddr(ctx), "grpc", reason)
+		}
+
 		// Extract the signature from metadata.
 		md, ok := metadata.FromIncomingContext(ctx)
 		if !ok {
+			report(service.ReasonMissingSignature)
 			return nil, status.Errorf(codes.Unauthenticated, "missing metadata")
 		}
 
 		sigs := md.Get(hmacHeaderKey)
 		if len(sigs) == 0 {
+			report(service.ReasonMissingSignature)
 			return nil, status.Errorf(codes.Unauthenticated, "missing %s header", hmacHeaderKey)
 		}
 		receivedHex := sigs[0]
@@ -96,6 +106,7 @@ func HMACInterceptor(secret string, replayStore *replay.Store) grpc.UnaryServerI
 		// Decode the hex-encoded signature.
 		receivedSig, err := hex.DecodeString(receivedHex)
 		if err != nil {
+			report(service.ReasonBadSignature)
 			return nil, status.Errorf(codes.Unauthenticated, "invalid %s: bad hex", hmacHeaderKey)
 		}
 
@@ -111,14 +122,20 @@ func HMACInterceptor(secret string, replayStore *replay.Store) grpc.UnaryServerI
 		expectedSig := mac.Sum(nil)
 
 		if !hmac.Equal(receivedSig, expectedSig) {
+			report(service.ReasonBadSignature)
 			return nil, status.Errorf(codes.Unauthenticated, "invalid %s signature", hmacHeaderKey)
 		}
 
-		// Replay protection — only for access requests, only when a store is wired.
-		if replayStore != nil {
-			if ar, ok := req.(*pb.AccessRequest); ok {
-				nonceHex := hex.EncodeToString(ar.Nonce)
-				if err := replayStore.Check(ar.ModuleId, nonceHex, ar.RequestedAt); err != nil {
+		if ar, ok := req.(*pb.AccessRequest); ok {
+			// A nonce is mandatory, as on the HTTP path: without one the
+			// replay store has nothing to record and the signed request
+			// could be replayed inside the timestamp window.
+			if len(ar.Nonce) == 0 {
+				return nil, status.Errorf(codes.Unauthenticated, "nonce is required for access requests")
+			}
+			// Replay protection, when a store is wired.
+			if replayStore != nil {
+				if err := replayStore.Check(ar.ModuleId, hex.EncodeToString(ar.Nonce), ar.RequestedAt); err != nil {
 					return nil, replayErrToStatus(err)
 				}
 			}
@@ -166,4 +183,20 @@ func LoggingInterceptor(logger *log.Logger) grpc.UnaryServerInterceptor {
 
 		return resp, err
 	}
+}
+
+// claimedModuleID returns the module id a device request names. It is not
+// authenticated; it only labels a signature failure for diagnosis.
+func claimedModuleID(req interface{}) string {
+	if m, ok := req.(interface{ GetModuleId() string }); ok {
+		return m.GetModuleId()
+	}
+	return ""
+}
+
+func peerAddr(ctx context.Context) string {
+	if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
+		return p.Addr.String()
+	}
+	return "unknown"
 }

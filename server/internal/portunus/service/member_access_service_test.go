@@ -15,7 +15,7 @@ func newMemberSvc(t *testing.T) (*service.MemberAccessService, store.MemberAcces
 	t.Helper()
 	conn, writer := openSvcTestDB(t)
 	maStore := sqlitestore.NewMemberAccessStore(conn, writer)
-	svc := service.NewMemberAccessService(maStore)
+	svc := service.NewMemberAccessService(maStore, nil)
 	return svc, maStore
 }
 

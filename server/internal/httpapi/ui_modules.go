@@ -44,6 +44,9 @@ func (s *Server) handleUIModulesDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.Module = mod
+	if f, ok := s.deviceAuthMonitor.ForModule(mod.ModuleID); ok {
+		d.DeviceAuthFailure = &f
+	}
 
 	// Authorizations for this module.
 	if s.moduleAuthService != nil {
@@ -109,7 +112,7 @@ func (s *Server) handleUIModulesRegister(w http.ResponseWriter, r *http.Request)
 		ModuleType:  r.FormValue("module_type"),
 	}
 
-	mod, err := s.adminService.RegisterModule(r.Context(), req)
+	mod, err := s.adminService.RegisterModule(r.Context(), req, actorOf(r))
 	if err != nil {
 		msg := "Failed to register module."
 		switch {
@@ -137,7 +140,7 @@ func (s *Server) handleUIModulesRegister(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleUIModulesRevoke(w http.ResponseWriter, r *http.Request) {
 	moduleID := r.PathValue("module_id")
 
-	if err := s.adminService.RevokeModule(r.Context(), moduleID); err != nil {
+	if err := s.adminService.RevokeModule(r.Context(), moduleID, actorOf(r)); err != nil {
 		if errors.Is(err, service.ErrModuleNotFound) {
 			http.NotFound(w, r)
 			return
@@ -154,7 +157,7 @@ func (s *Server) handleUIModulesRevoke(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUIModulesDelete(w http.ResponseWriter, r *http.Request) {
 	moduleID := r.PathValue("module_id")
 
-	if err := s.adminService.DeleteModule(r.Context(), moduleID); err != nil {
+	if err := s.adminService.DeleteModule(r.Context(), moduleID, actorOf(r)); err != nil {
 		if errors.Is(err, service.ErrModuleNotFound) {
 			http.NotFound(w, r)
 			return
@@ -208,6 +211,10 @@ func (s *Server) handleUIModulesGrantAuthorization(w http.ResponseWriter, r *htt
 			msg = "An active authorization already exists for that member."
 		case errors.Is(err, service.ErrGrantOutOfScope):
 			msg = "Your linked member does not currently hold access to that module."
+		case errors.Is(err, service.ErrMemberNotApproved):
+			msg = "This member must be approved before granting door access."
+		case errors.Is(err, service.ErrMemberNotFound):
+			msg = "Member not found."
 		case errors.Is(err, service.ErrMemberUUIDRequired), errors.Is(err, service.ErrModuleIDRequired):
 			msg = "Member and module are required."
 		default:
@@ -288,7 +295,7 @@ func (s *Server) handleUIDoorsCreate(w http.ResponseWriter, r *http.Request) {
 		Location: r.FormValue("location"),
 	}
 
-	_, err := s.adminService.RegisterDoor(r.Context(), req)
+	_, err := s.adminService.RegisterDoor(r.Context(), req, actorOf(r))
 	if err != nil {
 		msg := "Failed to register door."
 		switch {
@@ -312,7 +319,7 @@ func (s *Server) handleUIDoorsCreate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUIDoorsDelete(w http.ResponseWriter, r *http.Request) {
 	doorID := r.PathValue("door_id")
 
-	if err := s.adminService.DeleteDoor(r.Context(), doorID); err != nil {
+	if err := s.adminService.DeleteDoor(r.Context(), doorID, actorOf(r)); err != nil {
 		if errors.Is(err, service.ErrDoorNotFound) {
 			http.NotFound(w, r)
 			return

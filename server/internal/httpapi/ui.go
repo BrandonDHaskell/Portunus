@@ -5,6 +5,7 @@ import (
 	"html/template"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/BrandonDHaskell/Portunus/server/internal/portunus/permissions"
@@ -48,7 +49,10 @@ type UIPageData struct {
 	// Module and door management pages.
 	Modules []types.ModuleInfo
 	Module  *types.ModuleInfo
-	Doors   []types.DoorInfo
+	// DeviceAuthFailure is set when the module's requests have been failing
+	// HMAC verification (its NVS secret likely differs from the server's).
+	DeviceAuthFailure *service.DeviceAuthFailure
+	Doors             []types.DoorInfo
 }
 
 // UIAccessEventInfo is a display-ready view of a single access event.
@@ -81,7 +85,6 @@ var templateFuncs = template.FuncMap{
 		}
 		return *p
 	},
-	"not": func(b bool) bool { return !b },
 }
 
 // uiRenderer renders a named page template against the base layout.
@@ -227,28 +230,6 @@ func requireUIEitherPermission(perm1, perm2 string, next http.HandlerFunc) http.
 
 // flashRedirect redirects with a flash message and type as query params.
 func flashRedirect(w http.ResponseWriter, r *http.Request, dest, msg, flashType string) {
-	u := dest + "?flash=" + urlEncode(msg) + "&ft=" + flashType
+	u := dest + "?flash=" + url.QueryEscape(msg) + "&ft=" + url.QueryEscape(flashType)
 	http.Redirect(w, r, u, http.StatusSeeOther)
-}
-
-func urlEncode(s string) string {
-	var b strings.Builder
-	for _, c := range s {
-		switch {
-		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9',
-			c == '-', c == '_', c == '.', c == '~':
-			b.WriteRune(c)
-		case c == ' ':
-			b.WriteByte('+')
-		default:
-			b.WriteString("%" + hexByte(byte(c)))
-		}
-	}
-	return b.String()
-}
-
-const hexChars = "0123456789ABCDEF"
-
-func hexByte(b byte) string {
-	return string([]byte{hexChars[b>>4], hexChars[b&0xf]})
 }
