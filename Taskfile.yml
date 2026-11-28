@@ -205,13 +205,12 @@ tasks:
 
   # ─── TLS Certificates ─────────────────────────────────────────────────────
 
+  # First run creates the CA. Afterwards it refuses unless given --sign-only
+  # (new server cert, same CA) or --new-ca (rotation: reflash every module).
   certs:generate:
-    desc: Generate private CA + server TLS certs for LAN deployment
-    vars:
-      PROD_HOST:
-        sh: grep 'CONFIG_PORTUNUS_SERVER_HOST' access_module/sdkconfig.defaults.prod | sed 's/.*="\(.*\)"/\1/'
+    desc: "Private CA + server TLS cert (task certs:generate -- --ip ADDR [--sign-only|--new-ca])"
     cmds:
-      - bash scripts/generate_certs.sh --ip {{.PROD_HOST}} {{.CLI_ARGS}}
+      - bash scripts/generate_certs.sh {{.CLI_ARGS}}
 
   certs:verify:
     desc: Verify the cert chain (ca.pem → server.pem)

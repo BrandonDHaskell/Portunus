@@ -220,33 +220,17 @@ For production on the Raspberry Pi, the server certificate and key go in `/etc/p
 
 ### Reissuing the server certificate without rotating the CA
 
-`task certs:generate` always creates a **new CA**. Every flashed module pins the old CA, so running it means reflashing all of them. When only the server certificate needs to change (new IP, new DNS name, approaching expiry), sign a new one with the existing `certs/ca.key` instead. Modules keep working because the CA is unchanged.
+Every flashed module pins the CA, so a new CA means reflashing all of them. When only the server certificate needs to change (new IP, new DNS name, approaching expiry), sign a new one with the existing `certs/ca.key`. Modules keep working because the CA is unchanged.
 
 ```bash
-# From the repo root. Adjust the SAN list; include localhost/127.0.0.1 if you
-# reach the admin UI through an SSH tunnel.
-SAN="IP:10.0.0.57,DNS:localhost,IP:127.0.0.1"
-OUT=$(mktemp -d)
-cat > "$OUT/ext.cnf" <<EOF
-[v3_server]
-basicConstraints       = CA:FALSE
-keyUsage               = digitalSignature, keyEncipherment
-extendedKeyUsage       = serverAuth
-subjectAltName         = ${SAN}
-subjectKeyIdentifier   = hash
-authorityKeyIdentifier = keyid,issuer
-EOF
-(umask 077; openssl genrsa -out "$OUT/server.key" 2048)
-openssl req -new -key "$OUT/server.key" -out "$OUT/server.csr" -subj "/C=US/O=Portunus/CN=10.0.0.57"
-openssl x509 -req -in "$OUT/server.csr" -CA certs/ca.pem -CAkey certs/ca.key \
-  -CAserial "$OUT/ca.srl" -CAcreateserial -out "$OUT/server.pem" -days 825 \
-  -extfile "$OUT/ext.cnf" -extensions v3_server
-
-# Verify chain and IP before deploying
-openssl verify -CAfile certs/ca.pem -verify_ip 10.0.0.57 "$OUT/server.pem"
+# From the repo root. Add --san entries for every other address clients use,
+# e.g. localhost/127.0.0.1 if you reach the admin UI through an SSH tunnel.
+task certs:generate -- --sign-only --ip 10.0.0.57 --san DNS:localhost --san IP:127.0.0.1
 ```
 
-Copy `server.key` and `server.pem` to the Pi, install them with the same commands and ownership as in [Running as a systemd service](#running-as-a-systemd-service), and restart with `sudo systemctl restart portunus-server`. Back up the old pair first if you may need to roll back.
+The script verifies the chain and the IP before touching `certs/`, and keeps the previous pair as `server.{pem,key}.<timestamp>`. Once a CA exists, `task certs:generate` refuses to run without either `--sign-only` or `--new-ca`, so the CA cannot be replaced by accident. `--new-ca` moves the old material to `certs/backup-<timestamp>/` and is only for a deliberate rotation, after which every module must be reflashed.
+
+Copy `certs/server.key` and `certs/server.pem` to the Pi, install them with the same commands and ownership as in [Running as a systemd service](#running-as-a-systemd-service), and restart with `sudo systemctl restart portunus-server`. Back up the old pair on the Pi first if you may need to roll back.
 
 To browse the admin UI without a certificate warning, import `certs/ca.pem` into the browser as a trusted authority (Firefox: Settings > Privacy & Security > Certificates > View Certificates > Authorities > Import; Chrome on Linux: `certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n "Portunus CA" -i certs/ca.pem`).
 
