@@ -1,8 +1,10 @@
-# Portunus — Security
+# Portunus: Security
 
 Current security model, implemented controls, and known limitations for the Portunus snapshot in this repository.
 
-**Last updated:** June 2, 2026
+**Last updated:** November 27, 2026
+
+For a gap analysis against IEC 62443 SL2 and the hardening roadmap, see [IEC 62443 gap analysis](iec62443_gap_analysis.md).
 
 ---
 
@@ -21,7 +23,7 @@ In the current codebase, Portunus uses a layered security model:
 4. **Credential and member policy checks** ensure only authorized credentials are granted access. The production path checks member status, enrollment state, and per-module authorization against `member_access` and `module_authorizations`, with default-deny and fail-closed behavior.
 5. **Session-based admin auth** protects the admin API through cookie-backed server-side sessions.
 
-A key detail in the current implementation: several controls are **configuration-dependent**. In development, the server can run without TLS, without HMAC enforcement, and without a credential hash secret. In production-style deployments, those should all be enabled explicitly.
+A key detail in the current implementation: several controls are **configuration-dependent**. In the `local` profile the server can run without TLS, without HMAC enforcement, and (with `PORTUNUS_ALLOW_UNKEYED_CREDENTIAL_HASH=true`) without a credential hash secret. The `prod` profile refuses to start unless TLS, `PORTUNUS_HMAC_SECRET` and `PORTUNUS_CREDENTIAL_HASH_SECRET` are all set and `PORTUNUS_ALLOW_ALL` is off (`config.Validate()`).
 
 ---
 
@@ -29,18 +31,19 @@ A key detail in the current implementation: several controls are **configuration
 
 | Control | Current state | Where it exists |
 |---|---|---|
-| TLS for HTTP server | Implemented, optional | Go HTTP server via `ListenAndServeTLS()` |
-| TLS for gRPC server | Implemented, optional on server | Go gRPC server via `credentials.NewTLS(...)` |
-| TLS for firmware HTTP client | Implemented | ESP-IDF / mbedTLS |
+| TLS for HTTP server | Implemented; required by `prod` | Go HTTP server via `ListenAndServeTLS()` |
+| TLS for gRPC server | Implemented; required by `prod` | Go gRPC server via `credentials.NewTLS(...)` |
 | TLS for firmware gRPC client | Implemented and required | `grpc_client` uses `esp-tls` + ALPN `h2` |
 | Custom CA pinning in firmware | Implemented | `access_module/certs/ca_cert.pem` embedded into firmware |
 | Mozilla CA bundle fallback | Implemented | Firmware TLS configuration |
 | Skip-verify dev mode | Implemented | `CONFIG_PORTUNUS_TLS_SKIP_VERIFY` |
-| HMAC-SHA256 on device requests | Implemented, optional on server | HTTP middleware and gRPC interceptor |
+| HMAC-SHA256 on device requests | Implemented; required by `prod` | HTTP middleware and gRPC interceptor |
+| Signed access decisions, bound to the request nonce | Implemented | `server/internal/devicesig`; verified in firmware `access_protocol.cpp` |
+| Nonce + timestamp replay rejection (60 s window) | Implemented when HMAC is on | `server/internal/replay`, shared by both transports |
+| Secure-build assertion for firmware images | Implemented | `scripts/assert_secure_build.sh`, run by `task firmware:build:prod` and CI |
 | Admin session-cookie auth | Implemented | Login/logout/change-password endpoints; `portunus_session` cookie |
 | Module commissioning / enabled / revoked checks | Implemented | SQLite-backed `DeviceStore.IsKnown()` |
 | Keyed HMAC-SHA256 hashing of credential IDs | Implemented | Credential registration, access checks, audit events |
-| On-device SHA-256 hashing before transmission (PROVISIONING_CONSOLE capture path) | Implemented | mbedTLS SHA-256 on ESP32; raw UID never leaves the device |
 | Member + module authorization access path | Implemented | Production access decision path since PR 4 |
 | Request body size limits | Implemented | HTTP API handlers |
 | Read-header timeout | Implemented | HTTP server |
@@ -61,7 +64,8 @@ The current codebase is aimed at resisting:
 - passive network eavesdropping
 - casual LAN misuse
 - unauthorized module impersonation without the shared secret
-- accidental or unauthorized admin API access when the admin key is set
+- unauthorized admin API access (bcrypt passwords, server-side sessions, RBAC)
+- replay of captured access requests or access decisions
 - casual database inspection of stored card data
 
 It is **not** designed to fully resist:
@@ -70,7 +74,7 @@ It is **not** designed to fully resist:
 - a compromised server host
 - RFID cloning attacks against UID-only cards
 - radio-layer denial of service such as Wi-Fi jamming
-- strong anti-replay guarantees at the application layer
+- replay of a captured access request within 60 seconds of a server restart (the replay store is in memory)
 
 ---
 
@@ -133,9 +137,9 @@ Development-only mode.
 
 This still encrypts the connection, but it does **not** authenticate the server certificate and therefore does not prevent man-in-the-middle attacks.
 
-## gRPC on firmware requires TLS
+## Firmware transport is gRPC over TLS
 
-The firmware’s gRPC transport is only available when TLS is enabled. In the current Kconfig, `CONFIG_PORTUNUS_USE_GRPC` depends on `CONFIG_PORTUNUS_USE_TLS`, and the custom gRPC client uses `esp-tls` with ALPN `"h2"`.
+Current firmware is gRPC-only: `server_comm.cpp` always uses `grpc_client`, and there is no transport Kconfig. The client uses `esp-tls` with ALPN `"h2"`. The server keeps its HTTP/1.1 device endpoints for other clients.
 
 ---
 
@@ -204,7 +208,7 @@ HMAC is only enforced when the server is started with:
 PORTUNUS_HMAC_SECRET
 ```
 
-If that variable is empty, device requests are accepted without HMAC validation. That is useful for early development, but it is not a secure production posture.
+If that variable is empty, device requests are accepted without HMAC validation, and the nonce and timestamp replay checks are skipped too. That is useful for early development only; the `prod` profile refuses to start without it.
 
 ### Current key model
 
@@ -235,7 +239,7 @@ Module authorization grants are controlled by two permission variants that diffe
 
 ### `module_auth.grant_any` / `module_auth.revoke_any`
 
-Unscoped. An admin holding these permissions may grant or revoke any module authorization for any member, regardless of what the admin's own badge can open. The system `admin` role holds these permissions by genesis — granting into an empty database requires at least one unscoped actor.
+Unscoped. An admin holding these permissions may grant or revoke any module authorization for any member, regardless of what the admin's own badge can open. The system `admin` role holds these permissions by genesis: granting into an empty database requires at least one unscoped actor.
 
 ### `module_auth.grant_held` / `module_auth.revoke_held`
 
@@ -243,13 +247,13 @@ Scoped to the modules the acting admin's linked member currently holds. An admin
 
 ### Fail-closed properties
 
-- **Unlinked admin:** an admin without a `member_uuid` link who holds only `grant_held` cannot grant anything — scope resolves to the empty set.
+- **Unlinked admin:** an admin without a `member_uuid` link who holds only `grant_held` cannot grant anything: scope resolves to the empty set.
 - **Lapsed link:** if the admin's linked member row is archived, suspended, or has its authorizations revoked, the scope closes automatically via ON DELETE SET NULL on `admin_users.member_uuid` and the door's standard member-status checks.
 - **Scope is evaluated at grant time only.** Existing grants are not cascaded when a grantor later loses access.
 
 ### Last-admin protection
 
-The system refuses to expire or disable the last non-expired, enabled admin account. This applies symmetrically to `expires_at_ms` on `admin_users` — setting an expiry that would leave no reachable admin is rejected.
+The system refuses to expire or disable the last non-expired, enabled admin account. This applies symmetrically to `expires_at_ms` on `admin_users`: setting an expiry that would leave no reachable admin is rejected.
 
 ---
 
@@ -262,8 +266,10 @@ Portunus does **not** persist raw RFID credential IDs in the database.
 Credential IDs are hashed with **keyed HMAC-SHA256** using the server secret configured in `PORTUNUS_CREDENTIAL_HASH_SECRET`:
 
 ```
-credential_hash = HMAC-SHA256(PORTUNUS_CREDENTIAL_HASH_SECRET, credential_id)
+credential_hash = HMAC-SHA256(PORTUNUS_CREDENTIAL_HASH_SECRET, raw_uid_bytes)
 ```
+
+The input is always the **raw UID bytes**, never the colon-formatted string. Every path (admin UI, admin REST, device provisioning, access decision) goes through `service.HashCredentialID`, and the `"04:A3:2B:1C"` form a device sends is converted with `service.ParseCredentialUID` first.
 
 This is an improvement over bare SHA-256: without the server secret, a stolen database cannot be attacked offline with pre-computed tables or brute force against known UID spaces.
 
@@ -275,19 +281,15 @@ openssl rand -hex 32
 
 ### Dev fallback: bare SHA-256
 
-When `PORTUNUS_CREDENTIAL_HASH_SECRET` is **not set**, `HashCredentialID` falls back to bare SHA-256:
+When `PORTUNUS_CREDENTIAL_HASH_SECRET` is **not set**, the server refuses to start unless `PORTUNUS_ALLOW_UNKEYED_CREDENTIAL_HASH=true`. With that escape hatch set, `HashCredentialID` falls back to bare SHA-256:
 
 ```
 credential_hash = SHA-256(credential_id)
 ```
 
-The server logs a warning at startup when this path is active:
+The server logs a startup `WARNING` that credential IDs are being hashed without a key.
 
-```
-WARNING: PORTUNUS_CREDENTIAL_HASH_SECRET not set — credential IDs hashed without a key (insecure, dev only)
-```
-
-**Critical incompatibility:** bare SHA-256 hashes and keyed HMAC-SHA256 hashes of the same credential ID produce different 32-byte values. A database populated without the secret cannot be used with a server that subsequently has the secret set — every stored hash will fail to match. Re-registering all credentials is required if the secret is added to an existing database.
+**Critical incompatibility:** bare SHA-256 hashes and keyed HMAC-SHA256 hashes of the same credential ID produce different 32-byte values. A database populated without the secret cannot be used with a server that subsequently has the secret set: every stored hash will fail to match. Re-registering all credentials is required if the secret is added to an existing database.
 
 This fallback exists only for local development and integration testing. It must never be used in a deployment where credential data is expected to persist or migrate.
 
@@ -300,12 +302,11 @@ This fallback exists only for local development and integration testing. It must
 The PROVISIONING_CONSOLE module uses a single-scan capture flow:
 
 1. The firmware reads one credential from the RFID reader.
-2. It computes `SHA-256(raw_UID_bytes)` **on-device** using mbedTLS before transmitting.
-3. The hash (not the raw UID) is sent to `POST /v1/provision_credential`.
-4. The server re-hashes using `HMAC-SHA256(secret, hash)` and creates a `member_access` row with `provisioning_status = 'pending_authorization'`.
-5. An admin approves the pending row via the console, supplying explicit expiry and inactivity limits. Approval sets `provisioning_status = 'active'` and records `activated_at_ms`.
+2. It sends the **raw UID bytes** in `ProvisionCredentialRequest.credential_uid` over gRPC (TLS, HMAC-signed with projection `provision|{module_id}|{hex(credential_uid)}`).
+3. The server computes `HashCredentialID(rawUID, secret)`, the same function the door lookup uses, and creates a `member_access` row with `provisioning_status = 'pending_authorization'`.
+4. An admin approves the pending row via the console, supplying explicit expiry and inactivity limits. Approval sets `provisioning_status = 'active'` and records `activated_at_ms`.
 
-Raw credential UIDs never leave the device.
+The raw UID crosses the network only inside TLS and is never stored. `TestAccess_FirmwareEnrolledCredential_IsGranted` covers this path end to end against the door lookup.
 
 ### Access decision flow
 
@@ -352,9 +353,9 @@ The admin API uses **session-cookie-based authentication**, separate from the de
 1. A client `POST`s to `/admin/v1/login` with `{"username": "...", "password": "..."}`.
 2. The server validates the password against the bcrypt hash in `admin_users`.
 3. On success, the server creates a session row in the `sessions` SQLite table and sets a `portunus_session` cookie:
-   - `HttpOnly` — not accessible from JavaScript
-   - `Secure` — only sent over HTTPS
-   - `SameSite=Strict` — not sent in cross-site requests
+   - `HttpOnly`: not accessible from JavaScript
+   - `Secure`: only sent over HTTPS
+   - `SameSite=Strict`: not sent in cross-site requests
 4. Subsequent requests to any `/admin/v1/*` or `/admin/ui/*` route are authenticated by reading the session ID from the cookie and verifying it against the `sessions` table.
 5. `POST /admin/v1/logout` deletes the session row and clears the cookie.
 6. `POST /admin/v1/change-password` is a session-authenticated endpoint that verifies the current password before updating the bcrypt hash.
@@ -367,7 +368,7 @@ The `admin_users.must_change_pw` flag is set to `1` on new accounts. An account 
 
 Admin users are linked to RBAC roles via `admin_users.role_id`. The role controls which named permissions the account holds. An account with `enabled = 0` cannot log in regardless of credentials or session state.
 
-The admin role holds every permission defined in the `permissions` package — currently **28 permissions** across module, door, admin-user, role, member, module-auth, and audit-log groups. The `permissions.All()` function is the single authoritative list. The grant/revoke permissions for module authorizations are scoped: `module_auth.grant_any` / `module_auth.revoke_any` are unscoped (held by `admin`); `module_auth.grant_held` / `module_auth.revoke_held` are scoped to modules the actor's linked member currently holds (held by `operator`).
+The admin role holds every permission defined in the `permissions` package, across module, door, admin-user, role, member, module-auth, and audit-log groups. The `permissions.All()` function is the single authoritative list. The grant/revoke permissions for module authorizations are scoped: `module_auth.grant_any` / `module_auth.revoke_any` are unscoped (held by `admin`); `module_auth.grant_held` / `module_auth.revoke_held` are scoped to modules the actor's linked member currently holds (held by `operator`).
 
 ### Admin web UI
 
@@ -399,13 +400,13 @@ These measures do not replace authentication, but they improve robustness agains
 
 ## Firmware secret handling and current limitations
 
-The current firmware stores sensitive material in build-time configuration:
+The firmware reads its deployment values at boot from the `portunus` NVS namespace (`components/portunus_nvs`), written with `task firmware:nvs:gen` and `task firmware:nvs:flash`:
 
 - Wi-Fi SSID and password
 - HMAC shared secret
-- server host and related transport settings
+- server host, gRPC port and module ID
 
-Today, those values are effectively part of the firmware image / device flash configuration. The Kconfig help text already warns that the HMAC secret is stored in flash and that build artifacts should be protected.
+They are not in Kconfig or the firmware image. NVS is **not encrypted** today, so anyone who can read the module's flash can read them. Treat `access_module/nvs_config.csv` and `build/nvs.bin` as secrets. A prod image halts if NVS is missing; only a dev image falls back to `CONFIG_PORTUNUS_DEV_*` values.
 
 ### Not currently implemented as an active repo workflow
 
@@ -415,8 +416,11 @@ The following security features are **not** part of the current implemented Port
 - ESP32 secure boot
 - encrypted NVS-backed secret storage
 - OTA signing / OTA verification flow
-- per-device HMAC secrets
-- application-layer nonce or sequence validation for anti-replay
+- per-device HMAC secrets or mutual TLS (device client certificates)
+- disabling JTAG, the serial console or ROM download mode in prod images
+- tamper detection or key zeroization
+- an offline credential cache on the module (it denies every card while the server is unreachable)
+- tamper-evident or off-host audit logging
 
 Some of these are reasonable future hardening steps, but they should not be described as active protections in the current codebase.
 
@@ -424,13 +428,19 @@ Some of these are reasonable future hardening steps, but they should not be desc
 
 ## Replay protection
 
-Replay protection is only partial in the current implementation.
+Access requests are protected against replay at the application layer whenever HMAC is enabled (always, in `prod`):
 
-- TLS protects traffic in transit and makes passive replay much harder in normal operation.
-- Heartbeat messages include sequence and uptime fields, and those values are stored.
-- However, the server does **not** currently reject requests based on reused nonces, duplicate sequence numbers, or timestamp freshness.
+- Each `AccessRequest` carries a random 16-byte `nonce` and an RFC 3339 `requested_at`, both covered by the request signature.
+- The server rejects a request whose nonce was already seen from that module, or whose `requested_at` is missing or more than 60 seconds from the server clock (`server/internal/replay`). One store instance is shared by the HTTP and gRPC transports, so a nonce cannot be replayed across them.
+- The server's signed decision is bound to that nonce (see "Access response authentication"), so a captured grant cannot be replayed to the module.
+- Modules set their clock from the server's heartbeat response and re-sync hourly, keeping drift well inside the window.
 
-So, at the application layer, explicit anti-replay enforcement is **not implemented yet**.
+Known limits:
+
+- The replay store is in memory. After a server restart, a request captured in the preceding 60 seconds could be accepted once.
+- Heartbeat `sequence` is signed and stored but not checked for monotonicity.
+- `ProvisionCredential` carries no nonce.
+- The heartbeat response that sets the module clock is protected by TLS only, not by an application-layer signature.
 
 ---
 
@@ -493,10 +503,9 @@ This is the best match to the project’s current intended security posture.
 To stay aligned with the current repository, this document does **not** claim that Portunus already has:
 
 - a finished production overlay workflow for ESP32 hardening
-- mandatory TLS in all modes
-- mandatory HMAC in all modes
+- mandatory TLS or HMAC outside the `prod` profile
 - hardware-backed secret protection on the firmware side
-- strong anti-replay at the application layer
+- replay protection that survives a server restart
 - cryptographically strong smart-card authentication
 
 Those may be good next steps, but they are not the current implemented baseline.
@@ -510,4 +519,5 @@ Those may be good next steps, but they are not the current implemented baseline.
 - [Server setup](setup_server.md)
 - [Firmware setup](setup_firmware.md)
 - [Access module setup and architecture](../access_module/README.md)
+- [IEC 62443 gap analysis and roadmap](iec62443_gap_analysis.md)
 - [Shared secrets setup](shared_secrets_setup.md)
