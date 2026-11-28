@@ -28,11 +28,11 @@ func Load() (key string, vectors []Vector, err error) {
 		return "", nil, fmt.Errorf("hmacvectors: cannot locate source file")
 	}
 	path := filepath.Join(filepath.Dir(self), "..", "..", "..", "proto", "testdata", "hmac_vectors.txt")
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // G304: fixed path inside the repo, built from this file's location
 	if err != nil {
 		return "", nil, err
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck // read-only file
 
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {

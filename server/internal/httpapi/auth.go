@@ -52,7 +52,7 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie(sessionCookieName)
 	if err != nil || cookie.Value == "" {
-		clearSessionCookie(w)
+		clearSessionCookie(w, s.tlsEnabled)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
@@ -61,7 +61,7 @@ func (s *Server) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
 		s.logger.Printf("logout error: %v", err)
 	}
 
-	clearSessionCookie(w)
+	clearSessionCookie(w, s.tlsEnabled)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -106,6 +106,6 @@ func (s *Server) handleAdminChangePassword(w http.ResponseWriter, r *http.Reques
 	}
 
 	s.logger.Printf("admin: password changed for user %q", sess.Username)
-	clearSessionCookie(w)
+	clearSessionCookie(w, s.tlsEnabled)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

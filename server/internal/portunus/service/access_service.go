@@ -147,7 +147,7 @@ func (s *AccessService) Decide(ctx context.Context, req types.AccessRequest) (ty
 
 	// Decision logic
 	granted := false
-	reason := "denied"
+	reason := "denied" //nolint:ineffassign // defensive: every branch below sets reason or returns, but one added later must still read as a deny
 	var grantedMemberUUID string
 
 	if s.policy.AllowAll {

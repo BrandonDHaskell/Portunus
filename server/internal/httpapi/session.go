@@ -86,7 +86,9 @@ func hstsMiddleware(next http.Handler) http.Handler {
 // setSessionCookie writes the session cookie with HttpOnly + SameSite=Strict.
 // The Secure flag is only set when tls is true.
 func setSessionCookie(w http.ResponseWriter, sessionID string, tls bool) {
-	http.SetCookie(w, &http.Cookie{
+	// Secure follows TLS: prod refuses to start without TLS (config.Validate),
+	// and the local profile serves plain HTTP where a Secure cookie is dropped.
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure is tls, see above
 		Name:     sessionCookieName,
 		Value:    sessionID,
 		Path:     "/admin/",
@@ -96,14 +98,16 @@ func setSessionCookie(w http.ResponseWriter, sessionID string, tls bool) {
 	})
 }
 
-// clearSessionCookie expires the session cookie.
-func clearSessionCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
+// clearSessionCookie expires the session cookie with the same attributes it
+// was set with.
+func clearSessionCookie(w http.ResponseWriter, tls bool) {
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure is tls, as in setSessionCookie
 		Name:     sessionCookieName,
 		Value:    "",
 		Path:     "/admin/",
 		MaxAge:   -1,
 		HttpOnly: true,
+		Secure:   tls,
 		SameSite: http.SameSiteStrictMode,
 	})
 }

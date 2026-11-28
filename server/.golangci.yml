@@ -1,0 +1,30 @@
+# golangci-lint v2 config for the Portunus server (task lint:server).
+# Defaults (errcheck, govet, ineffassign, staticcheck, unused) plus gosec.
+version: "2"
+
+linters:
+  enable:
+    - gosec
+  settings:
+    gosec:
+      excludes:
+        # Unhandled errors: errcheck covers these, with the exclusions below.
+        - G104
+    errcheck:
+      exclude-functions:
+        # rows.Err() reports iteration errors; Close after it adds nothing.
+        - (*database/sql.Rows).Close
+        - (*database/sql.DB).Close
+        # HTTP bodies: read-only, nothing to recover from a Close error.
+        - (io.ReadCloser).Close
+  exclusions:
+    rules:
+      # Test fixtures: literal test passwords, fixed testdata paths, test
+      # cookies, and small integer conversions.
+      - path: _test\.go
+        linters: [gosec]
+        text: "G101|G115|G124|G304"
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

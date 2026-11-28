@@ -82,9 +82,11 @@ func TestModuleAuthStore_Grant_InsertsRow(t *testing.T) {
 	}
 
 	var count int
-	conn.QueryRowContext(ctx,
+	if err := conn.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM module_authorizations WHERE member_uuid='ma-uuid-002' AND module_id='mod-002'`,
-	).Scan(&count)
+	).Scan(&count); err != nil {
+		t.Fatalf("count module_authorizations: %v", err)
+	}
 	if count != 1 {
 		t.Errorf("expected 1 row, got %d", count)
 	}
@@ -275,9 +277,11 @@ func TestModuleAuthStore_CascadeOnMemberDelete(t *testing.T) {
 	}
 
 	var count int
-	conn.QueryRowContext(ctx,
+	if err := conn.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM module_authorizations WHERE member_uuid = 'ma-uuid-030'`,
-	).Scan(&count)
+	).Scan(&count); err != nil {
+		t.Fatalf("count module_authorizations: %v", err)
+	}
 	if count != 0 {
 		t.Errorf("expected cascade delete of authorizations, got %d rows", count)
 	}

@@ -128,7 +128,11 @@ func (s *Server) RequestAccess(ctx context.Context, req *pb.AccessRequest) (*pb.
 	}
 
 	if sig := devicesig.AccessResponseSig(s.hmacSecret, domainReq.ModuleID, domainReq.CredentialID, domainReq.Nonce, resp.Granted); sig != "" {
-		grpc.SetTrailer(ctx, metadata.Pairs(hmacHeaderKey, sig))
+		// An unsigned response is treated as a deny by the module, so a failure
+		// here fails closed; log it so the cause is visible.
+		if err := grpc.SetTrailer(ctx, metadata.Pairs(hmacHeaderKey, sig)); err != nil {
+			s.logger.Printf("access_request: response signature trailer not set: %v", err)
+		}
 	}
 
 	return pbResp, nil

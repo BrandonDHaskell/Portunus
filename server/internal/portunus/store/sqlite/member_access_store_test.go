@@ -62,7 +62,9 @@ func TestMemberAccessStore_CreateMember_InsertsRow(t *testing.T) {
 	}
 
 	var count int
-	conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM member_access WHERE uuid = ?`, uuid).Scan(&count)
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM member_access WHERE uuid = ?`, uuid).Scan(&count); err != nil {
+		t.Fatalf("count member_access: %v", err)
+	}
 	if count != 1 {
 		t.Errorf("expected 1 row, got %d", count)
 	}
@@ -80,9 +82,11 @@ func TestMemberAccessStore_CreateMember_DefaultsCorrect(t *testing.T) {
 	var status string
 	var enabled int
 	var provStatus string
-	conn.QueryRowContext(ctx,
+	if err := conn.QueryRowContext(ctx,
 		`SELECT status, enabled, provisioning_status FROM member_access WHERE uuid = ?`, uuid,
-	).Scan(&status, &enabled, &provStatus)
+	).Scan(&status, &enabled, &provStatus); err != nil {
+		t.Fatalf("read member_access row: %v", err)
+	}
 
 	if status != "active" {
 		t.Errorf("expected status=active, got %q", status)
@@ -105,7 +109,9 @@ func TestMemberAccessStore_CreateMember_PendingAuthorization(t *testing.T) {
 	_ = ms.CreateMember(ctx, uuid, "", store.ProvisioningStatusPendingAuthorization, nil, nil)
 
 	var provStatus string
-	conn.QueryRowContext(ctx, `SELECT provisioning_status FROM member_access WHERE uuid = ?`, uuid).Scan(&provStatus)
+	if err := conn.QueryRowContext(ctx, `SELECT provisioning_status FROM member_access WHERE uuid = ?`, uuid).Scan(&provStatus); err != nil {
+		t.Fatalf("read provisioning_status: %v", err)
+	}
 	if provStatus != "pending_authorization" {
 		t.Errorf("expected pending_authorization, got %q", provStatus)
 	}
@@ -122,7 +128,9 @@ func TestMemberAccessStore_CreateMember_WithExpiry(t *testing.T) {
 	_ = ms.CreateMember(ctx, uuid, "", store.ProvisioningStatusActive, &exp, nil)
 
 	var expiresMs sql.NullInt64
-	conn.QueryRowContext(ctx, `SELECT expires_at_ms FROM member_access WHERE uuid = ?`, uuid).Scan(&expiresMs)
+	if err := conn.QueryRowContext(ctx, `SELECT expires_at_ms FROM member_access WHERE uuid = ?`, uuid).Scan(&expiresMs); err != nil {
+		t.Fatalf("read expires_at_ms: %v", err)
+	}
 	if !expiresMs.Valid || expiresMs.Int64 != exp.UnixMilli() {
 		t.Errorf("unexpected expires_at_ms: %v", expiresMs)
 	}

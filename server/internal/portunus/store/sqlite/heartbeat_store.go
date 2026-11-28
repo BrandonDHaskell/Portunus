@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -51,9 +52,10 @@ func (s *HeartbeatStore) UpsertHeartbeat(ctx context.Context, moduleID string, r
 
 	// UptimeSeconds -> uptime_ms
 	uptimeMs := any(nil)
-	if rec.Request.UptimeSeconds != 0 {
-		// safe conversion (realistic uptimes won’t overflow int64)
-		uptimeMs = int64(rec.Request.UptimeSeconds) * 1000
+	// Device-supplied: a value whose milliseconds would overflow int64 is
+	// stored as unknown rather than wrapping to a negative uptime.
+	if s := rec.Request.UptimeSeconds; s != 0 && s <= math.MaxInt64/1000 {
+		uptimeMs = int64(s) * 1000
 	}
 
 	var seq any
