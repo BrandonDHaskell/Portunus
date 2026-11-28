@@ -32,6 +32,9 @@
 #endif
 
 #include "esp_log.h"
+#ifdef CONFIG_PORTUNUS_FSM_TASK_WDT
+#include "esp_task_wdt.h"
+#endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -477,7 +480,24 @@ void SystemFSM::run()
 
     ESP_LOGD(TAG, "FSM task running (poll_interval=%d ms)", FSM_POLL_INTERVAL_MS);
 
+#ifdef CONFIG_PORTUNUS_FSM_TASK_WDT
+    /* One loop iteration waits at most the poll interval, so feeding once per
+     * iteration leaves a wide margin before the watchdog fires. */
+    static_assert(FSM_POLL_INTERVAL_MS * 4 <= CONFIG_ESP_TASK_WDT_TIMEOUT_S * 1000,
+                  "FSM poll interval too close to the task watchdog timeout");
+    const bool wdt_subscribed = (esp_task_wdt_add(nullptr) == ESP_OK);
+    if (!wdt_subscribed) {
+        ESP_LOGE(TAG, "FSM task not subscribed to the task watchdog");
+    }
+#endif
+
     while (!m_stop_requested) {
+#ifdef CONFIG_PORTUNUS_FSM_TASK_WDT
+        if (wdt_subscribed) {
+            (void)esp_task_wdt_reset();
+        }
+#endif
+
         /* 1-2. Wait for an event or timeout, and process it. */
         (void)receive_and_process(poll_timeout);
 
@@ -508,6 +528,12 @@ void SystemFSM::run()
 #endif
     }
 
+#ifdef CONFIG_PORTUNUS_FSM_TASK_WDT
+    /* A deleted task that is still subscribed would trip the watchdog. */
+    if (wdt_subscribed) {
+        (void)esp_task_wdt_delete(nullptr);
+    }
+#endif
     xSemaphoreGive(m_fsm_exited);
     vTaskDelete(nullptr);
 }

@@ -4,3 +4,14 @@ CONFIG_PORTUNUS_USE_TLS=y
 CONFIG_PORTUNUS_TLS_SKIP_VERIFY=n
 CONFIG_PORTUNUS_TLS_USE_CUSTOM_CA=y
 CONFIG_PORTUNUS_HMAC_ENABLED=y
+
+# Attack-surface and resilience hardening (IEC 62443 gap analysis, R0.2).
+# WARN keeps every connectivity failure on the serial monitor (hazard #12)
+# while dropping routine INFO chatter. The USB-Serial-JTAG console stays on:
+# it is the only diagnostic port on the bench board; closing it (and JTAG)
+# belongs with the eFuse procedure.
+CONFIG_LOG_DEFAULT_LEVEL_WARN=y
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
+# A hung FSM task reboots the module instead of leaving the door unresponsive.
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_PORTUNUS_FSM_TASK_WDT=y

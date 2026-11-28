@@ -6,7 +6,8 @@
 # cached CMake defaults can make the two differ.
 #
 # Usage: scripts/assert_secure_build.sh [--prod] path/to/build/config/sdkconfig.h
-#   --prod   also require the pinned private CA (CONFIG_PORTUNUS_TLS_USE_CUSTOM_CA)
+#   --prod   also require the pinned private CA (CONFIG_PORTUNUS_TLS_USE_CUSTOM_CA),
+#            a panicking task watchdog on the FSM task, and logs capped at WARN
 #
 # Exit codes: 0 deployable, 1 insecure, 2 usage error or missing header.
 set -euo pipefail
@@ -27,6 +28,7 @@ if [[ ! -f "$H" ]]; then
 fi
 
 has() { grep -qE "^#define CONFIG_$1 1\$" "$H"; }
+val() { sed -nE "s/^#define CONFIG_$1 ([0-9]+)\$/\1/p" "$H"; }
 
 bad=()
 has PORTUNUS_ENV_DEV               && bad+=("PORTUNUS_ENV_DEV on")
@@ -40,6 +42,12 @@ fi
 if [[ $PROD -eq 1 ]]; then
     has PORTUNUS_ENABLE_WIFI          || bad+=("PORTUNUS_ENABLE_WIFI off")
     has PORTUNUS_TLS_USE_CUSTOM_CA    || bad+=("PORTUNUS_TLS_USE_CUSTOM_CA off (CA not pinned)")
+    has ESP_TASK_WDT_PANIC            || bad+=("ESP_TASK_WDT_PANIC off (hung task would not reboot)")
+    has PORTUNUS_FSM_TASK_WDT         || bad+=("PORTUNUS_FSM_TASK_WDT off (FSM task not watched)")
+    lvl=$(val LOG_MAXIMUM_LEVEL)
+    if [[ -z "$lvl" || "$lvl" -gt 2 ]]; then
+        bad+=("LOG_MAXIMUM_LEVEL ${lvl:-unset} (prod allows WARN at most)")
+    fi
 fi
 
 if [[ ${#bad[@]} -gt 0 ]]; then
