@@ -32,6 +32,7 @@ type Store struct {
 	mu      sync.Mutex
 	window  time.Duration
 	entries map[string]time.Time // key: moduleID+":"+nonceHex  value: expiry
+	now     func() time.Time     // injectable so tests can move time
 }
 
 // NewStore creates a Store with the given sliding-window duration.
@@ -40,6 +41,7 @@ func NewStore(window time.Duration) *Store {
 	return &Store{
 		window:  window,
 		entries: make(map[string]time.Time),
+		now:     time.Now,
 	}
 }
 
@@ -53,7 +55,7 @@ func NewStore(window time.Duration) *Store {
 //
 // moduleID namespaces nonces so different devices cannot collide.
 func (s *Store) Check(moduleID, nonceHex, requestedAt string) error {
-	now := time.Now().UTC()
+	now := s.now().UTC()
 
 	if requestedAt == "" {
 		return ErrTimestampRequired
