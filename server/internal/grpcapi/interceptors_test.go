@@ -262,3 +262,29 @@ func TestHMACInterceptor_NoStore_NoReplayCheck(t *testing.T) {
 		t.Fatalf("repeated request with no store should pass, got: %v", err)
 	}
 }
+
+// ── nonce required (parity with the HTTP path) ───────────────────────────────
+
+// A correctly signed AccessRequest with no nonce must be rejected whether or
+// not a replay store is wired: without a nonce the replay store has nothing
+// to record, so the request could be replayed inside the timestamp window.
+func TestHMACInterceptor_AccessRequestWithoutNonce_Unauthenticated(t *testing.T) {
+	for name, rs := range map[string]*replay.Store{"with replay store": replay.NewStore(time.Minute), "without replay store": nil} {
+		t.Run(name, func(t *testing.T) {
+			req := freshAccessRequest("door-001", "04:A3:2B:1C")
+			req.Nonce = nil
+			ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(hmacSigHeader, sign(req, testHMACSecret)))
+			_, err := invoke(grpcapi.HMACInterceptor(testHMACSecret, rs), ctx, req)
+			assertCode(t, err, codes.Unauthenticated)
+		})
+	}
+}
+
+// Heartbeats carry no nonce and stay accepted.
+func TestHMACInterceptor_HeartbeatNeedsNoNonce(t *testing.T) {
+	req := &pb.HeartbeatRequest{ModuleId: "door-001", Sequence: 9}
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(hmacSigHeader, sign(req, testHMACSecret)))
+	if _, err := invoke(grpcapi.HMACInterceptor(testHMACSecret, replay.NewStore(time.Minute)), ctx, req); err != nil {
+		t.Fatalf("signed heartbeat rejected: %v", err)
+	}
+}

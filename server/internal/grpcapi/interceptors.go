@@ -114,11 +114,16 @@ func HMACInterceptor(secret string, replayStore *replay.Store) grpc.UnaryServerI
 			return nil, status.Errorf(codes.Unauthenticated, "invalid %s signature", hmacHeaderKey)
 		}
 
-		// Replay protection — only for access requests, only when a store is wired.
-		if replayStore != nil {
-			if ar, ok := req.(*pb.AccessRequest); ok {
-				nonceHex := hex.EncodeToString(ar.Nonce)
-				if err := replayStore.Check(ar.ModuleId, nonceHex, ar.RequestedAt); err != nil {
+		if ar, ok := req.(*pb.AccessRequest); ok {
+			// A nonce is mandatory, as on the HTTP path: without one the
+			// replay store has nothing to record and the signed request
+			// could be replayed inside the timestamp window.
+			if len(ar.Nonce) == 0 {
+				return nil, status.Errorf(codes.Unauthenticated, "nonce is required for access requests")
+			}
+			// Replay protection, when a store is wired.
+			if replayStore != nil {
+				if err := replayStore.Check(ar.ModuleId, hex.EncodeToString(ar.Nonce), ar.RequestedAt); err != nil {
 					return nil, replayErrToStatus(err)
 				}
 			}
