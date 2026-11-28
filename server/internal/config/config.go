@@ -115,36 +115,41 @@ func (c Config) Validate() error {
 
 // FromEnv reads configuration from environment variables.
 // PORTUNUS_ENV defaults to "local"; an unrecognised value is an error.
+//
+// An unset or empty variable takes its default. A variable that is set but
+// cannot be parsed as its type is an error: silently falling back to the
+// default would hide a misconfiguration. Every bad variable is reported.
 func FromEnv() (Config, error) {
 	env, err := parseEnv(getenvDefault("PORTUNUS_ENV", string(EnvLocal)))
 	if err != nil {
 		return Config{}, err
 	}
 
-	allowAll := strings.EqualFold(os.Getenv("PORTUNUS_ALLOW_ALL"), "true") ||
-		os.Getenv("PORTUNUS_ALLOW_ALL") == "1"
-
-	return Config{
+	var p envParser
+	cfg := Config{
 		HTTPAddr: getenvDefault("PORTUNUS_HTTP_ADDR", ":8080"),
 		GRPCAddr: strings.TrimSpace(os.Getenv("PORTUNUS_GRPC_ADDR")),
 		Env:      env,
 		DBPath:   getenvDefault("PORTUNUS_DB_PATH", "./data/portunus.db"),
 
 		KnownModules: splitCSV(os.Getenv("PORTUNUS_KNOWN_MODULES")),
-		AllowAll:     allowAll,
+		AllowAll:     p.bool("PORTUNUS_ALLOW_ALL"),
 
-		HeartbeatRetentionDays:      getenvInt("PORTUNUS_HEARTBEAT_RETENTION_DAYS", 30),
-		PruneIntervalHours:          getenvInt("PORTUNUS_PRUNE_INTERVAL_HOURS", 6),
-		ExpiryWorkerIntervalMinutes: getenvInt("PORTUNUS_EXPIRY_WORKER_INTERVAL_MINUTES", 60),
-		PendingTTLDays:              getenvInt("PORTUNUS_PENDING_TTL_DAYS", 7),
+		HeartbeatRetentionDays:      p.int("PORTUNUS_HEARTBEAT_RETENTION_DAYS", 30),
+		PruneIntervalHours:          p.int("PORTUNUS_PRUNE_INTERVAL_HOURS", 6),
+		ExpiryWorkerIntervalMinutes: p.int("PORTUNUS_EXPIRY_WORKER_INTERVAL_MINUTES", 60),
+		PendingTTLDays:              p.int("PORTUNUS_PENDING_TTL_DAYS", 7),
 
-		TLSCertFile:          strings.TrimSpace(os.Getenv("PORTUNUS_TLS_CERT_FILE")),
-		TLSKeyFile:           strings.TrimSpace(os.Getenv("PORTUNUS_TLS_KEY_FILE")),
-		HMACSecret:           os.Getenv("PORTUNUS_HMAC_SECRET"),
-		CredentialHashSecret: os.Getenv("PORTUNUS_CREDENTIAL_HASH_SECRET"),
-		AllowUnkeyedCredentialHash: strings.EqualFold(os.Getenv("PORTUNUS_ALLOW_UNKEYED_CREDENTIAL_HASH"), "true") ||
-			os.Getenv("PORTUNUS_ALLOW_UNKEYED_CREDENTIAL_HASH") == "1",
-	}, nil
+		TLSCertFile:                strings.TrimSpace(os.Getenv("PORTUNUS_TLS_CERT_FILE")),
+		TLSKeyFile:                 strings.TrimSpace(os.Getenv("PORTUNUS_TLS_KEY_FILE")),
+		HMACSecret:                 os.Getenv("PORTUNUS_HMAC_SECRET"),
+		CredentialHashSecret:       os.Getenv("PORTUNUS_CREDENTIAL_HASH_SECRET"),
+		AllowUnkeyedCredentialHash: p.bool("PORTUNUS_ALLOW_UNKEYED_CREDENTIAL_HASH"),
+	}
+	if len(p.errs) > 0 {
+		return Config{}, errors.Join(p.errs...)
+	}
+	return cfg, nil
 }
 
 func getenvDefault(key, def string) string {
@@ -155,16 +160,38 @@ func getenvDefault(key, def string) string {
 	return v
 }
 
-func getenvInt(key string, def int) int {
+// envParser reads typed variables and collects every parse error, so one
+// startup reports all misconfigured variables at once. Only non-secret
+// variables go through it, so echoing the bad value is safe.
+type envParser struct{ errs []error }
+
+// int reads a non-negative base-10 integer, or def when unset.
+func (p *envParser) int(key string, def int) int {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
 		return def
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 0 {
+		p.errs = append(p.errs, fmt.Errorf("%s=%q: must be a non-negative whole number", key, v))
 		return def
 	}
 	return n
+}
+
+// bool reads true/false/1/0 (case-insensitive), or false when unset.
+func (p *envParser) bool(key string) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	switch v {
+	case "":
+		return false
+	case "true", "1":
+		return true
+	case "false", "0":
+		return false
+	}
+	p.errs = append(p.errs, fmt.Errorf("%s=%q: must be true, false, 1 or 0", key, v))
+	return false
 }
 
 func splitCSV(v string) []string {

@@ -74,35 +74,60 @@ func TestFromEnv_RejectsUnknownProfile(t *testing.T) {
 	}
 }
 
-// Unparseable or negative integers fall back to the default.
-func TestFromEnv_BadIntegersFallBack(t *testing.T) {
-	for _, v := range []string{"abc", "-5", "3.5", "1e3"} {
+// A set value of the wrong type stops startup: silently using the default
+// hides a misconfiguration (PORTUNUS_PENDING_TTL_DAYS=abc would mean 7).
+func TestFromEnv_BadIntegersFailStartup(t *testing.T) {
+	for _, v := range []string{"abc", "-5", "3.5", "1e3", "0x10", "7 days"} {
 		clearEnv(t)
 		t.Setenv("PORTUNUS_HEARTBEAT_RETENTION_DAYS", v)
-		cfg, err := FromEnv()
-		if err != nil {
-			t.Fatal(err)
+		if _, err := FromEnv(); err == nil || !strings.Contains(err.Error(), "PORTUNUS_HEARTBEAT_RETENTION_DAYS") {
+			t.Errorf("%q: err = %v, want an error naming the variable", v, err)
 		}
-		if cfg.HeartbeatRetentionDays != 30 {
-			t.Errorf("%q: HeartbeatRetentionDays = %d, want default 30", v, cfg.HeartbeatRetentionDays)
-		}
+	}
+	clearEnv(t)
+	t.Setenv("PORTUNUS_HEARTBEAT_RETENTION_DAYS", " 14 ")
+	if cfg, err := FromEnv(); err != nil || cfg.HeartbeatRetentionDays != 14 {
+		t.Errorf("padded valid integer: %d, %v", cfg.HeartbeatRetentionDays, err)
 	}
 }
 
-// The allow-all switch bypasses credential checks entirely, so only an
-// explicit "true" or "1" turns it on.
-func TestFromEnv_BypassFlagsNeedExplicitTrue(t *testing.T) {
-	cases := map[string]bool{"true": true, "TRUE": true, "1": true, "yes": false, "on": false, "0": false, "false": false, " true": false}
-	for v, want := range cases {
+// The bypass switches accept only an explicit boolean; anything else is an
+// error rather than a silent "off" (or a silent "on").
+func TestFromEnv_BoolFlags(t *testing.T) {
+	valid := map[string]bool{"true": true, "TRUE": true, "True": true, "1": true, " true ": true, "false": false, "FALSE": false, "0": false}
+	for v, want := range valid {
 		clearEnv(t)
 		t.Setenv("PORTUNUS_ALLOW_ALL", v)
 		t.Setenv("PORTUNUS_ALLOW_UNKEYED_CREDENTIAL_HASH", v)
 		cfg, err := FromEnv()
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("%q: %v", v, err)
 		}
 		if cfg.AllowAll != want || cfg.AllowUnkeyedCredentialHash != want {
 			t.Errorf("%q: AllowAll=%v AllowUnkeyed=%v, want %v", v, cfg.AllowAll, cfg.AllowUnkeyedCredentialHash, want)
+		}
+	}
+	for _, v := range []string{"yes", "on", "no", "t", "2", "enabled"} {
+		clearEnv(t)
+		t.Setenv("PORTUNUS_ALLOW_ALL", v)
+		if _, err := FromEnv(); err == nil || !strings.Contains(err.Error(), "PORTUNUS_ALLOW_ALL") {
+			t.Errorf("PORTUNUS_ALLOW_ALL=%q: err = %v, want an error", v, err)
+		}
+	}
+}
+
+func TestFromEnv_ReportsEveryBadVariable(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("PORTUNUS_PRUNE_INTERVAL_HOURS", "six")
+	t.Setenv("PORTUNUS_PENDING_TTL_DAYS", "-1")
+	t.Setenv("PORTUNUS_ALLOW_UNKEYED_CREDENTIAL_HASH", "maybe")
+	_, err := FromEnv()
+	if err == nil {
+		t.Fatal("bad values accepted")
+	}
+	for _, name := range []string{"PORTUNUS_PRUNE_INTERVAL_HOURS", "PORTUNUS_PENDING_TTL_DAYS", "PORTUNUS_ALLOW_UNKEYED_CREDENTIAL_HASH"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("error does not name %s: %v", name, err)
 		}
 	}
 }

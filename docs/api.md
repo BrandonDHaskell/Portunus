@@ -581,18 +581,25 @@ An admin user may be linked to a member identity via `member_uuid` in `admin_use
 | Variable | Default | Description |
 |---|---|---|
 | `PORTUNUS_HTTP_ADDR` | `:8080` | Listen address |
-| `PORTUNUS_ENV` | `dev` | Environment (`dev` or `prod`) |
+| `PORTUNUS_ENV` | `local` | Server profile: `local`, `ci` or `prod` (`dev` is rejected) |
+| `PORTUNUS_HTTP_ADDR` | `:8080` | HTTP listen address |
 | `PORTUNUS_DB_PATH` | `./data/portunus.db` | SQLite database path |
 | `PORTUNUS_TLS_CERT_FILE` | (empty) | PEM certificate for HTTPS |
 | `PORTUNUS_TLS_KEY_FILE` | (empty) | PEM private key for HTTPS |
 | `PORTUNUS_HMAC_SECRET` | (empty) | HMAC-SHA256 shared secret for device request signing |
 | `PORTUNUS_CREDENTIAL_HASH_SECRET` | (empty) | Keyed HMAC-SHA256 secret for credential ID hashing. Required in prod. Generate with `openssl rand -hex 32` |
-| `PORTUNUS_ALLOW_ALL` | `false` | Grant all access (dev only) |
+| `PORTUNUS_ALLOW_ALL` | `false` | Grant all access (dev only; forbidden in prod) |
+| `PORTUNUS_ALLOW_UNKEYED_CREDENTIAL_HASH` | `false` | Allow startup without `PORTUNUS_CREDENTIAL_HASH_SECRET` (dev/test only) |
 | `PORTUNUS_KNOWN_MODULES` | (empty) | CSV of module IDs for dev seeding |
 | `PORTUNUS_HEARTBEAT_RETENTION_DAYS` | `30` | Heartbeat record retention |
 | `PORTUNUS_PRUNE_INTERVAL_HOURS` | `6` | Pruner run interval |
 | `PORTUNUS_EXPIRY_WORKER_INTERVAL_MINUTES` | `60` | How often the member expiry worker runs |
+| `PORTUNUS_PENDING_TTL_DAYS` | `7` | Days before an unapproved capture is archived (`0` disables) |
 | `PORTUNUS_GRPC_ADDR` | (empty — disabled) | gRPC listen address (e.g. `:50051`) |
+
+An unset or empty variable takes its default. A variable that is set but malformed stops startup
+with an error naming every bad variable: numeric settings must be non-negative whole numbers, and
+the `ALLOW_*` switches accept only `true`, `false`, `1` or `0` (case-insensitive).
 
 ---
 
