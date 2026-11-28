@@ -423,6 +423,21 @@ menu "Portunus Configuration"
                 How frequently the FSM polls the reed switch and
                 checks for unlock timer expiry. Also serves as the
                 event wait timeout in the FSM main loop.
+
+        config PORTUNUS_FSM_TASK_WDT
+            bool "Watch the FSM task with the task watchdog"
+            default y
+            depends on ESP_TASK_WDT_INIT && !IDF_TARGET_LINUX
+            help
+                Subscribe the FSM task, which drives the lock, to the ESP-IDF
+                task watchdog and feed it once per loop iteration. A hung FSM
+                then trips the watchdog instead of leaving the door
+                unresponsive. With ESP_TASK_WDT_PANIC (set by the prod
+                profile) the module reboots and re-initializes the lock.
+                The comm task is deliberately not watched: a TLS connect plus
+                an RPC can legitimately block longer than the watchdog
+                timeout, and its health already shows as missing heartbeats
+                and decision timeouts. Unavailable on the IDF linux target.
     endmenu
 
     menu "Timing Configuration"
