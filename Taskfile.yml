@@ -55,6 +55,10 @@ vars:
 
   # ── Project paths ───────────────────────────────────────────────────────
   SERVER_DIR: server
+
+  # ── SBOM tool versions (bump deliberately; Dependabot does not see these) ─
+  CYCLONEDX_GOMOD_VERSION: v1.12.0
+  ESP_IDF_SBOM_VERSION: 1.5.0
   FIRMWARE_DIR: access_module
 
 tasks:
@@ -209,6 +213,20 @@ tasks:
       # dependencies would otherwise join (and could bump) the server's build list.
       - go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
 
+  sbom:server:
+    desc: Write a CycloneDX SBOM of what the Pi (linux/arm64) server binary links, to server/bin/sbom/
+    dir: "{{.SERVER_DIR}}"
+    cmds:
+      # Installed @version for the same reason as govulncheck. Built for the
+      # host first, then run with the Pi's GOOS/GOARCH so the SBOM lists the
+      # modules that target links (go run would build the tool for arm64).
+      - GOBIN="$PWD/bin/tools" go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@{{.CYCLONEDX_GOMOD_VERSION}}
+      - mkdir -p bin/sbom
+      - >-
+        GOOS=linux GOARCH=arm64 CGO_ENABLED=0
+        bin/tools/cyclonedx-gomod app -json -std -licenses
+        -main cmd/portunus-server -output bin/sbom/portunus-server.cdx.json .
+
   # ─── Protobuf ─────────────────────────────────────────────────────────────
 
   proto:gen:
@@ -353,6 +371,33 @@ tasks:
       - task: firmware:_compile
         vars: { NAME: ci-prod, DEFAULTS: "sdkconfig.defaults;sdkconfig.defaults.prod" }
       - bash scripts/assert_secure_build.sh --prod {{.FIRMWARE_DIR}}/build/ci-prod/config/sdkconfig.h
+      - task: sbom:firmware
+
+  sbom:firmware:
+    desc: Write a CycloneDX SBOM of the prod firmware image to access_module/build/sbom/ (after firmware:compile:prod)
+    dir: "{{.FIRMWARE_DIR}}"
+    cmds:
+      - |
+        set -eu
+        PD=build/ci-prod/project_description.json
+        [ -f "$PD" ] || { echo "ERROR: $PD missing: run task firmware:compile:prod first" >&2; exit 1; }
+        # Installed into build/ (gitignored) with pip --target: no venv module
+        # needed (the IDF image may lack it) and the IDF venv stays untouched.
+        T="$PWD/build/sbom-tool-{{.ESP_IDF_SBOM_VERSION}}"
+        if [ ! -d "$T/esp_idf_sbom" ]; then
+          {{.IDF_PYTHON}} -m pip install -q --disable-pip-version-check --target "$T" esp-idf-sbom=={{.ESP_IDF_SBOM_VERSION}}
+        fi
+        mkdir -p build/sbom
+        PYTHONPATH="$T" {{.IDF_PYTHON}} -m esp_idf_sbom create --format cyclonedx-json --rem-unused \
+          -o build/sbom/portunus_access_module.cdx.json "$PD"
+        echo "SBOM: {{.FIRMWARE_DIR}}/build/sbom/portunus_access_module.cdx.json"
+
+  sbom:firmware:check:
+    desc: Check the firmware SBOM against the NVD for known CVEs (network; on demand, not in CI)
+    dir: "{{.FIRMWARE_DIR}}"
+    deps: [sbom:firmware]
+    cmds:
+      - PYTHONPATH="$PWD/build/sbom-tool-{{.ESP_IDF_SBOM_VERSION}}" {{.IDF_PYTHON}} -m esp_idf_sbom check build/sbom/portunus_access_module.cdx.json
 
   firmware:nvs:gen:
     desc: Generate NVS binary from nvs_config.csv (copy nvs_config.example.csv first)
@@ -678,12 +723,13 @@ tasks:
         fi
 
   ci:server:
-    desc: Full server CI check (vet, format, test with race detector, boot smoke)
+    desc: Full server CI check (vet, format, test with race detector, boot smoke, SBOM)
     cmds:
       - task: vet:server
       - task: fmt:server
       - task: test:server:race
       - task: ci:server:smoke
+      - task: sbom:server
 
   # Mirrors .github/workflows/ci.yml job for job, so a local pass predicts a
   # CI pass. Keep the two in step.
