@@ -291,12 +291,39 @@ RestartSec=5
 # Environment — override these in an environment file for production
 EnvironmentFile=/etc/portunus/portunus.env
 
-# Hardening
+# Hardening: the server only needs to read its config and certs, write
+# /var/lib/portunus, and accept TCP on unprivileged ports.
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/portunus
 PrivateTmp=true
+PrivateDevices=true
+PrivateUsers=true
+UMask=0077
+# No capabilities: the listen ports (8443, 50051) are above 1024.
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RemoveIPC=true
+DevicePolicy=closed
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
 
 [Install]
 WantedBy=multi-user.target
@@ -366,6 +393,51 @@ sudo systemctl status portunus-server
 # Follow logs
 sudo journalctl -u portunus-server -f
 ```
+
+Check the sandbox. The unit above scores about 1.1 ("OK"); the minimal unit it
+replaced scored 8.3 ("EXPOSED"):
+
+```bash
+systemd-analyze security portunus-server
+```
+
+If the service fails to start after a hardening change, the journal names the
+cause; a syscall the filter blocks shows up as an `EPERM` error from the
+server rather than a crash.
+
+### Firewall: one conduit per port
+
+Treat each listener as its own conduit and only accept it from the network
+that needs it: modules reach gRPC (`50051`), operators reach the admin UI and
+REST API on HTTPS (`8443`). Debian uses nftables. This drop-in table only
+removes traffic to the two Portunus ports from anywhere else, so it does not
+change any other rule on the host. Replace the two subnets with yours:
+
+```bash
+sudo mkdir -p /etc/nftables.d
+sudo tee /etc/nftables.d/portunus.nft > /dev/null << 'EOF'
+define DEVICE_NET = 10.0.10.0/24   # access modules (Wi-Fi / VLAN)
+define MGMT_NET   = 10.0.0.0/24    # operator workstations
+
+table inet portunus {
+    chain input {
+        type filter hook input priority filter; policy accept;
+        tcp dport 50051 ip saddr != $DEVICE_NET drop
+        tcp dport 8443  ip saddr != $MGMT_NET   drop
+        # The modules and the admin UI are IPv4-only today.
+        meta nfproto ipv6 tcp dport { 50051, 8443 } drop
+    }
+}
+EOF
+sudo nft -c -f /etc/nftables.d/portunus.nft   # syntax check
+sudo nft -f /etc/nftables.d/portunus.nft
+```
+
+To load it at boot, add `include "/etc/nftables.d/*.nft"` to
+`/etc/nftables.conf` and `sudo systemctl enable nftables`. Check from a host
+on each network that only its port answers. The device HTTP endpoints share
+the admin port today, so a module using HTTP instead of gRPC would need
+`8443` from `DEVICE_NET` as well; current firmware is gRPC-only.
 
 ---
 
@@ -627,10 +699,10 @@ All server-related commands from the project `Taskfile.yml`:
 
 **"unknown_module" in access responses** — The module ID in the request is not registered in the database. In local mode, `PORTUNUS_KNOWN_MODULES` or the default `door-001` seeding handles this automatically. In production, register modules via the admin API: `POST /admin/v1/modules`.
 
-**Server starts but ESP32 can't connect** — Verify the server's listen address is `0.0.0.0` (or `:port` which listens on all interfaces), not `127.0.0.1`. Check that the firewall allows the port. On Debian: `sudo ufw allow 8443/tcp` (or whichever port you're using).
+**Server starts but ESP32 can't connect**: verify the server's listen address is `0.0.0.0` (or `:port` which listens on all interfaces), not `127.0.0.1`. Check that the firewall allows the port from the module's network: `sudo nft list table inet portunus` (see [Firewall: one conduit per port](#firewall-one-conduit-per-port)).
 
 **`TLS cert load error: open /etc/portunus/certs/server.key: permission denied`** (service restart loop): the key is not readable by the `portunus` user. Fix with `sudo chown root:portunus /etc/portunus/certs/server.key && sudo chmod 640 /etc/portunus/certs/server.key`, then restart. See [TLS certificate setup](#tls-certificate-setup).
 
 **Browser rejects the certificate for the server's IP** (`SSL_ERROR_BAD_CERT_DOMAIN`, `ERR_CERT_COMMON_NAME_INVALID`): the server cert's SAN does not include the address you are browsing to. Check with `openssl x509 -in /etc/portunus/certs/server.pem -noout -ext subjectAltName`, and reissue it with the existing CA (see [Reissuing the server certificate without rotating the CA](#reissuing-the-server-certificate-without-rotating-the-ca)).
 
-**gRPC not working** — gRPC is disabled by default. Set `PORTUNUS_GRPC_ADDR=:50051` to enable it. gRPC uses the same TLS cert as the HTTP server, so `PORTUNUS_TLS_CERT_FILE` and `PORTUNUS_TLS_KEY_FILE` must be set. The ESP32 firmware must be built with `CONFIG_PORTUNUS_USE_GRPC=y`.
+**gRPC not working**: gRPC is disabled by default. Set `PORTUNUS_GRPC_ADDR=:50051` to enable it. gRPC uses the same TLS cert as the HTTP server, so `PORTUNUS_TLS_CERT_FILE` and `PORTUNUS_TLS_KEY_FILE` must be set. Current firmware always uses gRPC; check the module's NVS `grpc_port` matches.
