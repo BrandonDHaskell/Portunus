@@ -106,7 +106,7 @@ The server starts on `:8080` and seeds a default `door-001` module. Full setup g
 
 ### Firmware
 
-Requires [ESP-IDF 5.5.1](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/).
+Requires [ESP-IDF 5.5.6](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/).
 
 ```bash
 # Source ESP-IDF environment

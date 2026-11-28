@@ -52,7 +52,7 @@ Pinning, so CI results are reproducible:
 
 ## Prerequisites
 
-- **Dev machine:** Go (current stable), ESP-IDF 5.5.1, Task 3.x. See [Server Setup](setup_server.md) and [Firmware Setup](setup_firmware.md).
+- **Dev machine:** Go (current stable), ESP-IDF 5.5.6, Task 3.x. See [Server Setup](setup_server.md) and [Firmware Setup](setup_firmware.md).
 - **Raspberry Pi:** the systemd service and the `portunus` user, per [Server Setup: Running as a systemd service](setup_server.md#running-as-a-systemd-service).
 - **SSH key auth and passwordless `sudo`** from the dev machine to the Pi (the deploy runs its remote steps with `sudo`).
 
